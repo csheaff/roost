@@ -4,6 +4,216 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Roost's views are drawn with more than their text. A status that wants
+  you sits on a quiet tint of its colour: in a task panel's title, where it
+  is now at the right edge, in the dashboard's counts and rows, and in the
+  sidebar's count. What is wrong with a task, the panel's `▲` lines and a
+  search's errors, is on a band of its colour across the window. A hairline
+  rules off each view's heading and each table's, a panel's changed files
+  have their line counts in a column, the keys at a panel's foot look as
+  keys do elsewhere and can be clicked, and the rows of the lists have a
+  little air between them. A new task's draft shows its fields plainly,
+  without a link's underline, with their keys quietly in a column. Every
+  colour is made from your theme's, afresh when it changes, and no text
+  differs, so a terminal with few colours shows the same words without
+  them. `(setq roost-decorate nil)` turns it all off. If you set
+  `roost-field` to inherit `link`, the draft's fields are underlined again.
+- Review works with Magit 3.3.0, as Debian and Ubuntu package it. A click
+  on a changed file in a task's panel failed there, and so did writing a
+  note on a diff's line and the commits to review in Magit's status: Roost
+  called three of Magit's functions by the names Magit 4 gave them.
+- A status light has a shape as well as a colour, in the dashboard, a task
+  panel's title and the mode line, where Emacs can draw one: a disc in a
+  ring for an agent that can't go on until you answer, a disc for one that
+  finished, a triangle for one that failed, most of a ring for one at
+  work, a ring of dots for one starting, two bars for one stopped, a tick
+  for a task that is merged, a dash for a host out of reach, and a small
+  dot for the rest. So grey says which of several things no longer, and
+  the colours aren't all that tells a task that needs you from one that
+  doesn't. In the sidebar the word of an agent that asks or failed is on a
+  tint, as in the dashboard, and the setup check rules off each host and
+  puts what to do about a failed check on a band. With `roost-decorate`
+  off, or in a terminal, the lights are the dots they were. `make gallery`
+  takes `GALLERY_THEME_PATH` for a theme that isn't one of Emacs's own.
+
+- Several attempts at one prompt. `C-c C-x` in the new task draft sets how
+  many tasks it makes from the prompt: a number up to 5, each by the
+  draft's agent, or agents' names, as `claude codex`, one by each. `C-c C-c`
+  creates them at once, the first named as the draft is and the others
+  with 2, 3 and so on after that name; the first opens, as one task does.
+  `=` on any of them (`roost-compare-attempts`), in the dashboard, the
+  sidebar or its panel, lists every file any attempt changed, with a column
+  for each attempt: what it did to the file, or `·` where it left it alone.
+  `RET` on a file there compares it between two attempts in Ediff, and `m`
+  merges an attempt and retires it. The others stay until you finish them,
+  as with `x` on each: Roost deletes work only when you discard a task. The
+  dashboard and sidebar keep the attempts together, in order, and a task's
+  panel says which attempt it is under Details. The attempts of one draft
+  are all at one prompt: if you change the draft after a failure or no
+  reply and ask again, its host makes nothing from the new words beside an
+  attempt it made from the old, and the draft stays, saying which task
+  was made from what you sent before; `C-c C-c` then makes every attempt
+  from what it says now. Nothing to do when upgrading: a draft makes one
+  task unless you ask for more, as its new Attempts line says.
+- The sidebar says what a waiting agent asks, dim, under its row, as
+  `Asks to run make test`: whether to go there now turns on that, and it
+  was only under the mouse. A click on the line opens the task, as one on
+  its row does. Nothing to do when upgrading.
+
+- `M-x roost-copy-attach-command`, also on a task's right-click menu,
+  copies the shell command that attaches another terminal to a task's
+  agent, as `ssh -t dev 'tmux -L main attach -t =roost-…'`: for a phone's
+  SSH app or another machine, for any agent.
+- The mode line's count has a mark while an agent asks, as `● Roost:2!`,
+  and its help says how many ask. An agent that asks, which holds it up,
+  was told from one that finished by the dot's colour alone, which some
+  can't tell apart. If you match on the count's text, allow for the `!`.
+- Roost's scan of Claude Code reads 2.1.322, which keeps its lists of
+  notification types and session sources elsewhere, and a live session
+  with it passes; its capture replaces none, and `make test` replays it.
+
+- Your phone, through Claude Code's Remote Control. With
+  `roost-remote-control` on, each Claude task starts with
+  `--remote-control` and `--name`, named for the task, so it shows in the
+  Claude app and at claude.ai/code, which notify you when its agent needs
+  a decision, and by its name in Claude's own list of sessions. Off by
+  default: Remote Control needs a Claude subscription. Options of the
+  same names in your own `roost-agent-commands` stand. Tasks you start
+  after turning it on have it.
+
+- A working agent says what it is doing. Beside `running`, the dashboard
+  shows the tool the agent last started, as `Running make test` or
+  `Editing ledger.py`, where a waiting agent's reply goes, and the task
+  panel says it under the task's name. It comes from the agent's hooks, so
+  an agent that reports no tools says nothing: Claude Code and Codex do,
+  Pi and OpenCode don't yet. Tasks started before this update say it once
+  their agent starts its next tool.
+  Nothing to do when upgrading.
+- The task panel is quiet until something is wrong. Beside a terminal it
+  keeps bold for the task's name and colour for what wants you, which now
+  comes first, under the name, after a `▲`: the worktree on another
+  branch, a merge under way or one that would conflict, the worktree gone,
+  the last error. The next step follows, then what the task changed, with
+  no heading: how much, dim, and the files plainly. The prompts fold to one
+  dim line, your latest, and so do the details; `RET` or a click on either
+  unfolds it. A row of keys opens the task's other views, `r Magit`,
+  `f Files`, `t Shell`, `? More`, where the panel said `? opens the menu`.
+  The remaining headings are dim. A panel in a window of its own, 72
+  columns or wider, keeps its prompts and details unfolded. Checks with
+  nothing to list, as with no pull request, are one dim line under no
+  heading, and a worktree on another branch is named once, in the `▲`
+  line, with the next step saying only how to put it right. To have bold
+  headings back, give `roost-label` the weight you like. The sidebar says
+  `on feat`, or `detached`, in the warning's colour beside a task whose
+  worktree is on another branch, while its agent isn't at work and no
+  louder word is there, so the warning reaches you with the panel closed.
+  From [#241](https://github.com/csheaff/roost/issues/241).
+- `make gallery` draws the task panel and the dashboard in every task
+  state of the sweep's gallery and captures them as pictures, with no
+  agent or host, and `make qa` takes screenshots under X, as with Xvfb, as
+  it did on macOS only.
+
+- `B` changes the branch a task starts from and merges into
+  (`roost-retarget`, "Branch to merge into" in the `h` menu). A task
+  started from the wrong branch kept merging into it, even once you had
+  rebased its own branch onto the right one. Now `B`, in the dashboard,
+  sidebar or task panel, asks for a branch of its project, and from then
+  on `m` merges the task there, `u` brings that branch into it, and its
+  commits, changes and conflicts count from it. A remote-tracking branch,
+  such as `origin/main`, gives the local branch of its name, as for a new
+  task, and Roost says so when the two are at different commits. No commit
+  moves: rebase the task's branch yourself. A pull request already open
+  keeps its base, and Roost names the `gh pr edit --base` that changes it.
+  Named a branch that already has its commits, as after you merged it
+  there by hand, the task says `merged`. A branch named from another
+  Emacs is measured against here too, at the next poll.
+  Whichever branch you name, Roost goes by where the task's branch was
+  made to tell a task that never committed: one reset to an earlier commit
+  of its own still says what is left to merge, and `x` won't retire it
+  with that unmerged.
+  The panel's Branch line names the key. Nothing to do when upgrading.
+- A conversation plans work in your projects. Ask the agent in one to plan
+  a piece of work, and each task it would split it into waits, dim, under
+  the conversation, naming its project; `RET` or a click opens it as a new
+  task draft there, to start as it is or change first. It reads the
+  projects this host has run tasks in without asking at each file, and
+  changes nothing there without asking. A conversation keeps up to eight
+  offers, a task three. With a real Claude Code 2.1.322, a conversation
+  asked to plan two changes offered both, each brief saying what the other
+  covers, with no permission prompt. Claude asks once whether to trust
+  Roost's conversations folder, with the first conversation on a host.
+- An agent's offers are on unless you turn them off: `roost-agent-offers`
+  is t. Each Claude task starts with Roost's two tools, `propose_task` and
+  `list_projects`, and a few sentences on when to use them, which cost
+  tokens on each of its requests. To go without, set it to nil; tasks you
+  start from then on have none.
+- `make test` runs on every core, in about four minutes on four where it
+  took eighteen, and `make quick` gives an answer while you work: one case
+  in twelve of each sweep, without the suite whose files haven't changed
+  since it passed. `make test-serial` runs it as before. Nothing to do
+  when upgrading.
+
+- A fork of a task, `C-u c`, goes on with the task's conversation: its
+  agent starts from a copy of it, in a worktree with the task's
+  uncommitted changes as well as its commits, and the task's own
+  conversation goes on as before. Your prompt is the fork's first
+  message, after a sentence Roost puts before it, telling the agent it
+  works in a new worktree. The draft's Context line says so, and `C-c C-f` there starts a
+  new conversation instead, as a fork did before. Claude, Codex, Pi and
+  OpenCode can each fork their own conversations; choosing another agent
+  in the draft starts a new one. Nothing to do when upgrading.
+- A fork's draft closes only for a fork made as its Context line says. With
+  `C-c C-f` pressed while the fork was being created, or after no reply
+  came and before `C-c C-c` again, the draft closed for a task made the
+  other way: one that went on with the task's conversation, and had its
+  uncommitted changes, though the draft said a new conversation, or the
+  reverse. It now stays, saying what was made, as a draft whose prompt you
+  changed does. Nothing to do when upgrading.
+- A conversation with an agent needs no project. "New conversation" in the
+  sidebar, or `C` in the menu, opens an agent's terminal at once, with
+  nothing to write first: you say what you want there. It has no branch to
+  merge, and `x` ends it. Its host keeps it, under "Conversations" in the
+  sidebar, in a repository of Roost's own in its state directory. `C-u C`
+  asks which host. Nothing to do when upgrading.
+- An agent can offer a task of its own, for work it comes across outside
+  its task. The offer waits, dim, under its
+  task in the dashboard and sidebar. A click or `RET` opens it as a new
+  task draft, filled in, and the task you create from it shows under the
+  one that offered it, while you stay where you were. Right-click it, or
+  press `e` or `x` on it, to have that agent do it there or to dismiss it.
+  An offer goes with its task, and the question before you merge, retire,
+  discard or forget the task names it. One its agent makes while you read
+  that question keeps the task, and Roost says so: ask again, and the
+  question names it.
+  Only Claude Code takes the tool so far, from an MCP server of the
+  helper's.
+- A Claude task goes on showing `permission` while a subagent in the
+  background asks, after the main agent's turn has ended beside it. The
+  turn's end made the task read `background`, with the subagent's prompt
+  still on screen and no notification, and let a prompt from Roost through
+  to its menu. Now it stands until that subagent goes on or ends, or you
+  send a prompt; a turn that leaves nothing in the background ends it too.
+  And a tool that fails once you approve it shows `running` at once, where
+  it showed `permission` until the agent's next step. With
+  `roost-program-status` on, such a turn's end still reads `background`.
+- Nor does the turn's end hide a subagent's request when the main agent
+  asked something too. With both on screen, and the main agent's answered,
+  its turn's end made the task read `background` or `ready` as before.
+  Several requests at once now stand past the main agent's turn if one of
+  them is a subagent's, a teammate's or a background agent's, until a turn
+  ends with nothing left in the background or you send a prompt. Found by
+  a new model of who asks, `SubagentAsks.tla`.
+- A Codex task shows `permission` at "Implement this plan?", the menu Codex
+  opens when a turn in Plan mode ends with a plan. It read `ready`, so a
+  prompt sent from Roost, as with a quoted region, was dropped by the menu,
+  and the Enter after it implemented the plan. Now its request reads "Asks
+  whether to implement its plan", its latest reply is the plan, and `e`
+  asks before sending. Codex says nothing when you close the menu with Esc
+  or "No, stay in Plan mode", so the task shows `permission` until your
+  next prompt, which `e` sends once you say so; retiring and merging go
+  ahead meanwhile. From Codex's source, and not yet from a live run in
+  Plan mode.
+  Nothing to do when upgrading.
 - A narrow sidebar keeps each task's name and still says its status. Where
   the status word would leave the name under a dozen columns, a mark in
   the word's colour stands for it at the row's end: `?` asks you, `!` went
@@ -46,6 +256,21 @@ What each release changes, and what to do when upgrading. Newest first.
   worktree and its branch stay, and the reply names them, as it does one Git
   couldn't remove; so does a worktree made at that path as Roost removed it.
   Nothing to do when upgrading.
+- Retiring a task no longer deletes commits that only the branch of a worktree
+  its agent made still had. `x` took that branch for one that keeps them, then
+  removed it with the task: for a fork that never committed, once the task it
+  was made from had gone, and for a task you had told with `B` to merge into
+  that branch. Roost said nothing would be lost, and the commits were on no
+  branch. Now it says the task has unmerged commits, as it does without that
+  worktree, and offers to discard it. And a task can't be finished in the
+  moment a fork of it reads where its work stands, which would have left the
+  fork with half of it: Roost says it is busy. Nothing to do when upgrading.
+- A fork and the task it was made from no longer both go with the commits
+  only they have. Each loses nothing while the other's branch stays, so `x`
+  on each said nothing would be lost; finished at the same moment, as the
+  second while the first's teardown command ran, both branches went and the
+  commits with them. Now the second is told of the commits, or refused, until
+  the first is gone. Nothing to do when upgrading.
 - A merge, update or discard that outlasts Emacs's wait on this machine goes on
   to its end, as it does over SSH. Emacs killed it, with Git and its hooks: with
   a `pre-commit` hook over a minute, a squash merge left the task's work staged

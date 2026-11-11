@@ -797,9 +797,17 @@ Empty overlays at POS count among both."
                                           ;; Empty ones at POS, which the first leaves out.
                                           (overlays-in pos pos))))
       (when (and (= (if ends (overlay-end overlay) (overlay-start overlay)) pos)
-                 (stringp (overlay-get overlay property)))
+                 (stringp (overlay-get overlay property))
+                 ;; Not one that shows as a bitmap in the fringe, as Magit 3
+                 ;; marks a section that folds: it has no text of its own.
+                 (not (qa--in-fringe-p (overlay-get overlay property))))
         (push (overlay-get overlay property) strings)))
     strings))
+
+(defun qa--in-fringe-p (string)
+  "Whether STRING shows as a bitmap in a fringe rather than as text."
+  (and (> (length string) 0)
+       (memq (car-safe (get-text-property 0 'display string)) '(left-fringe right-fringe))))
 
 (defun qa--shown (start end)
   "The text from START to END as shown: what is invisible left out,

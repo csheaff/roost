@@ -7,6 +7,68 @@
 (defvar persp-suppress-no-prefix-key-warning t)
 (defvar evil-want-keybinding)
 
+;;;; A share of the tests
+
+;; `make test' runs the suite in several Emacs at once (see test/run.py).
+;; Each takes every Nth test, and every Nth case of the sweeps, which are
+;; most of the time: those tests carry the tag `sliced' and run in each.
+
+(defconst roost-test--share
+  (when-let* ((share (getenv "ROOST_TEST_SHARE"))
+              ((string-match "\\`\\([0-9]+\\)/\\([0-9]+\\)\\'" share)))
+    (cons (string-to-number (match-string 1 share)) (string-to-number (match-string 2 share))))
+  "This Emacs's share of the tests, as (INDEX . OF), or nil for all of them.")
+
+(defconst roost-test--sample
+  (max 1 (string-to-number (or (getenv "ROOST_TEST_SAMPLE") "1")))
+  "Take one case in this many of each sweep, as `make quick' does.")
+
+(defvar roost-test--dealt 0
+  "How many cases the sweeps have dealt out, in the order every share sees.")
+
+(defun roost-test--mine-p ()
+  "Deal out a sweep's next case; non-nil when this Emacs is to run it."
+  (let ((case (cl-incf roost-test--dealt)))
+    (and (zerop (mod case roost-test--sample))
+         (or (null roost-test--share)
+             (= (mod (/ case roost-test--sample) (cdr roost-test--share)) (car roost-test--share))))))
+
+(defun roost-test--clean-slate (&rest _)
+  "Leave nothing of the test before: its buffers, windows and modes.
+Each share runs its tests after others than the whole suite would, so a
+test that passed only on what another left behind, such as a task's
+panel still open under an older name, would fail in some share."
+  (cl-letf (((symbol-function 'y-or-n-p) #'always)
+            ((symbol-function 'yes-or-no-p) #'always))
+    (ignore-errors (delete-other-windows))
+    (dolist (mode '(roost-task-panel-mode roost-sidebar-mode roost-watch-mode))
+      (when (and (boundp mode) (symbol-value mode))
+        (ignore-errors (funcall mode -1))))
+    (dolist (buffer (buffer-list))
+      (when (and (buffer-live-p buffer)
+                 (or (buffer-local-value 'roost--buffer-task-key buffer)
+                     (string-match-p "\\` ?\\*roost" (buffer-name buffer))))
+        (let ((kill-buffer-query-functions nil))
+          (ignore-errors (kill-buffer buffer)))))))
+
+(defun roost-test-run-share ()
+  "Run this Emacs's share of the tests and exit, for test/run.py.
+ROOST_TEST_MATCH, a regexp, keeps to the tests whose names match it."
+  (advice-add 'ert-run-test :before #'roost-test--clean-slate)
+  (let* ((match (getenv "ROOST_TEST_MATCH"))
+         (tests (seq-filter (lambda (test)
+                              (or (null match) (string= match "")
+                                  (string-match-p match (symbol-name (ert-test-name test)))))
+                            (ert-select-tests t t)))
+         (index -1)
+         mine)
+    (dolist (test (sort tests (lambda (a b) (string< (ert-test-name a) (ert-test-name b)))))
+      (when (or (memq 'sliced (ert-test-tags test))
+                (null roost-test--share)
+                (= (mod (cl-incf index) (cdr roost-test--share)) (car roost-test--share)))
+        (push (ert-test-name test) mine)))
+    (ert-run-tests-batch-and-exit (if mine `(member ,@(nreverse mine)) '(tag none-of-them)))))
+
 (defconst roost-test--report-turn (symbol-function 'roost--report-turn)
   "Roost's `roost--report-turn', which `roost-test--isolated' stubs.")
 
@@ -307,7 +369,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
        (roost-task-info-mode)
        (setq roost--buffer-task-key (roost--key asking))
        (roost--render-task-info)
-       (should (string-match-p "^Answer it in its terminal: RET\n\nWaiting for your answer\nAsks to run make test\n\nPrompt\nfix authentication\n\nChanges\nRefreshing…\n\nAgent's latest reply$"
+       (should (string-match-p "^Answer it in its terminal: RET\n\nWaiting for your answer\nAsks to run make test\n\nPrompt\nfix authentication\n\nRefreshing…\n\nAgent's latest reply$"
                                (buffer-string))))
      ;; The notification names it, rather than the agent's last words.
      (let (body)
@@ -413,7 +475,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
          ;; The agent's word comes after the changes, without a heading's
          ;; note while there are none.
          (should (< (string-match "^fix auth " text) (string-match "^Prompt$" text)
-                    (string-match "^Changes$" text) (string-match "^Agent's latest reply$" text)))
+                    (string-match "^Refreshing…$" text) (string-match "^Agent's latest reply$" text)))
          (should (string-match-p "^Agent's latest reply\n## Summary\n" text))
          (should (equal (get-text-property (string-match "Fixed the" text) 'line-prefix text) "  "))
          (should (string-match-p "^Fixed the auth bug in login\\.py\\.\n" text))
@@ -462,13 +524,17 @@ terminal's, on a pty.  Skips the test where it can't be made."
              (with-current-buffer buffer
                (roost--render-task-info)
                (let ((text (buffer-string)))
-                 ;; What to do next, then what the task is for.  No key:
-                 ;; RET in the terminal would pick the agent's default answer.
-                 (should (string-match-p "^Answer it in its terminal\n\nPrompt\nfix authentication\n" text))
+                 ;; What to do next, then what came of it.  No key: RET in
+                 ;; the terminal would pick the agent's default answer.
+                 (should (string-match-p "^Answer it in its terminal\n\n1 file \\+1 −0\n" text))
                  (should-not (string-match-p "Waiting for your answer\\|Agent's latest reply\\|Fixed the" text))
+                 ;; What the task is for, which the terminal shows, is one
+                 ;; line under the keys.
+                 (should (string-match-p "^r Magit  f Files  t Shell  \\? More\n▸ fix authentication\n▸ Details\n\\'"
+                                         text))
+                 (should-not (string-match-p "^Prompt$" text))
                  ;; The labels say what is uncommitted.  Where notes are
                  ;; written is for a wide panel, as room here goes to changes.
-                 (should (string-match-p "^Changes\n1 file \\+1 −0\n" text))
                  (should (string-match-p "^  Committed\n  login\\.py  \\+1 −0$" text))
                  (should-not (string-match-p "writes a note" text))
                  (should-not (string-match-p "Actions" text))
@@ -492,7 +558,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
                (should (string-match-p "^Answer it in its terminal: RET$" (buffer-string)))
                (should (string-match-p "^Waiting for your answer$" (buffer-string)))
                ;; After what can be checked, as its agent's own account.
-               (should (string-match-p "^Checks\nNo CI results: no pull request\n\nAgent's latest reply  its own account$"
+               (should (string-match-p "^No CI results: no pull request\n\nAgent's latest reply  its own account$"
                                        (buffer-string)))))
          (kill-buffer buffer))))))
 
@@ -633,7 +699,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
        (setq roost--buffer-task-key (roost--key task))
        (cl-letf (((symbol-function 'roost--panel-beside-terminal-p) #'ignore))
          (roost--render-task-info))
-       (should (string-match-p "^Prompt\nFix the login\\.\n\n?Your latest prompt\nNow the logout\\.\nShow the whole prompt\n\n?Changes$"
+       (should (string-match-p "^Prompt\nFix the login\\.\n\n?Your latest prompt\nNow the logout\\.\nShow the whole prompt\n\n?Refreshing…$"
                                (buffer-string)))
        (goto-char (point-min))
        (search-forward "Show the whole")
@@ -657,6 +723,91 @@ terminal's, on a pty.  Skips the test where it can't be made."
          (roost--cache-task "dev" (append `((task . "Fix the login.") (lastPrompt . ,said)) (roost-test--task)))
          (roost--render-task-info)
          (should-not (string-match-p "Your latest prompt" (buffer-string))))))))
+
+(ert-deftest roost-a-narrow-panel-folds-prompts-and-details ()
+  ;; Beside a terminal, which shows your prompts, they are one quiet line
+  ;; under the keys, and where the task's work lives is another, until you
+  ;; open them.  What is wrong comes first, under the title.
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (append '((task . "Fix the login.\n\nRun the tests afterwards.")
+                                                  (lastPrompt . "Now the logout.\n\nAnd its test.")
+                                                  (error . "boom") (baseRef . "main"))
+                                                (roost-test--task))))
+         (keys "^r Magit  f Files  t Shell  \\? More\n")
+         (press (lambda (label)
+                  (goto-char (point-min))
+                  (search-forward label)
+                  (push-button (match-beginning 0)))))
+     (with-temp-buffer
+       (roost-task-info-mode)
+       (setq roost--buffer-task-key (roost--key task))
+       (cl-letf (((symbol-function 'roost--task-info-width) (lambda () 44)))
+         (roost--render-task-info)
+         ;; In its colour, on the third line, and nowhere else.
+         (let ((lines (split-string (buffer-string) "\n")))
+           (should (equal (nth 2 lines) "▲ Last error: boom"))
+           (should (= (cl-count-if (lambda (line) (string-search "boom" line)) lines) 1)))
+         (goto-char (point-min))
+         (search-forward "▲ Last error")
+         (should (memq 'roost-status-failed (ensure-list (get-text-property (point) 'face))))
+         ;; Where you left off, on one line, then the details, after the keys.
+         (let ((folded (concat keys "▸ Now the logout\\. And its test\\.\n▸ Details\n\\'")))
+           (should (string-match-p folded (buffer-string)))
+           (should-not (string-match-p "^Prompt$\\|Your latest prompt\\|Fix the login\\|^  Branch$" (buffer-string)))
+           ;; Pressed, the line gives way to both prompts, under a line
+           ;; that folds them again, with point on it.
+           (funcall press "▸ Now the logout")
+           (should (equal roost--panel-open '(prompts)))
+           (should (string-match-p (concat keys "\n▾ Prompts\nFix the login\\.\nShow the whole prompt\n\n"
+                                           "Your latest prompt\nNow the logout\\.\nShow the whole prompt\n\n"
+                                           "▸ Details\n\\'")
+                                   (buffer-string)))
+           (should (looking-at-p "▾ Prompts"))
+           ;; A redraw, as a poll's, leaves them open; under the line a
+           ;; long one opens and folds as it does in a wide panel.
+           (roost--render-task-info)
+           (should (string-match-p "^▾ Prompts$" (buffer-string)))
+           (funcall press "Show the whole prompt")
+           (should (string-match-p "^▾ Prompts\nCollapse prompt\nFix the login\\.\n\nRun the tests afterwards\\.\n"
+                                   (buffer-string)))
+           (should (looking-at-p "Collapse prompt"))
+           (push-button)
+           (should (string-match-p "^▾ Prompts\nFix the login\\.\nShow the whole prompt\n" (buffer-string)))
+           (funcall press "▾ Prompts")
+           (should-not roost--panel-open)
+           (should (string-match-p folded (buffer-string)))
+           (should (looking-at-p "▸ Now the logout"))
+           ;; The details likewise, under no other heading.
+           (funcall press "▸ Details")
+           (should (equal roost--panel-open '(details)))
+           (should (string-match-p (concat keys "▸ Now the logout\\. And its test\\.\n"
+                                           "▾ Details\n  Branch\ncodex/roost/fix-auth-123456, from main (B gives it a branch to merge into)\n\\'")
+                                   (buffer-string)))
+           (should (looking-at-p "▾ Details"))
+           (push-button)
+           (should-not roost--panel-open)
+           (should (string-match-p folded (buffer-string)))
+           (should (looking-at-p "▸ Details")))
+         ;; With no prompt sent since, the line is the one the task began
+         ;; with; a task without one has only its details to unfold.
+         (roost--cache-task "dev" (append '((task . "Fix the login.\n\nRun the tests afterwards.") (lastPrompt))
+                                          (roost-test--task)))
+         (roost--render-task-info)
+         (should (string-match-p (concat keys "▸ Fix the login\\. Run the tests afterwards\\.\n▸ Details\n\\'")
+                                 (buffer-string)))
+         (roost--cache-task "dev" (append '((task) (lastPrompt)) (roost-test--task)))
+         (roost--render-task-info)
+         (should (string-match-p (concat keys "▸ Details\n\\'") (buffer-string))))
+       ;; With room, the prompts stand near the top and the details at the
+       ;; bottom, under their headings, with nothing to unfold.
+       (cl-letf (((symbol-function 'roost--task-info-width) (lambda () 72)))
+         (roost--cache-task "dev" (append '((task . "Fix the login.") (lastPrompt . "Now the logout.")
+                                            (baseRef . "main"))
+                                          (roost-test--task)))
+         (roost--render-task-info)
+         (should (string-match-p "^Prompt\nFix the login\\.\n\nYour latest prompt\nNow the logout\\.\n" (buffer-string)))
+         (should (string-match-p "^Details\n  Branch       codex/roost/fix-auth-123456, from main (B gives it a branch to merge into)\n" (buffer-string)))
+         (should-not (string-match-p "▸\\|▾\\|\\? More" (buffer-string))))))))
 
 (ert-deftest roost-a-draft-from-a-tiled-pane-opens-beside-the-tiles ()
   ;; Shown in the pane's window, the draft was taken back when tmux-control
@@ -1101,8 +1252,8 @@ terminal's, on a pty.  Skips the test where it can't be made."
          (roost--render-task-info)
          (should-not roost--expanded-reply)
          (should-not (string-match-p "A new response arrived" (buffer-string)))
-         (should (string-match-p "^Changes$" (buffer-string)))
-         (should (string-match-p "^Details$" (buffer-string))))))))
+         (should (string-match-p "^Refreshing…$" (buffer-string)))
+         (should (string-match-p "^▸ Details$" (buffer-string))))))))
 
 (ert-deftest roost-task-panel-previews-wrap-long-tokens-and-preserve-short-replies ()
   (should (equal (roost--reply-preview "Done.\nTests passed." 40) "Done.\nTests passed."))
@@ -1184,7 +1335,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
                (setq roost--buffer-task-key (roost--key task))
                (roost--render-task-info)
                (should (string-prefix-p "fix auth" (buffer-string)))
-               (should (< (string-search "Changes" (buffer-string))
+               (should (< (string-search "Refreshing…" (buffer-string))
                           (string-search "Agent's latest reply" (buffer-string))
                           (string-search "Details" (buffer-string)))))
            (delete-window window)))))))
@@ -1212,10 +1363,17 @@ terminal's, on a pty.  Skips the test where it can't be made."
        (roost-task-info-mode)
        (setq roost--buffer-task-key (roost--key task))
        (roost--render-task-info)
-       ;; Sections are apart by half a line.
+       ;; Sections are apart by half a line, under a quiet heading: bold
+       ;; is the task's name, and colour what wants you.
        (goto-char (point-min))
-       (search-forward "\nChanges\n")
-       (should (equal (get-text-property (match-beginning 0) 'face) '(:height 0.5)))))))
+       (search-forward "\nPrompt\n")
+       (should (equal (get-text-property (match-beginning 0) 'face) '(:height 0.5)))
+       (should (eq (get-text-property (1+ (match-beginning 0)) 'face) 'roost-label))
+       ;; What it changed has no heading: how much, dim, after the gap.
+       (search-forward "\nRefreshing…\n")
+       (should (equal (get-text-property (match-beginning 0) 'face) '(:height 0.5)))
+       (should (eq (get-text-property (1+ (match-beginning 0)) 'face) 'roost-dim))
+       (should-not (string-match-p "^Changes$" (buffer-string)))))))
 
 (ert-deftest roost-quiet-refresh-retains-last-message ()
   (roost-test--isolated
@@ -2315,6 +2473,66 @@ terminal's, on a pty.  Skips the test where it can't be made."
                                        (buffer-string)))))
          (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
 
+(ert-deftest roost-a-fork-goes-on-with-its-tasks-conversation ()
+  (roost-test--isolated
+   (roost--cache-task "dev" (append '((repo . "/home/user/repo") (integrationBranch . "release")
+                                      (agent . "codex") (agentSession . "s1"))
+                                    (roost-test--task)))
+   (setq roost--current-task '("dev" "0123456789abcdef"))
+   (let ((default-directory "/tmp/") created)
+     (save-window-excursion
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--git-in)
+                      (lambda (_directory &rest args)
+                        (pcase args
+                          (`("rev-parse" "--symbolic-full-name" "HEAD") "refs/heads/codex/roost/fix-auth-123456\n")
+                          (`("worktree" "list" "--porcelain") "worktree /home/user/repo\n"))))
+                     ((symbol-function 'roost--create-task)
+                      (lambda (directory name base prompt agent _success _failure &optional extra)
+                        (setq created (list directory name base prompt agent extra)))))
+             (roost--compose t)
+             (with-current-buffer roost--compose-buffer
+               ;; With its task's agent, whatever the default.
+               (should (equal (plist-get roost--compose-fields :agent) "codex"))
+               (should (string-match-p "^Context  fix auth's conversation  C-c C-f · its agent hears it now works in a new worktree$"
+                                       (buffer-string)))
+               (should (string-match-p "fork: includes its commits and uncommitted changes; merges into release"
+                                       (buffer-string)))
+               ;; The prompt is yours alone, and names the task.
+               (should (equal (roost--compose-prompt) ""))
+               (insert "Try a cache instead.")
+               (should (equal (roost--compose-name) "try-cache-instead"))
+               (roost-compose-submit)
+               (should (equal (alist-get 'forkFrom (nth 5 created)) "0123456789abcdef"))
+               (should (equal (nth 4 created) "codex"))
+               (should (equal (nth 3 created) "Try a cache instead."))
+               ;; A new conversation makes a fork of its commits alone.
+               (setq roost--compose-submitting nil)
+               (roost-compose-set-conversation)
+               (should (string-match-p "^Context  a new conversation  C-c C-f$" (buffer-string)))
+               (should (string-match-p "fork: includes its commits; merges" (buffer-string)))
+               (roost-compose-submit)
+               (should-not (assq 'forkFrom (nth 5 created)))
+               ;; Another agent can't go on with it, and choosing it again
+               ;; takes its agent back.
+               (setq roost--compose-submitting nil)
+               (roost-compose-set-conversation)
+               (should (roost--compose-continues))
+               (cl-letf (((symbol-function 'roost--choose-from) (lambda (&rest _) "claude")))
+                 (roost-compose-set-agent))
+               (should (string-match-p "^Context  a new conversation  C-c C-f · claude can't continue codex's$"
+                                       (buffer-string)))
+               (should-not (roost--compose-continues))
+               (roost-compose-set-conversation)
+               (should (equal (plist-get roost--compose-fields :agent) "codex"))
+               (should (roost--compose-continues))
+               ;; A task whose agent has no conversation yet has none to give.
+               (roost-compose-set-conversation)
+               (setf (alist-get 'agentSession (gethash '("dev" "0123456789abcdef") roost--tasks)) nil)
+               (should-error (roost-compose-set-conversation) :type 'user-error)
+               (should-not (roost--compose-continues))))
+         (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
+
 (ert-deftest roost-compose-says-which-branch-a-start-merges-into ()
   (roost-test--isolated
    (roost--cache-task "dev" (append '((repo . "/repo") (integrationBranch . "release")) (roost-test--task)))
@@ -3103,7 +3321,9 @@ terminal's, on a pty.  Skips the test where it can't be made."
      (should-not (get-text-property 3 'face count)))
    (roost--cache-task "dev" (roost-test--task "3333333333333333" "permission"))
    (let ((count (roost--mode-line-count)))
-     (should (equal (substring-no-properties count) " ● Roost:2 "))
+     ;; Marked, as one of them asks: its colour alone would say so only
+     ;; to those who can tell the two apart.
+     (should (equal (substring-no-properties count) " ● Roost:2! "))
      (should (eq (get-text-property 1 'face count) 'roost-status-permission)))
    (let ((global-mode-string '("" display-time-string)) (roost-watch-interval 3600))
      (unwind-protect
@@ -3114,7 +3334,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
            ;; Shown only while `roost-mode-line-count' is on.
            (should (eq (car roost--mode-line-entry) 'roost-mode-line-count))
            (should (equal (substring-no-properties (eval (cadr (cadr roost--mode-line-entry)) t))
-                          " ● Roost:2 ")))
+                          " ● Roost:2! ")))
        (roost-watch-mode -1))
      (should (equal global-mode-string '("" display-time-string))))))
 
@@ -3391,6 +3611,73 @@ terminal's, on a pty.  Skips the test where it can't be made."
                      (should (equal created '("/ssh:dev:/repo/" "fix-lexer")))
                    (should-not (get-buffer roost--compose-buffer))))))
          (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
+
+(ert-deftest roost-a-conversation-starts-with-one-click ()
+  ;; In no project of yours: one click asks the host for it, and it opens
+  ;; at once, under a heading of its own, and isn't a project to start in.
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (let ((roost-sidebar-recent-projects 3) asked opened said)
+       (switch-to-buffer (get-buffer-create "*sidebar test*"))
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--request)
+                      (lambda (host action params success &rest _)
+                        (setq asked (list host action params))
+                        (funcall success (append `((conversation . t) (name . ,(alist-get 'name params))
+                                                   (repo . "/state/conversations"))
+                                                 (roost-test--task "c0c0c0c0c0c0c0c0" "starting")))))
+                     ((symbol-function 'roost-open-task) (lambda (task) (setq opened task)))
+                     ((symbol-function 'message)
+                      (lambda (format &rest args) (when format (push (apply #'format-message format args) said)))))
+             (roost-sidebar-list-mode)
+             (roost--render-sidebar)
+             (goto-char (point-min))
+             (search-forward "New conversation")
+             (push-button (1- (point)))
+             (should (equal (nth 1 asked) "create"))
+             (should-not (nth 0 asked))
+             (should (eq (alist-get 'conversation (nth 2 asked)) t))
+             (should-not (alist-get 'prompt (nth 2 asked)))
+             (should-not (alist-get 'setup (nth 2 asked)))
+             (should (string-prefix-p "Conversation " (alist-get 'name (nth 2 asked))))
+             (should (equal (roost--field opened 'id) "c0c0c0c0c0c0c0c0"))
+             (should (seq-find (apply-partially #'string-match-p "^Roost started Conversation .* on local$") said))
+             (should-not roost--remembered-projects)
+             (roost--render-sidebar)
+             (should (string-match-p "^ *local · Conversations +\\+$" (buffer-string)))
+             ;; Its heading's + starts another.
+             (setq asked nil)
+             (goto-char (point-min))
+             (search-forward "Conversations")
+             (end-of-line)
+             (push-button (1- (point)))
+             (should (eq (alist-get 'conversation (nth 2 asked)) t))
+             ;; Its heading is no project to start a task in.
+             (should-not (get-text-property (point) 'roost-directory))
+             ;; Drawn again, as each poll does, point stays on New conversation.
+             (goto-char (point-min))
+             (search-forward "New conversation")
+             (roost--render-sidebar)
+             (should (get-text-property (point) 'roost-new-conversation))
+             (let ((conversation (gethash (list nil "c0c0c0c0c0c0c0c0") roost--tasks)))
+               ;; A new task from one is drafted in a project of yours.
+               (let ((default-directory (expand-file-name "~/")))
+                 (cl-letf (((symbol-function 'roost--known-projects) (lambda () '("/srv/ledger/"))))
+                   (should-not (string-match-p "conversations" (or (roost--compose-default-directory
+                                                                    conversation nil) "")))))
+               ;; With nothing to propose or merge, P and m don't apply.
+               (should-not (roost--action-applies-p (append '((ahead . 1)) conversation) 'roost-pr))
+               (should-not (roost--action-applies-p (append '((ahead . 1)) conversation) 'roost-merge-retire))
+               (should-error (roost-pr conversation) :type 'user-error)
+               (should-error (roost-merge-retire conversation) :type 'user-error)
+               ;; A second in the same minute is told apart.
+               (cl-letf (((symbol-function 'format-time-string) (lambda (&rest _) "Conversation 09:15")))
+                 (should (equal (roost--conversation-name) "Conversation 09:15"))
+                 (roost--cache-task nil (append '((name . "Conversation 09:15"))
+                                                (roost-test--task "c1c1c1c1c1c1c1c1" "ready")))
+                 (should (equal (roost--conversation-name) "Conversation 09:15 (2)")))))
+         (kill-buffer "*sidebar test*"))))))
 
 (ert-deftest roost-sidebar-shows-the-task-you-work-on ()
   ;; With more tasks than the sidebar has lines, the one you opened was
@@ -4004,8 +4291,9 @@ terminal's, on a pty.  Skips the test where it can't be made."
                (roost--render-task-info)
                (roost--render-task-info)
                (should (string-prefix-p "fix auth" (buffer-string)))
-               (should (< (string-search "Changes" (buffer-string))
-                          (string-search "Details" (buffer-string))))))
+               (should (< (string-search "Refreshing…" (buffer-string))
+                          (string-search "? More" (buffer-string))
+                          (string-search "▸ Details" (buffer-string))))))
          (kill-buffer buffer))))))
 
 (ert-deftest roost-task-panel-redraws-keep-the-scroll-position ()
@@ -4056,8 +4344,24 @@ terminal's, on a pty.  Skips the test where it can't be made."
        (roost-task-info-mode)
        (setq roost--buffer-task-key (roost--key task))
        (roost--render-task-info)
-       (should (string-search "The worktree is gone" (buffer-string)))
-       (should-not (string-search "notes.py" (buffer-string))))
+       ;; Said first, under its title, and not how much it changed.
+       (should (string-match-p "\\`[^\n]+\n[^\n]+\n▲ The worktree is gone\n\nIts worktree is gone: " (buffer-string)))
+       (should-not (string-search "1 file" (buffer-string)))
+       (should-not (string-search "notes.py" (buffer-string)))
+       ;; What is still said of its changes stands apart from the prompt
+       ;; above it, as the line that says how much does for the rest.
+       ;; With Magit, a wide panel says where notes are written first.
+       (roost--cache-task "dev" (append '((name . "typo") (files ((path . "notes.py") (added . 2) (deleted . 0))))
+                                        (roost-test--task "1111111111111111")))
+       (roost--render-task-info)
+       (should (string-match-p "^fix authentication\n\n\\(?:In a file's diff[^\n]+\n\\)?typo also changes notes\\.py\n\nNo CI results: no pull request$"
+                               (buffer-string)))
+       ;; Beside a terminal, where none of its other views is left to
+       ;; open, the row of keys starts at the menu's.
+       (cl-letf (((symbol-function 'roost--task-info-width) (lambda () 44)))
+         (roost--render-task-info))
+       (should (string-match-p " X forgets it\n\ntypo also changes notes\\.py\n\nNo CI results: no pull request$" (buffer-string)))
+       (should (string-match-p "\n\n\\? More\n▸ fix authentication\n▸ Details\n\\'" (buffer-string))))
      ;; A pull request's thread on the whole file says so too.
      (should (string-search "worktree is gone"
                             (cadr (should-error (roost--visit-review-thread task '((path . "notes.py")))
@@ -4116,7 +4420,8 @@ terminal's, on a pty.  Skips the test where it can't be made."
          (roost-merge-retire task))
        ;; Not yet measured, its host merges what is there, as it always did.
        (should (equal acted (list (append '("merge" (style . "squash"))
-                                          (when measured `((expect . ,measured)))))))))))
+                                          (when measured `((expect . ,measured)))
+                                          '((offers . []))))))))))
 
 (ert-deftest roost-a-merge-refused-as-moved-measures-the-task-for-next-time ()
   ;; Watching or not: the next `m' would say the same otherwise, for good.
@@ -4167,7 +4472,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
        (roost-discard task)
        (should (string-match-p "loses 2 commits no other branch has and 1 uncommitted file" asked))
        ;; What you were told goes with it, for its host to count again.
-       (should (equal acted '(("discard" (expect . "abc123") (told (commits . 2) (changes . 1))))))
+       (should (equal acted '(("discard" (expect . "abc123") (told (commits . 2) (changes . 1)) (offers . [])))))
        ;; Another name: nothing happens.
        (setq acted nil)
        (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "fix")))
@@ -4187,14 +4492,15 @@ terminal's, on a pty.  Skips the test where it can't be made."
                                        "3 uncommitted files,")
                                asked))
        (should (equal acted '(("discard" (expect . "abc123")
-                               (told (commits . 1) (submoduleCommits . 2) (unreadSubmodules . 1) (changes . 3))))))
+                               (told (commits . 1) (submoduleCommits . 2) (unreadSubmodules . 1) (changes . 3))
+                               (offers . [])))))
        (setq acted nil)
        ;; Nothing to lose: a plain question.
        (setq told '((commits . 0) (changes . 0) (commit . "abc123")))
        (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t))
                  ((symbol-function 'read-string) (lambda (&rest _) (error "Not asked to type"))))
          (roost-discard task))
-       (should (equal acted '(("discard" (expect . "abc123") (told (commits . 0) (changes . 0))))))
+       (should (equal acted '(("discard" (expect . "abc123") (told (commits . 0) (changes . 0)) (offers . [])))))
        ;; x on a task holding work merged nowhere offers to discard it.
        (setq acted nil)
        (let ((unmerged (roost--cache-task "dev" (append '((ahead . 1)) (roost-test--task nil "ready"))))
@@ -4501,26 +4807,33 @@ terminal's, on a pty.  Skips the test where it can't be made."
        (roost-task-info-mode)
        (setq roost--buffer-task-key (roost--key task))
        (roost--render-task-info)
-       ;; Beside its changes, which are that branch's, and in its details.
-       ;; The next step has said which branch the worktree is on, so this
-       ;; says only whose the changes are, naming both, in its colour.
-       (should (string-search (format "These are feat's changes, not %s's.\n" own) (buffer-string)))
-       (should-not (string-search "The worktree is on" (buffer-string)))
+       ;; First, under its title, in its colour, and in its details: whose
+       ;; the changes below are, naming both branches.  The next step says
+       ;; how to finish it, so that is said once, there.
+       (should (string-match-p (concat "\\`[^\n]+\n[^\n]+\n"
+                                       (regexp-quote (format (concat "▲ On feat, not the task's branch %s, so the "
+                                                                     "changes below are feat's.\n\nx discards the task, keeping feat")
+                                                             own)))
+                               (buffer-string)))
+       (should (= (cl-count-if (lambda (line) (string-search "x discards the task" line))
+                               (split-string (buffer-string) "\n"))
+                  1))
        (goto-char (point-min))
-       (search-forward "These are feat's")
+       (search-forward "▲ On feat")
        (should (memq 'roost-status-permission (ensure-list (get-text-property (point) 'face))))
-       (should (string-search "merges into main; the worktree is on feat\n" (buffer-string))))
-     ;; Stopped, the next step resumes it: the line beside its changes
-     ;; says how to finish it instead.
+       (should (string-search "merges into main (B changes that); the worktree is on feat\n" (buffer-string))))
+     ;; Stopped, the next step resumes it: the line under its title says
+     ;; how to finish it instead.
      (setq task (funcall on "HEAD" '(status . "stopped") '(live)))
      (should (equal (roost--changes task t) "detached · 1 file +12 −3 · ↑1"))
      (with-temp-buffer
        (roost-task-info-mode)
        (setq roost--buffer-task-key (roost--key task))
        (roost--render-task-info)
-       (should (string-search (concat "The worktree is on a detached HEAD, not the task's branch " own
-                                      ", so these are the changes there: x discards the task; to merge its work "
-                                      "with m or P, bring its commits onto " own " and check that out there.\n")
+       (should (string-search (concat "\n▲ On a detached HEAD, not the task's branch " own
+                                      ", so the changes below are those there: x discards the task; to merge its work "
+                                      "with m or P, bring its commits onto " own " and check that out there.\n\n"
+                                      "RET or s resumes its conversation\n")
                               (buffer-string))))
      ;; Merged work there is no task to retire: its host won't retire it.
      ;; Commits on the branch since are still to merge, once brought over.
@@ -4942,6 +5255,28 @@ Read from the layout transient keeps, whose form varies by version."
        (should (equal (roost--status-mark status t) "?")))
      (dolist (status '("crashed" "error" "ci failed"))
        (should (equal (roost--status-mark status t) "!")))
+     ;; A status light's shape says what its colour doesn't: grey is an
+     ;; agent at work, one starting, one stopped, a task merged, a host
+     ;; out of reach, or nothing to do.
+     (should (equal (mapcar (lambda (status) (roost--status-shape status nil))
+                            '("permission" "prompt" "ready" "to merge" "comments" "conflicts"
+                              "failed" "crashed" "ci failed" "running" "background" "starting"
+                              "stopped" "merged" "offline" "idle" "exited"))
+                    '(asks asks turn turn turn turn wrong wrong wrong working working starting
+                      stopped merged offline idle idle)))
+     (should (eq (roost--status-shape "exited" t) 'wrong))
+     ;; An image is given colours as SVG knows them: Emacs's own name
+     ;; for `shadow' where no theme sets it is one it doesn't.
+     ;; Which hex depends on the colours the display has, a terminal's
+     ;; being few.
+     (should (string-match-p "\\`#[0-9a-f]\\{6\\}\\'" (roost--svg-colour "grey70")))
+     (should (equal (roost--svg-colour "no such colour") "#808080"))
+     (should (equal (roost--svg-colour nil) "#808080"))
+     ;; Where no image can be drawn, as here, the dot stands as it was.
+     (should-not (roost--status-shape-image 'asks 'roost-status-permission))
+     (let ((light (roost--status-light asking 'dashboard)))
+       (should (equal (substring-no-properties light) "●"))
+       (should-not (get-text-property 0 'display light)))
      ;; The row's help says the status in full, whatever its width.
      (cl-letf (((symbol-function 'roost--narrowest-width) (lambda (&rest _) 16)))
        (with-temp-buffer
@@ -6497,6 +6832,34 @@ stopped."
        (should (= (length calls) 3))
        (should (equal (caar calls) ["0123456789abcdef"]))))))
 
+(ert-deftest roost-a-branch-to-merge-into-named-elsewhere-is-measured-against ()
+  ;; As in another Emacs, or with B when its reply was lost.  It is no
+  ;; event of the agent's, and moves no Git stamp where the two branches'
+  ;; reflogs have one time, or Git keeps none: the row went on saying
+  ;; "merged", as measured against the branch before.
+  (roost-test--isolated
+   (let* ((roost-hosts '("dev")) calls
+          (listed (lambda (branch &rest fields)
+                    (append fields `((integrationBranch . ,branch) (gitStamp . "1 2 3")
+                                     (seen . "2026-10-03T20:00:00+00:00") (live . t))
+                            (roost-test--task))))
+          (word (lambda () (roost--display-status (gethash '("dev" "0123456789abcdef") roost--tasks)))))
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (_host _action params success _failure)
+                  (push (cons (alist-get 'full params) success) calls))))
+       (roost--cache-task "dev" (funcall listed "main" '(landed . t) '(dirty) '(ahead . 1)))
+       (should (equal (funcall word) "merged"))
+       (roost-refresh t)
+       (funcall (cdar calls) (list (funcall listed "main")))
+       (should (= (length calls) 1))
+       (roost-refresh t)
+       (funcall (cdar calls) (list (funcall listed "release")))
+       (should (= (length calls) 3))
+       (should (equal (caar calls) ["0123456789abcdef"]))
+       ;; Measured, it isn't merged into release.
+       (funcall (cdar calls) (list (funcall listed "release" '(landed) '(dirty) '(ahead . 1))))
+       (should-not (equal (funcall word) "merged"))))))
+
 (ert-deftest roost-saving-a-file-in-a-worktree-measures-its-task ()
   (roost-test--isolated
    (let ((task (roost--cache-task "dev" (roost-test--task))) refreshes)
@@ -6538,7 +6901,7 @@ stopped."
    (let ((roost-watch-mode nil))
      (should-not (roost-mode-line-waiting)))
    (let ((roost-watch-mode t))
-     (should (equal (substring-no-properties (roost-mode-line-waiting)) " ● Roost:1 ")))))
+     (should (equal (substring-no-properties (roost-mode-line-waiting)) " ● Roost:1! ")))))
 
 ;; Canvases come with Emacs 32, so these tests stand in for them.
 (defmacro roost-test--with-canvases (on &rest body)
@@ -7907,7 +8270,7 @@ the host records, and the host what each sends."
    (let ((tasks (list (append '((agent . "codex") (diff . "3 files changed, 38 insertions(+), 1 deletion(-)") (dirty . t))
                               (roost-test--task "1111111111111111"))
                       (append '((name . "dedupe-imports")) (roost-test--task "2222222222222222")))))
-     (should (equal (roost--dashboard-layout tasks 150) '(:name 14 :agent t :changes 28 :pr 0)))
+     (should (equal (roost--dashboard-layout tasks 150) '(:name 14 :indent 0 :agent t :changes 28 :pr 0)))
      (should (plist-get (roost--dashboard-layout tasks 75) :agent))
      (should-not (plist-get (roost--dashboard-layout tasks 50) :agent))
      (should (= (plist-get (roost--dashboard-layout tasks 30) :changes) 0))
@@ -7986,13 +8349,22 @@ the host records, and the host what each sends."
            (should (<= (string-width row) 12))
            (should (string-match-p " 444444 \\?\\'" row))
            (should-not (string-match-p "±" row)))
-         (should (string-match-p "fix auth 444444 ± +permission\\'" (roost--sidebar-row twin 30)))))
+         (should (string-match-p "fix auth 444444 ± +permission\\'" (roost--sidebar-row twin 30)))
+         ;; Nor does the indent under the task it was started from, which
+         ;; gives up its columns first.
+         (setq twin (roost--cache-task "dev" (cons (cons 'parent (roost--field task 'id)) twin)))
+         (should (= (roost--nesting twin) 1))
+         (let ((row (roost--sidebar-row twin 11)))
+           (should (<= (string-width row) 11))
+           (should (string-match-p "\\` … 444444 \\?\\'" row)))
+         (should (string-match-p "\\`  … 444444 \\?\\'" (roost--sidebar-row twin 12)))
+         (should (string-match-p "\\`   fix auth 444444 ± +permission\\'" (roost--sidebar-row twin 32)))))
      ;; The panel says how large, and where.
      (with-temp-buffer
        (roost-task-info-mode)
        (setq roost--buffer-task-key (roost--key task))
        (roost--render-task-info)
-       (should (string-match-p "^Changes\n± 12 files \\+520 −40 · 3 ahead\nIn docs/, scripts/, test/ and the top level\n  Uncommitted\n"
+       (should (string-match-p "\n\n± 12 files \\+520 −40 · 3 ahead\nIn docs/, scripts/, test/ and the top level\n  Uncommitted\n"
                                (buffer-string)))))))
 
 (ert-deftest roost-review-fixes-for-paths-layout-and-drafts ()
@@ -8196,6 +8568,39 @@ the draft stays.  The model found it: NewTaskDraft.first-kept-when-mixed.cfg."
       (should (equal (roost--compose-prompt) "Fix the parser"))
       (should (string-search "Made" roost--draft-note)))))
 
+(ert-deftest roost-a-fork-given-a-new-conversation-stays-for-a-task-that-goes-on-with-the-old ()
+  "A fork that goes on with its task's conversation is asked for, and you
+choose a new conversation: while it is being created, or after no reply,
+before asking again.  The task its host made goes on with the old one,
+so the draft stays, saying so.  The model's variant:
+NewTaskDraft.what-misses-a-field.cfg."
+  (dolist (asks-again '(nil t))
+    (roost-test--draft-world
+      (with-current-buffer roost--compose-buffer
+        (setq roost--compose-fields
+              (thread-first roost--compose-fields
+                            (plist-put :base "HEAD")
+                            (plist-put :source "fix-auth") (plist-put :source-id "1111111111111111")
+                            (plist-put :source-agent (plist-get roost--compose-fields :agent))
+                            (plist-put :conversation t)))
+        (roost-compose-submit)
+        (should (equal (alist-get 'forkFrom (car (car asked))) "1111111111111111"))
+        (when asks-again
+          (funcall (nth 2 (car asked)) (propertize "No reply after 660s" 'roost-no-reply t)))
+        (roost-compose-set-conversation)
+        (when asks-again
+          (roost-compose-submit)
+          (should-not (assq 'forkFrom (car (car asked))))
+          (should (equal (alist-get 'createId (car (car asked))) (alist-get 'createId (car (cadr asked))))))
+        (funcall (nth 1 (car asked))
+                 (append `((name . "fix-parser") (repo . "/repo") (alreadyMade . ,(and asks-again t))
+                           (forkedFrom (id . "1111111111111111") (name . "fix-auth")))
+                         (roost-test--task "2222222222222222"))))
+      (should (get-buffer roost--compose-buffer))
+      (with-current-buffer roost--compose-buffer
+        (should-not (roost--compose-continues))
+        (should (string-search "Made fix-parser from what you sent before" roost--draft-note))))))
+
 (ert-deftest roost-unreachable-hosts-are-named-rather-than-taken-as-empty ()
   (roost-test--isolated
    (let ((roost-hosts '(nil "dev" "lab")))
@@ -8265,8 +8670,9 @@ the draft stays.  The model found it: NewTaskDraft.first-kept-when-mixed.cfg."
      (should (eq (lookup-key transient-predicate-map (vector command)) #'transient--do-exit)))))
 
 ;; Beside a terminal, the panel's top goes to what you don't know yet:
-;; your own prompt is three lines, and how to write a note is taught in a
-;; wide panel.  An agent you've seen says so, as on its dashboard row.
+;; your own prompt is one line under the keys, and three when you unfold
+;; it, and how to write a note is taught in a wide panel.  An agent
+;; you've seen says so, as on its dashboard row.
 (ert-deftest roost-a-docked-panel-keeps-its-top-for-what-you-dont-know ()
   (roost-test--isolated
    (let* ((prompt (mapconcat (lambda (n) (format "Detail %d of what the report should do." n))
@@ -8274,18 +8680,27 @@ the draft stays.  The model found it: NewTaskDraft.first-kept-when-mixed.cfg."
           (task (roost--cache-task "dev" (append `((task . ,prompt) (diff . "1 file changed, 1 insertion(+)")
                                                    (files ((path . "login.py") (added . 1) (deleted . 0))))
                                                  (roost-test--task nil "ready"))))
-          (draw (lambda (width)
+          (draw (lambda (width &optional open)
                   (with-temp-buffer
                     (roost-task-info-mode)
-                    (setq roost--buffer-task-key (roost--key task))
+                    (setq roost--buffer-task-key (roost--key task)
+                          roost--panel-open open)
                     (cl-letf (((symbol-function 'roost--task-info-width) (lambda () width))
                               ((symbol-function 'magit-status) #'ignore))
                       (roost--render-task-info))
                     (buffer-substring-no-properties (point-min) (point-max))))))
-     (let ((narrow (funcall draw 44)) (wide (funcall draw 100)))
-       ;; Three lines and the button, rather than all 400 characters.
-       (should (string-match-p "^Prompt\n\\(?:[^\n]+\n\\)\\{3\\}Show the whole prompt$" narrow))
-       (should (string-match-p "…\nShow the whole prompt$" narrow))
+     (let ((narrow (funcall draw 44)) (unfolded (funcall draw 44 (list 'prompts))) (wide (funcall draw 100)))
+       ;; What came of it stands under the title, and the prompt is one
+       ;; line under the keys, cut to fit.
+       (should (string-match-p "\\`[^\n]+\n[^\n]+\n\n1 file \\+1 −0\n" narrow))
+       (should (string-match-p (concat "^r Magit  f Files  t Shell  \\? More\n"
+                                       "▸ Detail 1 of what the report should do\\. D…\n▸ Details\n\\'")
+                               narrow))
+       (should-not (string-match-p "^Prompt$\\|Show the whole prompt" narrow))
+       ;; Unfolded, three lines and the button, rather than all 400 characters.
+       (should (string-match-p "^▾ Prompts\n\\(?:[^\n]+\n\\)\\{3\\}Show the whole prompt$" unfolded))
+       (should (string-match-p "…\nShow the whole prompt$" unfolded))
+       (should (string-match-p "^Prompt\nDetail 1 of" wide))
        (should (string-match-p "Detail 8 of" wide))
        (should-not (string-match-p "writes a note" narrow))
        (should (string-match-p "In a file's diff, ; writes a note for the agent" wide))
@@ -8308,18 +8723,20 @@ the draft stays.  The model found it: NewTaskDraft.first-kept-when-mixed.cfg."
            (unwind-protect
                (let ((text (buffer-string)))
                  (should (string-match-p "^fix auth   ● ready for" text))
-                 (should (string-match-p "^Prompt\nfix authentication" text))
-                 (should (string-match-p "^Changes\n1 file \\+2 −0" text))
+                 (should (string-match-p "^Prompt\nfix authentication\n\n1 file \\+2 −0\n" text))
+                 (should-not (string-match-p "^Changes$" text))
                  ;; The menu has the actions.
                  (should-not (string-match-p "Merge and retire" text))
                  (should (string-match-p "^\\? opens the menu · g refreshes · q closes$" text))
                  (should (string-match-p "Branch       codex/roost/fix-auth-123456, from main, merges into main" text))
                  ;; In full, on a host named without its user.
                  (should (string-match-p "Worktree     /home/user/work/fix auth" text))
-                 ;; Line counts keep their colors inside the indented section.
+                 ;; Line counts keep their colors on the line that says how
+                 ;; much changed, which is dim.
                  (goto-char (point-min))
                  (search-forward "+2")
-                 (should (memq 'roost-diff-added (ensure-list (get-text-property (1- (point)) 'face))))
+                 (should (equal (get-text-property (1- (point)) 'face) '(roost-diff-added roost-dim)))
+                 (should (eq (get-text-property (line-beginning-position) 'face) 'roost-dim))
                  (should (string-match-p "Conversation abc-123" text))
                  (should-not display-line-numbers))
              (kill-buffer))))))))
@@ -9650,7 +10067,7 @@ Each is (NAME . BYTES); the host puts it in /host/a/, numbering nothing."
          (with-current-buffer "*roost: fix auth*"
            (unwind-protect
                (progn
-                 (should (string-match-p "^Checks\nNot heard from GitLab about !12 yet$" (buffer-string)))
+                 (should (string-match-p "^Not heard from GitLab about !12 yet$" (buffer-string)))
                  (should (string-match-p "^Pull request\n  !12  https://gitlab.com/g/r/-/merge_requests/12\n"
                                          (buffer-string)))
                  (puthash '("dev" "0123456789abcdef")
@@ -9945,7 +10362,9 @@ field (FIELD . :none) is left out."
        (should (equal (substring-no-properties (roost--next-step merged))
                       "#12 from PROJ-1-fix is merged: x discards the task, keeping PROJ-1-fix"))
        (should (string-search "Merged on GitHub. x discards this task, keeping PROJ-1-fix." text))
-       (should (string-search "These are PROJ-1-fix's changes, not" text))
+       (should (string-search (format "\n▲ On PROJ-1-fix, not the task's branch %s, so the changes below are PROJ-1-fix's.\n"
+                                      own)
+                              text))
        (should (equal (roost--display-status merged) "ready"))
        (should (equal (substring-no-properties (roost--pr-marker merged)) "#12 merged"))
        (should-not (roost--pr-merges merged))
@@ -10018,13 +10437,16 @@ field (FIELD . :none) is left out."
        (should-not (string-match-p "has moved on" (buffer-string)))
        ;; Not since its agent last moved: since a branch did.
        (should (string-match-p "\\`fix auth   ● conflicts\n" (buffer-string))))
-     ;; While its agent works there is no next step, and the changes say it.
+     ;; While its agent works there is no next step, and the panel says it
+     ;; first, under its title.
      (with-temp-buffer
        (roost-task-info-mode)
        (setq roost--buffer-task-key (roost--key (roost--cache-task "dev" (roost-test--conflicted '(status . "running")))))
        (roost--render-task-info)
-       (should (string-match-p "^Merging it into main would conflict in ledger.py, report.py: u merges main into this task, to resolve them here first\\.$"
-                               (buffer-string))))
+       (should (string-match-p (concat "\\`[^\n]+\n[^\n]+\n▲ Merging it into main would conflict in ledger\\.py, report\\.py: "
+                                       "u merges main into this task, to resolve them here first\\.\n\n")
+                               (buffer-string)))
+       (should-not (string-match-p "has moved on" (buffer-string))))
      ;; What its agent last said comes first, and the next step is the same.
      (should (equal (funcall status '(seen)) "ready"))
      (should (string-prefix-p "Conflicts with main" (funcall step '(seen))))
@@ -10874,16 +11296,16 @@ field (FIELD . :none) is left out."
                                         (car threads) (cadr threads))))
      ;; Without a pull request, no CI results, which looks unlike any that passed.
      (let ((text (funcall panel (append files '((lastMessage . "All tests pass.")) (roost-test--task)))))
-       (should (string-match-p "^Checks\nNo CI results: no pull request\n\nAgent's latest reply  its own account\nAll tests pass\\.$"
+       (should (string-match-p "^No CI results: no pull request\n\nAgent's latest reply  its own account\nAll tests pass\\.$"
                                text))
        (should-not (string-match-p "✓\\|passed" text)))
      ;; Nor with nothing to merge.
      (let ((text (funcall panel (append '((lastMessage . "Which one?")) (roost-test--task)))))
        (should-not (string-match-p "Checks\\|own account" text)))
      ;; A pull request GitHub hasn't been asked about, or that has no checks.
-     (should (string-match-p "^Checks\nNot heard from GitHub about #12 yet$"
+     (should (string-match-p "^Not heard from GitHub about #12 yet$"
                              (funcall panel (append files (roost-test--pr-task)))))
-     (should (string-match-p "^Checks\nNo CI results on #12$"
+     (should (string-match-p "^No CI results on #12$"
                              (funcall panel (append files (roost-test--turn-task '(checks . :none))))))
      ;; Those that fail by name, and pending ones, and how many passed.
      (let ((text (funcall panel (append files '((unpushed . 2) (dirty . t)) named))))
@@ -10896,7 +11318,9 @@ field (FIELD . :none) is left out."
                                text))
        ;; The pull request's own line leaves them to those sections.
        (should (string-match-p "^Open$" text))
-       (should (< (string-search "Changes" text) (string-search "Checks" text) (string-search "Pull request" text))))
+       ;; After what it changed, which has no heading.
+       (should (< (string-search "\n  ledger.py  +4 −1\n" text) (string-search "Checks" text)
+                  (string-search "Pull request" text))))
      ;; Narrow, each thread keeps to its lines, the end of its path shown.
      (let ((text (funcall panel named 40)))
        (should (string-match-p "^  …/long/path/report\\.py  octo · outdated$" text))
@@ -11050,6 +11474,120 @@ field (FIELD . :none) is left out."
        (when-let* ((panel (get-buffer "*roost: login fix*"))) (kill-buffer panel))
        (while (cdr (roost--tabs)) (tab-bar-close-tab))
        (unless original-tab-bar-mode (tab-bar-mode -1))))))
+
+(ert-deftest roost-retarget-changes-the-branch-a-task-merges-into ()
+  ;; Started from the wrong branch, a task merged into it for good.
+  (roost-test--isolated
+   (let* ((task (roost--cache-task "dev" (append '((repo . "/home/user/ledger") (baseRef . "main")
+                                                   (integrationBranch . "main"))
+                                                 (roost-test--task))))
+          (note nil)
+          sent listed asked refreshed said)
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (_host action parameters success _failure)
+                  (push (cons action parameters) sent)
+                  (let ((base (alist-get 'base parameters)))
+                    (funcall success (append `((repo . "/home/user/ledger") (baseRef . ,base)
+                                               (integrationBranch . ,(string-remove-prefix "origin/" base))
+                                               ,@(when note `((note . ,note))))
+                                             (roost-test--task))))))
+               ((symbol-function 'roost--git-in)
+                (lambda (directory &rest args)
+                  (push (cons directory args) listed)
+                  "codex/roost/fix-auth-123456\nfeature-b\nmain\norigin/feature-b\n"))
+               ((symbol-function 'completing-read)
+                (lambda (prompt collection &rest _)
+                  (push (cons prompt collection) asked)
+                  " feature-b "))
+               ((symbol-function 'roost--refresh-host) (lambda (&rest args) (push args refreshed)))
+               ((symbol-function 'message)
+                (lambda (format &rest args) (setq said (apply #'format format args)))))
+       (roost-retarget task)
+       ;; Asked among its project's branches, on its host, but for its own.
+       (should (equal listed `((,(roost--project-directory task) "for-each-ref" "--format=%(refname:short)"
+                                "refs/heads" "refs/remotes"))))
+       (should (equal asked '(("fix auth merges into main; change to: " "feature-b" "main" "origin/feature-b"))))
+       (should (equal sent '(("retarget" (id . "0123456789abcdef") (base . "feature-b")))))
+       (should (equal said "fix auth now merges into feature-b"))
+       ;; Its panel says so at once, and what it counts from that branch is
+       ;; measured again.
+       (should (equal (roost--field (gethash (roost--key task) roost--tasks) 'integrationBranch) "feature-b"))
+       (should (equal refreshed '(("dev" nil ("0123456789abcdef")))))
+       (with-temp-buffer
+         (roost-task-info-mode)
+         (setq roost--buffer-task-key (roost--key task))
+         (roost--render-task-info)
+         (should (string-search "from feature-b, merges into feature-b (B changes that)\n" (buffer-string)))
+         ;; A click there asks, as the key does.
+         (goto-char (point-max))
+         (search-backward "changes that")
+         (should (eq (get-text-property (point) 'roost-key-command) #'roost-retarget)))
+       ;; Named, it asks nothing.  What its host adds is said once, and not kept.
+       (setq asked nil
+             note "its pull request still targets main, which gh pr edit 12 --base feature-b changes")
+       (roost-retarget task "origin/feature-b")
+       (should-not asked)
+       (should (equal (car sent) '("retarget" (id . "0123456789abcdef") (base . "origin/feature-b"))))
+       (should (equal said (concat "fix auth now merges into feature-b; " note)))
+       (should-not (assq 'note (gethash (roost--key task) roost--tasks)))
+       ;; No branch named asks nothing of its host, nor does a conversation,
+       ;; which merges nowhere.
+       (setq sent nil)
+       (should-error (roost-retarget task " ") :type 'user-error)
+       (let ((conversation (roost--cache-task "dev" (append '((conversation . t))
+                                                            (roost-test--task "1111111111111111")))))
+         (should-error (roost-retarget conversation "main") :type 'user-error)
+         (should-not (roost--action-applies-p conversation 'roost-retarget)))
+       (should-not sent)
+       (should (roost--action-applies-p task 'roost-retarget))
+       ;; On B wherever R renames, and in the menu.
+       (dolist (map (list roost-dashboard-mode-map roost-task-info-mode-map roost-sidebar-list-mode-map))
+         (should (eq (keymap-lookup map "B") #'roost-retarget)))
+       (should (eq (cdr (assq 'roost-retarget (roost-test--task-menu-suffixes))) 'roost--retarget-inapt-p))))))
+
+(ert-deftest roost-a-reply-read-before-the-branch-changed-keeps-the-new-one ()
+  "You stop a task, then change the branch it merges into with B.  Its
+host does both in that order, and the reply to B comes first.  The reply
+to the stop, read before B, brings the old branch back no more: `m'
+would ask to merge into it, and the host merge into the new one.
+CachedTasks.tla found it; CachedTasks.NoNewerBranch.cfg is its trace."
+  (roost-test--isolated
+   (let* ((record (append '((repo . "/home/user/ledger") (baseRef . "main") (integrationBranch . "main"))
+                          (roost-test--task)))
+          (task (roost--cache-task "dev" (copy-tree record)))
+          (stopped (append '((status . "stopped") (updatedAt . "2026-10-03T20:05:00+00:00"))
+                           (assq-delete-all 'status (assq-delete-all 'updatedAt (copy-tree record)))))
+          (retargeted (lambda (branch at)
+                        (append `((baseRef . ,branch) (integrationBranch . ,branch) (retargetedAt . ,at))
+                                (assq-delete-all 'baseRef (assq-delete-all 'integrationBranch
+                                                                           (copy-tree stopped))))))
+          (now (lambda (field) (roost--field (gethash (roost--key task) roost--tasks) field)))
+          replies)
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (_host action _parameters success &rest _) (push (cons action success) replies)))
+               ((symbol-function 'roost--refresh-host) #'ignore)
+               ((symbol-function 'roost--redraw) #'ignore))
+       (roost--act task "stop")
+       (roost-retarget task "release")
+       ;; B's reply, which its host read after the stop.
+       (funcall (cdr (assoc "retarget" replies)) (funcall retargeted "release" "2026-10-03T20:05:01+00:00"))
+       (should (equal (funcall now 'integrationBranch) "release"))
+       ;; The stop's, which it read before B: no event of the agent's came
+       ;; between, so their updatedAt is the same.
+       (funcall (cdr (assoc "stop" replies)) (copy-tree stopped))
+       (should (equal (funcall now 'integrationBranch) "release"))
+       (should (equal (funcall now 'baseRef) "release"))
+       ;; The rest of that reply is as new as ever.
+       (should (equal (funcall now 'status) "stopped"))
+       ;; Changed again since, as from another Emacs, it takes that branch.
+       (roost--cache-task "dev" (funcall retargeted "main" "2026-10-03T20:09:00+00:00"))
+       (should (equal (funcall now 'integrationBranch) "main"))
+       ;; A record from before B stamped its changes, as an older helper
+       ;; left it, is taken as it is while Roost holds no stamp either.
+       (let ((older (roost--cache-task "dev" (append '((integrationBranch . "main"))
+                                                     (roost-test--task "1111111111111111")))))
+         (roost--cache-task "dev" (append '((integrationBranch . "release")) (roost-test--task "1111111111111111")))
+         (should (equal (roost--field (gethash (roost--key older) roost--tasks) 'integrationBranch) "release")))))))
 
 (ert-deftest roost-a-rename-from-another-emacs-renames-the-tab-and-panels ()
   (roost-test--isolated
@@ -13564,8 +14102,9 @@ note after, for any task, so a restart lost them all."
         (should (= (length (eieio-oref section 'children)) 1))
         (should-not (string-match-p "Already on main"
                                     (buffer-substring (eieio-oref section 'start) (eieio-oref section 'end))))
-        ;; RET on the heading shows the task's changes since it left main.
-        (should (equal (magit-diff--dwim) "refs/heads/main...")))
+        ;; RET on the heading shows the task's changes since it left main;
+        ;; Magit 3 shows how it differs from main as it is now.
+        (should (member (magit-diff--dwim) '("refs/heads/main..." "refs/heads/main.."))))
       (should (string-match-p "Add a line" (buffer-string))))
     (let ((roost-magit-status-sections nil))
       (with-current-buffer (magit-get-mode-buffer 'magit-status-mode)
@@ -14055,3 +14594,1093 @@ it of the same ID's, or nil for the first."
              (should (= (alist-get 'width (roost--terminal-size)) (- area roost-task-panel-width)))
              (let ((roost-task-panel-mode nil))
                (should (= (alist-get 'width (roost--terminal-size)) area))))))))))
+
+;;;; Tasks agents offer
+
+(ert-deftest roost-tasks-an-agent-offered-sit-under-it ()
+  (roost-test--isolated
+   (let ((roost--current-task nil) (roost-watch-mode t)
+         (task (lambda (id name started &optional parent)
+                 (roost--cache-task "dev" (append `((name . ,name) (repo . "/srv/ledger") (startedAt . ,started)
+                                                    ,@(when parent `((parent . ,parent))))
+                                                  (roost-test--task id "running"))))))
+     ;; Started after another task, and before the one it was offered by
+     ;; started its own.
+     (funcall task "1111111111111111" "ledger" "2026-10-01T10:00:00Z")
+     (funcall task "2222222222222222" "budget" "2026-10-01T11:00:00Z")
+     (funcall task "3333333333333333" "docs" "2026-10-01T12:00:00Z" "1111111111111111")
+     (funcall task "4444444444444444" "docs tests" "2026-10-01T13:00:00Z" "3333333333333333")
+     ;; Its parent retired: a task like any other.
+     (funcall task "5555555555555555" "orphan" "2026-10-01T09:00:00Z" "ffffffffffffffff")
+     (with-temp-buffer
+       (roost-sidebar-list-mode)
+       (roost--render-sidebar)
+       (let ((names (seq-keep (lambda (line) (and (string-match "^\\( *[a-z ]*[a-z]\\) +running$" line)
+                                                  (match-string 1 line)))
+                              (split-string (buffer-string) "\n"))))
+         (should (equal names '(" orphan" " ledger" "   docs" "     docs tests" " budget")))))
+     (with-temp-buffer
+       (roost-dashboard-mode)
+       (let ((rows (mapcar (lambda (task) (roost--dashboard-row task (roost--dashboard-layout (roost-tasks) 120) 120))
+                           (cdar (roost--task-groups (roost-tasks))))))
+         (should (equal (mapcar (lambda (row) (and (string-match "\\`  . \\( *[a-z]+\\(?: [a-z]+\\)?\\)" row)
+                                                   (match-string 1 row)))
+                                rows)
+                        '("orphan" "ledger" "  docs" "    docs tests" "budget")))
+         ;; Each status in its column.
+         (should (= (length (delete-dups (mapcar (lambda (row) (string-search "running" row)) rows))) 1))))
+     (with-temp-buffer
+       (roost-task-info-mode)
+       (setq roost--buffer-task-key '("dev" "3333333333333333"))
+       (roost--render-task-info)
+       (should (string-match-p "Started from +ledger" (buffer-string)))
+       (should (string-match-p "Started +docs tests" (buffer-string)))
+       (setq roost--buffer-task-key '("dev" "5555555555555555"))
+       (roost--render-task-info)
+       (should (string-match-p "Started from +a task Roost no longer has" (buffer-string)))))))
+
+(ert-deftest roost-nested-rows-fit-a-narrow-dashboard ()
+  ;; The indent gives way before the name and the columns that always show.
+  (roost-test--isolated
+   (let ((task (lambda (id name &optional parent)
+                 (roost--cache-task "dev" (append `((name . ,name) ,@(when parent `((parent . ,parent))))
+                                                  (roost-test--task id "running"))))))
+     (funcall task "1111111111111111" "ledger")
+     (funcall task "2222222222222222" "docs" "1111111111111111")
+     (funcall task "3333333333333333" "documentation pass" "2222222222222222")
+     ;; And an offer of the deepest, a level further in.
+     (roost--cache-task "dev" (append '((name . "documentation pass") (parent . "2222222222222222")
+                                        (offers ((id . "0a1b2c3d") (title . "Check every link in the docs")
+                                                 (brief . "Some links are dead.") (at . "2026-11-03T10:00:00Z"))))
+                                      (roost-test--task "3333333333333333" "running")))
+     (with-temp-buffer
+       (roost-dashboard-mode)
+       (dolist (width '(45 60 120))
+         (let ((layout (roost--dashboard-layout (roost-tasks) width)))
+           (dolist (task (roost-tasks))
+             (should (<= (string-width (roost--dashboard-row task layout width)) width))
+             (dolist (offer (roost--offers task))
+               (should (<= (string-width (roost--dashboard-offer-row task offer layout width)) width))))))
+       ;; With room, each level indents in full.
+       (should (string-match-p "\\`  .     documentation pass"
+                               (roost--dashboard-row (seq-find (lambda (task)
+                                                                 (equal (roost--field task 'name) "documentation pass"))
+                                                               (roost-tasks))
+                                                     (roost--dashboard-layout (roost-tasks) 120) 120)))))))
+
+(ert-deftest roost-an-offer-waits-under-its-task ()
+  ;; Dim, under the task whose agent made it, where RET or a click opens
+  ;; it, e has that agent do it, and x dismisses it.
+  (roost-test--isolated
+   (let ((roost--current-task nil) (roost-watch-mode t) opened later)
+     (roost--cache-task "dev" (append '((name . "budget") (repo . "/srv/ledger")
+                                        (offers ((id . "0a1b2c3d") (title . "Fix add in calc.py")
+                                                 (brief . "add() subtracts.") (at . "2026-11-03T10:00:00Z"))
+                                                ;; Not one Roost can open.
+                                                ((title . "Docs"))))
+                                      (roost-test--task "1111111111111111" "ready")))
+     (roost--cache-task "dev" (append '((name . "tests") (repo . "/srv/ledger") (startedAt . "2099-01-01T00:00:00Z"))
+                                      (roost-test--task "2222222222222222" "running")))
+     (cl-letf (((symbol-function 'roost--compose-offer)
+                (lambda (task offer) (setq opened (list (roost--field task 'name) (alist-get 'id offer))))))
+       (dolist (render '(roost--render-sidebar roost--render-dashboard))
+         (with-temp-buffer
+           (if (eq render 'roost--render-sidebar) (roost-sidebar-list-mode) (roost-dashboard-mode))
+           (funcall render)
+           (goto-char (point-min))
+           (search-forward "budget")
+           (forward-line 1)
+           (should (equal (get-text-property (point) 'roost-offer) '(("dev" "1111111111111111") "0a1b2c3d")))
+           (should (string-match-p "\\` +Fix add in calc\\.py +offer"
+                                   (buffer-substring (line-beginning-position) (line-end-position))))
+           (should (eq (get-text-property (point) 'face) 'roost-dim))
+           ;; Its brief, before you open it, which takes it.
+           (should (string-search "add() subtracts." (get-text-property (point) 'help-echo)))
+           (should-not (string-search "Docs" (buffer-string)))
+           ;; Point stays on it as the view is drawn again.
+           (funcall render)
+           (should (get-text-property (point) 'roost-offer))
+           (setq opened nil)
+           (roost-open-offer)
+           (should (equal opened '("budget" "0a1b2c3d")))
+           ;; Not over a question left open, whose windows would come back
+           ;; without it, but once that is quit.
+           (setq opened nil)
+           (cl-letf (((symbol-function 'roost--quit-questions-left-open)
+                      (lambda (then) (setq later then))))
+             (roost-open-offer))
+           (should-not opened)
+           (funcall later)
+           (should (equal opened '("budget" "0a1b2c3d")))
+           ;; Its keys, as a task's are for a task; the others act on the
+           ;; task it sits under.
+           (should (eq (key-binding (kbd "RET") t nil (point)) 'roost-open-offer))
+           (should (eq (key-binding (kbd "e") t nil (point)) 'roost-offer-here))
+           (should (eq (key-binding (kbd "x") t nil (point)) 'roost-offer-dismiss))
+           (should (eq (key-binding [mouse-3] t nil (point)) 'roost-offer-mouse-menu))
+           (should (equal (roost--field (roost--task-at-point) 'name) "budget"))
+           ;; The next task's row follows it.
+           (forward-line 1)
+           (should (equal (roost--field (gethash (get-text-property (point) 'roost-task) roost--tasks) 'name)
+                          "tests"))))
+       ;; A dashboard's TAB stops on it, as on a task.
+       (with-temp-buffer
+         (roost-dashboard-mode)
+         (roost--render-dashboard)
+         (goto-char (point-min))
+         (search-forward "budget")
+         (roost-dashboard-next-task)
+         (should (get-text-property (point) 'roost-offer))
+         (roost-dashboard-next-task)
+         (should (get-text-property (point) 'roost-task))
+         (roost-dashboard-previous-task)
+         (should (get-text-property (point) 'roost-offer)))))))
+
+(ert-deftest roost-point-on-an-offer-no-longer-waiting-goes-to-its-task ()
+  ;; Taken from here or from another Emacs: you stay by the task,
+  ;; wherever it is in the list.
+  (roost-test--isolated
+   (let ((roost--current-task nil) (roost-watch-mode t)
+         (offer '((id . "0a1b2c3d") (title . "Fix add") (brief . "add() subtracts."))))
+     (dolist (render '(roost--render-sidebar roost--render-dashboard))
+       (clrhash roost--tasks)
+       (dolist (name '("first" "second"))
+         (roost--cache-task "dev" (append `((name . ,name) (repo . "/srv/ledger"))
+                                          (roost-test--task name "ready"))))
+       (roost--cache-task "dev" (append `((name . "third") (repo . "/srv/ledger") (startedAt . "2099-01-01T00:00:00Z")
+                                          (offers ,offer) (offersAt . "2026-11-03T10:00:00+00:00"))
+                                        (roost-test--task "third" "ready")))
+       (with-temp-buffer
+         (if (eq render 'roost--render-sidebar) (roost-sidebar-list-mode) (roost-dashboard-mode))
+         (funcall render)
+         (goto-char (point-min))
+         (search-forward "Fix add")
+         (should (get-text-property (point) 'roost-offer))
+         (roost--cache-task "dev" (append '((name . "third") (repo . "/srv/ledger") (startedAt . "2099-01-01T00:00:00Z")
+                                            (offersAt . "2026-11-03T10:00:01+00:00"))
+                                          (roost-test--task "third" "ready")))
+         (funcall render)
+         (should (equal (get-text-property (point) 'roost-task) '("dev" "third"))))))))
+
+(ert-deftest roost-an-offer-opens-as-an-ordinary-draft-and-is-taken ()
+  ;; Filled in from the offer and the task that made it.  Opening it takes
+  ;; it, and Create makes a task under that one, and leaves you where you
+  ;; are.
+  (roost-test--isolated
+   (let ((default-directory "/tmp/") (xterm-mouse-mode t) created acted kept
+         (offer '((id . "0a1b2c3d") (title . "Fix add in calc.py") (brief . "add() subtracts.\n\nFix it."))))
+     (save-window-excursion
+       (delete-other-windows)
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--create-task)
+                      (lambda (directory name base prompt agent &optional made _failed extra)
+                        (setq created (list directory name base prompt agent extra))
+                        (setq kept (funcall made (roost-test--task "2222222222222222") nil))))
+                     ((symbol-function 'roost--act)
+                      (lambda (task action &optional parameters callback _failure)
+                        (push (list (roost--field task 'name) action parameters) acted)
+                        (when callback (funcall callback task)))))
+             (let ((task (roost--cache-task "dev" (append `((name . "budget") (repo . "/srv/ledger") (agent . "codex")
+                                                            (integrationBranch . "develop")
+                                                            (integrationRef . "refs/heads/develop")
+                                                            (live . t) (offers ,offer))
+                                                          (roost-test--task "1111111111111111" "ready")))))
+               (roost--compose-offer task offer)
+               (set-buffer roost--compose-buffer)
+               (should (equal acted '(("budget" "take-offer" ((offer . "0a1b2c3d"))))))
+               (should (string-prefix-p "New task, offered by budget" (buffer-string)))
+               (should (string-match-p "Start +develop .*merges into develop" (buffer-string)))
+               (should (string-match-p "Name +Fix add in calc\\.py" (buffer-string)))
+               (should (equal (roost--compose-prompt) "add() subtracts.\n\nFix it."))
+               ;; An ordinary draft's buttons.
+               (let ((header (roost--compose-header)))
+                 (should (string-search "Create" header))
+                 (should (string-search "Cancel" header)))
+               ;; Created in its project, from where the task merges, by its
+               ;; agent, under the task that offered it.
+               (roost-compose-submit)
+               (pcase-let ((`(,directory . ,fields) created))
+                 (should (string-suffix-p ":dev:/srv/ledger/" directory))
+                 (should (equal (butlast fields) '("Fix add in calc.py" "refs/heads/develop"
+                                                   "add() subtracts.\n\nFix it." "codex")))
+                 (should (equal (alist-get 'parent (car (last fields))) "1111111111111111"))
+                 ;; Which its host drops, should taking it have failed.
+                 (should (equal (alist-get 'offer (car (last fields))) "0a1b2c3d")))
+               ;; Made, it opens nothing: you stay where you were.
+               (should kept)
+               (should-not (get-buffer roost--compose-buffer))))
+         (when (get-buffer roost--compose-buffer)
+           (kill-buffer roost--compose-buffer)))))))
+
+(ert-deftest roost-copy-attach-command-reaches-the-agents-real-terminal ()
+  ;; For another terminal, as a phone's: tmux's own attach, over SSH for a
+  ;; task on another host, with each part quoted for a shell.
+  (roost-test--isolated
+   (let ((copied nil))
+     (cl-letf (((symbol-function 'kill-new) (lambda (text &rest _) (setq copied text))))
+       (let ((remote (roost--cache-task "me@dev" (append '((session . "roost-12 34") (socket . "main") (live . t))
+                                                         (roost-test--task "1111111111111111" "running"))))
+             (local (roost--cache-task nil (append '((session . "roost-5678") (socket . "work") (live . t))
+                                                   (roost-test--task "2222222222222222" "ready"))))
+             (stopped (roost--cache-task nil (append '((session . "roost-9") (live))
+                                                     (roost-test--task "3333333333333333" "stopped")))))
+         (roost-copy-attach-command local)
+         (should (equal copied "tmux -L work attach -t \\=roost-5678"))
+         (roost-copy-attach-command remote)
+         (should (string-prefix-p "ssh -t me\\@dev tmux\\ -L\\ main\\ attach" copied))
+         (should (string-search "roost-12" copied))
+         ;; With no window, there is nothing to attach to.
+         (setq copied nil)
+         (should-error (roost-copy-attach-command stopped) :type 'user-error)
+         (should-not copied)
+         (should-not (roost--action-applies-p stopped 'roost-copy-attach-command))
+         (should (roost--action-applies-p local 'roost-copy-attach-command)))))))
+
+(ert-deftest roost-the-count-marks-an-agent-that-asks ()
+  ;; A second sign beside its colour: one that asks holds its agent up.
+  (roost-test--isolated
+   (roost--cache-task "dev" (append '((live . t)) (roost-test--task "1111111111111111" "ready")))
+   (should (string-match-p "Roost:1 " (roost--mode-line-count t)))
+   (roost--cache-task "dev" (append '((live . t) (request . "Asks to run make test"))
+                                    (roost-test--task "2222222222222222" "permission")))
+   (let ((count (roost--mode-line-count t)))
+     (should (string-match-p "Roost:2! " count))
+     (should (string-match-p "1 of 2 agents waiting for you asks"
+                             (get-text-property (1- (length (string-trim-right count))) 'help-echo count))))))
+
+(ert-deftest roost-the-sidebar-says-what-a-waiting-agent-asks ()
+  ;; Under its row, dim: whether to go there now turns on what it asks,
+  ;; and the row has room for a word.  The line is the task's too.
+  (roost-test--isolated
+   (let ((roost--current-task nil) (roost-watch-mode t))
+     (roost--cache-task "dev" (append '((name . "budget-alerts") (repo . "/srv/ledger") (live . t)
+                                        (request . "Asks to run python3 -m unittest discover -s test"))
+                                      (roost-test--task "1111111111111111" "permission")))
+     (roost--cache-task "dev" (append '((name . "parser") (repo . "/srv/ledger") (live . t))
+                                      (roost-test--task "2222222222222222" "ready")))
+     (with-temp-buffer
+       (roost-sidebar-list-mode)
+       (roost--render-sidebar)
+       (let ((lines (split-string (buffer-string) "\n")))
+         (should (member "   Asks to run python3 -m un…" lines))
+         ;; Right under the task that asks, and nowhere else.
+         (should (string-prefix-p " budget-alerts"
+                                  (nth (1- (seq-position lines "   Asks to run python3 -m un…")) lines)))
+         (should (= 1 (seq-count (lambda (line) (string-prefix-p "   " line)) lines))))
+       (goto-char (point-min))
+       (search-forward "Asks to run")
+       (should (equal (get-text-property (point) 'roost-task) '("dev" "1111111111111111")))
+       (should (string-prefix-p "Asks to run python3 -m unittest discover -s test"
+                                (get-text-property (point) 'help-echo)))))))
+
+(ert-deftest roost-the-sidebar-says-a-worktree-is-on-another-branch ()
+  ;; As the panel says first: for every task at once, in the warning's
+  ;; colour, while its agent isn't at work and no louder word is there.
+  (roost-test--isolated
+   (let ((row (lambda (width status &rest fields)
+                (clrhash roost--tasks)
+                (let* ((task (roost--cache-task "dev" (append fields '((live . t))
+                                                              (roost-test--task "1111111111111111" status))))
+                       (roost--name-counts (roost--count-names)))
+                  (roost--sidebar-row task width)))))
+     (let ((astray (funcall row 30 "stopped" '(worktreeBranch . "feat"))))
+       (should (string-suffix-p " on feat" astray))
+       (should (memq 'roost-status-permission
+                     (ensure-list (get-text-property (1- (length astray)) 'face astray)))))
+     (should (string-suffix-p " detached" (funcall row 30 "stopped" '(worktreeBranch . "HEAD"))))
+     ;; A long branch is cut, and a narrow sidebar keeps the name and a mark.
+     (should (string-suffix-p " on feature/long-…"
+                              (funcall row 40 "stopped" '(worktreeBranch . "feature/long-branch-name"))))
+     (should (string-suffix-p " !" (funcall row 16 "stopped" '(worktreeBranch . "feat"))))
+     ;; On its own branch, at work, or with the worktree gone, as before.
+     (should (string-suffix-p " stopped" (funcall row 30 "stopped")))
+     (should (string-suffix-p " running" (funcall row 30 "running" '(worktreeBranch . "feat"))))
+     (should-not (string-search "on feat" (funcall row 30 "stopped" '(worktreeBranch . "feat")
+                                                   '(worktreeMissing . t)))))))
+
+(ert-deftest roost-a-working-agent-says-what-it-is-doing ()
+  ;; Beside `running', in the dashboard and at the top of its panel: the
+  ;; tool its host last heard it start.  Not once it rests, or went.
+  (roost-test--isolated
+   (let* ((doing "Running python3 -m pytest -q")
+          (drawn (lambda (&rest fields)
+                   (clrhash roost--tasks)
+                   (let ((task (roost--cache-task
+                                "dev" (append fields `((activity . ,doing) (live . t)
+                                                       (lastMessage . "Earlier reply."))
+                                              (roost-test--task "1111111111111111" "running")))))
+                     (list (roost--activity task)
+                           (substring-no-properties (roost--dashboard-row task (roost--dashboard-layout (list task) 140) 140))
+                           (with-temp-buffer
+                             (roost-task-info-mode)
+                             (setq roost--buffer-task-key (roost--key task))
+                             (cl-letf (((symbol-function 'roost--task-info-width) (lambda () 44)))
+                               (roost--render-task-info))
+                             (buffer-string)))))))
+     (pcase-let ((`(,activity ,row ,panel) (funcall drawn)))
+       (should (equal activity doing))
+       (should (string-suffix-p doing row))
+       ;; Its third line, under the name and where it runs.
+       (should (equal (nth 2 (split-string panel "\n")) doing)))
+     ;; Waiting for you, what it was doing is over.
+     (pcase-let ((`(,activity ,row ,panel) (funcall drawn '(status . "ready"))))
+       (should-not activity)
+       (should-not (string-search doing row))
+       (should-not (string-search doing panel)))
+     ;; Nor is it doing it once its window went.
+     (should-not (car (funcall drawn '(live)))))))
+
+(ert-deftest roost-a-conversations-offer-opens-in-the-project-it-names ()
+  ;; A conversation is in no project: it plans, and each task it offers
+  ;; says which of yours it is for.  The draft opens there, starts from
+  ;; that project's own branch, and its task shows under the conversation.
+  (roost-test--isolated
+   (let ((default-directory "/tmp/") (xterm-mouse-mode t) created
+         (offer '((id . "0a1b2c3d") (title . "Fix add in calc.py") (brief . "add() subtracts.")
+                  (project . "/srv/ledger"))))
+     (save-window-excursion
+       (delete-other-windows)
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--create-task)
+                      (lambda (directory name base prompt agent &optional _made _failed extra)
+                        (setq created (list directory name base prompt agent extra))))
+                     ((symbol-function 'roost--act) #'ignore)
+                     ((symbol-function 'roost--send-text) (lambda (&rest _) (error "Sent"))))
+             (let ((task (roost--cache-task "dev" (append `((name . "Conversation 09:15") (conversation . t)
+                                                            (repo . "/state/conversations") (agent . "claude")
+                                                            (integrationBranch . "master")
+                                                            (integrationRef . "refs/heads/master")
+                                                            (live . t) (offers ,offer))
+                                                          (roost-test--task "1111111111111111" "ready")))))
+               (should (string-suffix-p ":dev:/srv/ledger/" (roost--offer-project task offer)))
+               ;; Its row says where, under the mouse.
+               (with-temp-buffer
+                 (roost-dashboard-mode)
+                 (roost--render-dashboard)
+                 (goto-char (roost--offer-row (list (roost--key task) "0a1b2c3d")))
+                 (should (string-match-p "offers: Fix add in calc\\.py, in dev · /srv/ledger"
+                                         (get-text-property (point) 'help-echo)))
+                 ;; It can't be done where it was offered, which is nowhere.
+                 (should (string-match-p "open it as a task there"
+                                         (cadr (should-error (roost-offer-here) :type 'user-error)))))
+               (roost--compose-offer task offer)
+               (set-buffer roost--compose-buffer)
+               (should (string-suffix-p ":dev:/srv/ledger/" (plist-get roost--compose-fields :directory)))
+               ;; Not the conversation's branch, which is Roost's own.
+               (should-not (plist-get roost--compose-fields :base))
+               (should-not (plist-get roost--compose-fields :integration))
+               (roost-compose-submit)
+               (pcase-let ((`(,directory ,name ,base . ,rest) created))
+                 (should (string-suffix-p ":dev:/srv/ledger/" directory))
+                 (should (equal (list name base) '("Fix add in calc.py" nil)))
+                 (should (equal (alist-get 'parent (car (last rest))) "1111111111111111")))))
+         (when (get-buffer roost--compose-buffer)
+           (kill-buffer roost--compose-buffer)))))))
+
+(ert-deftest roost-an-offer-waits-while-your-own-draft-holds-a-prompt ()
+  ;; Nothing of yours gives way to it, and it isn't taken.
+  (roost-test--isolated
+   (let ((default-directory "/tmp/") acted
+         (offer '((id . "0a1b2c3d") (title . "Fix add") (brief . "add() subtracts."))))
+     (save-window-excursion
+       (delete-other-windows)
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--act)
+                      (lambda (_task action &rest _) (push action acted))))
+             (let ((task (roost--cache-task "dev" (append `((name . "budget") (repo . "/srv/ledger")
+                                                            (integrationBranch . "main") (offers ,offer))
+                                                          (roost-test--task "1111111111111111" "ready")))))
+               (roost--compose nil nil "/ssh:dev:/repo/")
+               (with-current-buffer roost--compose-buffer
+                 (goto-char (point-max))
+                 (insert "Fix the parser"))
+               (should (string-prefix-p "Create this draft"
+                                        (cadr (should-error (roost--compose-offer task offer) :type 'user-error))))
+               (should-not acted)
+               (should (equal (with-current-buffer roost--compose-buffer (roost--compose-prompt)) "Fix the parser"))
+               ;; Nor one that says what became of a request of its own.
+               (with-current-buffer roost--compose-buffer
+                 (let ((inhibit-read-only t))
+                   (delete-region roost--compose-body (point-max)))
+                 (setq roost--draft-note " No reply"))
+               (should-error (roost--compose-offer task offer) :type 'user-error)
+               (should-not acted)
+               ;; An empty one makes way, for a draft of its own: nothing of
+               ;; the one before goes with it, as the ID it last asked with.
+               (with-current-buffer roost--compose-buffer
+                 (setq roost--draft-note nil
+                       roost--compose-asked (list "/ssh:dev:/srv/ledger/" "feedfacefeedface" nil)))
+               (roost--compose-offer task offer)
+               (should (equal acted '("take-offer")))
+               (with-current-buffer roost--compose-buffer
+                 (should (equal (roost--compose-prompt) "add() subtracts."))
+                 (should-not roost--compose-asked))))
+         (when (get-buffer roost--compose-buffer)
+           (kill-buffer roost--compose-buffer)))))))
+
+(ert-deftest roost-an-offer-moved-to-another-project-is-a-task-of-its-own ()
+  ;; A click on another project leaves it where its task is; chosen
+  ;; elsewhere, it is no longer under that task.
+  (roost-test--isolated
+   (let ((default-directory "/tmp/")
+         (offer '((id . "0a1b2c3d") (title . "Fix add") (brief . "add() subtracts."))))
+     (save-window-excursion
+       (delete-other-windows)
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--act) #'ignore)
+                     ((symbol-function 'roost--compose-integration) (lambda (&rest _) "main")))
+             (let ((task (roost--cache-task "dev" (append `((name . "budget") (repo . "/srv/ledger")
+                                                            (integrationBranch . "main") (offers ,offer))
+                                                          (roost-test--task "1111111111111111" "ready")))))
+               (roost--compose-offer task offer)
+               (roost--compose nil nil "/ssh:dev:/srv/other/")
+               (with-current-buffer roost--compose-buffer
+                 (should (string-suffix-p ":dev:/srv/ledger/" (plist-get roost--compose-fields :directory)))
+                 (should (plist-get roost--compose-fields :parent))
+                 (roost--compose-move "/ssh:dev:/srv/other/")
+                 (should-not (plist-get roost--compose-fields :parent))
+                 (should-not (plist-get roost--compose-fields :offer))
+                 (roost--compose-render)
+                 (should (string-prefix-p "New task\n" (buffer-string))))))
+         (when (get-buffer roost--compose-buffer)
+           (kill-buffer roost--compose-buffer)))))))
+
+(ert-deftest roost-an-offer-draft-moved-away-and-back-is-a-draft-of-its-own ()
+  ;; Moved to another project and back while Create waits, it no longer
+  ;; shows under the task that offered it, though the task its request
+  ;; made does: a late reply leaves it, saying what was made.
+  (roost-test--isolated
+   (let ((default-directory "/tmp/") made
+         (offer '((id . "0a1b2c3d") (title . "Fix add") (brief . "add() subtracts."))))
+     (save-window-excursion
+       (delete-other-windows)
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--act) #'ignore)
+                     ((symbol-function 'roost--compose-integration) (lambda (&rest _) "main"))
+                     ((symbol-function 'roost--create-task)
+                      (lambda (_directory _name _base _prompt _agent &optional on-success &rest _)
+                        (setq made on-success))))
+             (let ((task (roost--cache-task "dev" (append `((name . "budget") (repo . "/srv/ledger")
+                                                            (integrationBranch . "main") (offers ,offer))
+                                                          (roost-test--task "1111111111111111" "ready")))))
+               (roost--compose-offer task offer)
+               (with-current-buffer roost--compose-buffer
+                 (let ((here (plist-get roost--compose-fields :directory)))
+                   (roost-compose-submit)
+                   (roost--compose-move "/ssh:dev:/srv/other/")
+                   (roost--compose-move here)))
+               (funcall made (append '((parent . "1111111111111111")) (roost-test--task "2222222222222222" "starting")))
+               (should (get-buffer roost--compose-buffer))
+               (with-current-buffer roost--compose-buffer
+                 (should (string-search "Made fix auth from what you sent before" roost--draft-note)))))
+         (when (get-buffer roost--compose-buffer)
+           (kill-buffer roost--compose-buffer)))))))
+
+(ert-deftest roost-an-offer-done-here-or-dismissed-is-taken ()
+  (roost-test--isolated
+   (let ((roost--current-task nil) (roost-watch-mode t) acted sent
+         (offer '((id . "0a1b2c3d") (title . "Fix \"add\"") (brief . "add() subtracts."))))
+     (cl-letf (((symbol-function 'roost--act)
+                (lambda (task action &optional parameters callback _failure)
+                  (push (list (roost--field task 'name) action parameters) acted)
+                  (when callback (funcall callback task))))
+               ((symbol-function 'roost--send-text)
+                (lambda (task text &optional callback _failure _look id)
+                  (setq sent (list (roost--field task 'name) text id))
+                  (funcall callback task))))
+       (let ((task (roost--cache-task "dev" (append `((name . "budget") (repo . "/srv/ledger") (live . t)
+                                                      (offers ,offer))
+                                                    (roost-test--task "1111111111111111" "ready")))))
+         (with-temp-buffer
+           (roost-dashboard-mode)
+           (roost--render-dashboard)
+           (goto-char (roost--offer-row (list (roost--key task) "0a1b2c3d")))
+           ;; Its agent gets a line that names it, not the brief it wrote,
+           ;; once however often you ask: its ID is the offer's own.
+           (roost-offer-here)
+           (should (equal sent '("budget" "Do this task here: “Fix \"add\"”" "11111111111111110a1b2c3d")))
+           (should (equal acted '(("budget" "take-offer" ((offer . "0a1b2c3d"))))))
+           (setq acted nil sent nil)
+           (roost-offer-dismiss)
+           (should (equal acted '(("budget" "take-offer" ((offer . "0a1b2c3d"))))))
+           (should-not sent)
+           ;; With its agent gone, nothing is sent, and the offer waits.
+           (setq acted nil)
+           (cl-letf (((symbol-function 'roost--agent-running-p) #'ignore))
+             (should-error (roost-offer-here) :type 'user-error))
+           (should-not (or acted sent))))))))
+
+(ert-deftest roost-finishing-a-task-names-the-offers-that-go-with-it ()
+  ;; They go with its record, and nothing else would say so.
+  (roost-test--isolated
+   (let* ((offers '(((id . "0a1b2c3d") (title . "Fix add") (brief . "add() subtracts."))
+                    ((id . "1b2c3d4e") (title . "Lint") (brief . "Lint it."))))
+          (task (roost--cache-task "dev" (append `((name . "budget") (repo . "/srv/ledger") (integrationBranch . "main")
+                                                   (offers ,(car offers)))
+                                                 (roost-test--task "1111111111111111" "ready"))))
+          (losses '((commits . 0) (changes . 0) (commit . "abc123")))
+          asked)
+     (cl-letf (((symbol-function 'y-or-n-p) (lambda (prompt) (setq asked prompt) nil))
+               ((symbol-function 'yes-or-no-p) (lambda (prompt) (setq asked prompt) nil))
+               ((symbol-function 'read-string) (lambda (prompt &rest _) (setq asked prompt) ""))
+               ((symbol-function 'roost--request-wait) (lambda (&rest _) `((discard ,@losses)))))
+       (dolist (finish '(roost-retire roost-merge-retire roost-discard roost-forget))
+         (setq asked nil)
+         (funcall finish task)
+         (should (string-prefix-p "Its offer Fix add goes with it.  " asked)))
+       ;; Where you would type its name, too.
+       (setq losses '((commits . 1) (changes . 0) (commit . "abc123")))
+       (roost-discard task)
+       (should (string-prefix-p "Its offer Fix add goes with it.  Discarding" asked))
+       (setq losses '((commits . 0) (changes . 0) (commit . "abc123")))
+       (setq task (roost--cache-task "dev" (cons (cons 'offers offers) task)))
+       (roost-retire task)
+       (should (string-prefix-p "Its 2 offers go with it.  " asked))
+       ;; With none, the question is as it was.
+       (setq task (roost--cache-task "dev" (append '((name . "budget")) (roost-test--task "1111111111111111" "ready"))))
+       (roost-retire task)
+       (should (string-prefix-p "Retire budget" asked))))))
+
+(ert-deftest roost-finishing-a-task-tells-its-host-which-offers-its-question-named ()
+  ;; Its agent may offer another while you read, which would go with the
+  ;; task unseen: its host refuses a request that names fewer than it holds.
+  (roost-test--isolated
+   (let* ((first '((id . "0a1b2c3d") (title . "Fix add") (brief . "add() subtracts.")))
+          (second '((id . "1b2c3d4e") (title . "Lint") (brief . "Lint it.")))
+          (cache (lambda (&rest offers)
+                   (roost--cache-task "dev" (append `((name . "budget") (integrationBranch . "main") (live)
+                                                      ,@(when offers `((offers ,@offers))))
+                                                    (roost-test--task "1111111111111111" "ready")))))
+          asked sent meanwhile)
+     (cl-letf* ((answer (lambda (reply)
+                          (lambda (prompt &rest _)
+                            (setq asked prompt)
+                            (when meanwhile (funcall meanwhile))
+                            reply)))
+                ((symbol-function 'y-or-n-p) (funcall answer t))
+                ((symbol-function 'yes-or-no-p) (funcall answer t))
+                ((symbol-function 'read-string) (funcall answer "budget"))
+                ((symbol-function 'roost--release-terminal) #'ignore)
+                ((symbol-function 'roost--request-wait)
+                 (lambda (&rest _) '((discard (commits . 0) (changes . 0) (commit . "abc123")))))
+                ;; As its host reads them.
+                ((symbol-function 'roost--request)
+                 (lambda (_host action parameters &rest _)
+                   (push (cons action (alist-get 'offers (json-parse-string (roost--json-encode parameters)
+                                                                            :object-type 'alist)))
+                         sent))))
+       (pcase-dolist (`(,finish . ,action) '((roost-retire . "retire") (roost-merge-retire . "merge")
+                                             (roost-discard . "discard") (roost-forget . "forget")))
+         ;; One waits as you are asked, and another comes while you read:
+         ;; the request names the one the question did.
+         (setq sent nil
+               meanwhile (lambda () (funcall cache first second)))
+         (funcall finish (funcall cache first))
+         (should (string-prefix-p "Its offer Fix add goes with it.  " asked))
+         (should (equal sent `((,action . ["0a1b2c3d"]))))
+         ;; Asked again, as its host refused, it names both.
+         (setq sent nil meanwhile nil)
+         (funcall finish (gethash '("dev" "1111111111111111") roost--tasks))
+         (should (string-prefix-p "Its 2 offers go with it.  " asked))
+         (should (equal sent `((,action . ["0a1b2c3d" "1b2c3d4e"]))))
+         ;; With none, it says that it named none: a list, and empty,
+         ;; where nothing said would have its host check nothing.
+         (setq sent nil)
+         (funcall finish (funcall cache))
+         (should (equal sent `((,action . [])))))))))
+
+(ert-deftest roost-a-finish-refused-for-an-offer-made-since-lists-the-task-for-next-time ()
+  ;; Watching or not: asked again, the question would otherwise name the
+  ;; offers it named before, and its host refuse it again, until a poll.
+  (pcase-dolist (`(,refusal . ,lists)
+                 `(("Its agent has offered a task since you were asked: Lint. Look at it again before retiring" . t)
+                   ;; One made while Git merged, without the registry lock.
+                   (,(concat "fix auth is merged into main, and not retired: Its agent has offered a task since "
+                             "you were asked: Lint. Look at it again before retiring")
+                    . t)
+                   ("Task is retired")))
+    (dolist (finish '(roost-retire roost-merge-retire roost-discard roost-forget))
+      (roost-test--isolated
+       (let ((task (roost--cache-task "dev" (append '((live)) (roost-test--task nil "ready"))))
+             listed said)
+         (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t))
+                   ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+                   ((symbol-function 'roost--release-terminal) #'ignore)
+                   ((symbol-function 'roost--request-wait)
+                    (lambda (&rest _) '((discard (commits . 0) (changes . 0) (commit . "abc123")))))
+                   ((symbol-function 'message) (lambda (format &rest args) (push (apply #'format format args) said)))
+                   ((symbol-function 'roost--refresh-host)
+                    (lambda (host quiet ids) (push (list host quiet ids) listed)))
+                   ((symbol-function 'roost--request)
+                    (lambda (_host _action _parameters _success failure &rest _)
+                      (funcall failure refusal))))
+           (funcall finish task))
+         ;; Said as any refusal is.
+         (should (equal said (list (concat "Roost dev: " refusal))))
+         (should (equal listed (when lists (list (list "dev" nil (list (roost--field task 'id))))))))))))
+
+(ert-deftest roost-a-reply-from-before-an-offer-changed-keeps-it-as-it-is ()
+  ;; An offer is no event of the agent's: the task's updatedAt stays, and
+  ;; its own stamp says which reply knows it better.
+  (roost-test--isolated
+   (let ((offer '((id . "0a1b2c3d") (title . "Fix add") (brief . "add() subtracts."))))
+     (roost--cache-task "dev" (append `((offers ,offer) (offersAt . "2026-11-03T10:00:01.000002+00:00"))
+                                      (roost-test--task "a" "ready")))
+     ;; Read before it was offered.
+     (roost--cache-task "dev" (append '((offersAt . "2026-11-03T10:00:00+00:00")) (roost-test--task "a" "ready")))
+     (should (roost--offers (gethash '("dev" "a") roost--tasks)))
+     ;; Taken since.
+     (roost--cache-task "dev" (append '((offersAt . "2026-11-03T10:00:02+00:00")) (roost-test--task "a" "ready")))
+     (should-not (roost--offers (gethash '("dev" "a") roost--tasks)))
+     ;; And a reply read before that brings it back no more.
+     (roost--cache-task "dev" (append `((offers ,offer) (offersAt . "2026-11-03T10:00:01.000002+00:00"))
+                                      (roost-test--task "a" "ready")))
+     (should-not (roost--offers (gethash '("dev" "a") roost--tasks))))))
+
+(ert-deftest roost-a-new-task-asks-for-offers-as-you-set-it ()
+  (roost-test--isolated
+   (let (asked)
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (_host _action parameters &rest _) (setq asked parameters)))
+               ((symbol-function 'roost--directory-host) (lambda (_) nil))
+               ((symbol-function 'roost--project-value) (lambda (&rest _) nil)))
+       (dolist (setting '(nil t))
+         (let ((roost-agent-offers setting)
+               ;; And for Remote Control, which is off unless you turn it on.
+               (roost-remote-control (not setting)))
+           (roost--create-task "/tmp/repo/" "task" nil "Look" "claude")
+           (should (eq (alist-get 'mayOffer asked) (if setting t :false)))
+           (should (eq (alist-get 'remoteControl asked) (if setting :false t)))))))))
+
+;;;; Several attempts at one prompt
+
+(defun roost-test--attempts-asked (asked count)
+  "The parameters of the newest COUNT create requests in ASKED, by attempt.
+ASKED is as `roost-test--draft-world' keeps it."
+  (sort (mapcar #'car (seq-take asked count))
+        (lambda (a b) (< (alist-get 'n (alist-get 'attempt a)) (alist-get 'n (alist-get 'attempt b))))))
+
+(ert-deftest roost-a-draft-makes-several-attempts-at-its-prompt ()
+  ;; A count in the draft asks for that many tasks at once, from the same
+  ;; prompt and starting point, each under an ID of its own that stays the
+  ;; same however often the draft asks: a lost reply makes none twice.
+  (roost-test--draft-world
+    (let (opened)
+      (cl-letf (((symbol-function 'roost-open-task) (lambda (task &rest _) (push (roost--field task 'id) opened)))
+                ((symbol-function 'roost--project-value) (lambda (&rest _) nil)))
+        (with-current-buffer roost--compose-buffer
+          ;; One, as it says, until you ask for more.
+          (should (string-match-p "^Attempts 1  C-c C-x$" (buffer-string)))
+          (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "3")))
+            (roost-compose-set-attempts))
+          (should (string-match-p "^Attempts 3  C-c C-x · each a task of its own; = on one compares them$"
+                                  (buffer-string)))
+          (setq roost--compose-fields (plist-put roost--compose-fields :base "release"))
+          (roost-compose-submit)
+          (should (= (length asked) 3))
+          (let* ((first (roost-test--attempts-asked asked 3))
+                 (ids (mapcar (lambda (params) (alist-get 'createId params)) first))
+                 (group (car ids)))
+            (should (equal (mapcar (lambda (params) (alist-get 'name params)) first)
+                           '("fix-parser" "fix-parser 2" "fix-parser 3")))
+            (dolist (params first)
+              (should (equal (alist-get 'prompt params) "Fix the parser"))
+              (should (equal (alist-get 'base params) "release"))
+              (should (equal (alist-get 'agent params) "claude"))
+              (should (equal (alist-get 'directory params) "/repo/")))
+            ;; Each its own, as its host takes one: 16 to 32 hex digits.
+            (should (= (length (delete-dups (copy-sequence ids))) 3))
+            (dolist (id ids)
+              (should (string-match-p "\\`[0-9a-f]\\{16,32\\}\\'" id)))
+            ;; Each says which it is, and what it is made from: a name for
+            ;; what the draft says, the same for all three, as an ID is made.
+            (let ((words (alist-get 'words (alist-get 'attempt (car first)))))
+              (should (string-match-p "\\`[0-9a-f]\\{32\\}\\'" words))
+              (should (equal (mapcar (lambda (params) (alist-get 'attempt params)) first)
+                             `(((group . ,group) (n . 1) (of . 3) (words . ,words))
+                               ((group . ,group) (n . 2) (of . 3) (words . ,words))
+                               ((group . ,group) (n . 3) (of . 3) (words . ,words))))))
+            ;; The draft's own request is asked for last, as the one that opens.
+            (should (= (alist-get 'n (alist-get 'attempt (car (car asked)))) 1))
+            (should (equal (roost--compose-header) " Creating fix-parser and 2 more…"))
+            ;; No reply to the draft's own, and one of the others refused:
+            ;; that one says so, and the draft is as the first left it.
+            (funcall (nth 2 (car asked)) (propertize "No reply after 660s" 'roost-no-reply t))
+            (let ((note roost--draft-note))
+              (funcall (nth 2 (cadr asked)) "No branch, tag or commit named 'release' to start from")
+              (should (equal roost--draft-note note))
+              (should (string-search "C-c C-c asks again" note)))
+            ;; Asked again, each has the ID it had, and says the same words.
+            (roost-compose-submit)
+            (should (= (length asked) 6))
+            (should (equal (mapcar (lambda (params) (alist-get 'createId params))
+                                   (roost-test--attempts-asked asked 3))
+                           ids))
+            (should (equal (mapcar (lambda (params) (alist-get 'attempt params))
+                                   (roost-test--attempts-asked asked 3))
+                           (mapcar (lambda (params) (alist-get 'attempt params)) first)))
+            ;; The others are made and open nothing; the draft's own opens,
+            ;; and closes the draft.
+            (pcase-dolist (`(,n . ,id) '((2 . "2222222222222222") (3 . "3333333333333333")))
+              (let ((request (seq-find (lambda (request) (= (alist-get 'n (alist-get 'attempt (car request))) n))
+                                       asked)))
+                (funcall (nth 1 request)
+                         (append `((name . ,(alist-get 'name (car request))) (repo . "/repo")
+                                   (attempt . ,(alist-get 'attempt (car request))))
+                                 (roost-test--task id)))))
+            (should-not opened)
+            (should (get-buffer roost--compose-buffer))
+            (funcall (nth 1 (car asked))
+                     (append `((name . "fix-parser") (repo . "/repo") (createId . ,group)
+                               (attempt (group . ,group) (n . 1) (of . 3)))
+                             (roost-test--task "1111111111111111")))
+            (should (equal opened '("1111111111111111")))
+            (should-not (get-buffer roost--compose-buffer))
+            ;; Each knows the others.
+            (should (equal (mapcar (lambda (task) (roost--field task 'name))
+                                   (roost--attempts (gethash '("dev" "2222222222222222") roost--tasks)))
+                           '("fix-parser" "fix-parser 3")))))))))
+
+(ert-deftest roost-a-draft-makes-an-attempt-by-each-agent-it-names ()
+  ;; Agents' names in place of a count: one task by each, in that order,
+  ;; the first being the draft's own.
+  (roost-test--draft-world
+    (cl-letf (((symbol-function 'roost--project-value) (lambda (&rest _) nil)))
+      (with-current-buffer roost--compose-buffer
+        (let ((answer nil))
+          (cl-letf (((symbol-function 'read-string) (lambda (&rest _) answer)))
+            ;; What it can't make leaves the draft as it was.
+            (dolist (wrong '("0" "6" "claude gemini" "claude codex pi opencode claude codex"))
+              (setq answer wrong)
+              (should-error (roost-compose-set-attempts) :type 'user-error)
+              (should-not (plist-get roost--compose-fields :attempts)))
+            (setq answer "codex claude")
+            (roost-compose-set-attempts)
+            (should (string-match-p "^Agent    codex  C-c C-a$" (buffer-string)))
+            (should (string-match-p "^Attempts codex, claude  C-c C-x · each a task of its own" (buffer-string)))
+            ;; One agent alone is the draft's agent, and one task.
+            (setq answer "pi")
+            (roost-compose-set-attempts)
+            (should (equal (roost--compose-agents) '("pi")))
+            (setq answer "claude codex")
+            (roost-compose-set-attempts)
+            (should (equal (roost--compose-agents) '("claude" "codex")))
+            ;; Empty, or 1, is one task again, by the draft's agent.
+            (dolist (one '("" "1"))
+              (setq answer "2")
+              (roost-compose-set-attempts)
+              (should (equal (roost--compose-agents) '("claude" "claude")))
+              (setq answer one)
+              (roost-compose-set-attempts)
+              (should (equal (roost--compose-agents) '("claude")))
+              (should (string-match-p "^Attempts 1  C-c C-x$" (buffer-string))))
+            (setq answer "claude codex")
+            (roost-compose-set-attempts)))
+        (roost-compose-submit)
+        (should (= (length asked) 2))
+        (let ((both (roost-test--attempts-asked asked 2)))
+          (should (equal (mapcar (lambda (params) (alist-get 'agent params)) both) '("claude" "codex")))
+          (should (equal (mapcar (lambda (params) (alist-get 'command params)) both) '(["claude"] ["codex"])))
+          (should (equal (mapcar (lambda (params) (alist-get 'name params)) both) '("fix-parser" "fix-parser 2")))
+          (should (equal (mapcar (lambda (params) (alist-get 'of (alist-get 'attempt params))) both) '(2 2))))
+        ;; A draft of one task says nothing of attempts, as before.
+        (funcall (nth 2 (car asked)) "No branch named x")
+        (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "1")))
+          (roost-compose-set-attempts))
+        (roost-compose-submit)
+        (should (= (length asked) 3))
+        (should-not (assq 'attempt (car (car asked))))))))
+
+(ert-deftest roost-a-draft-changed-between-asks-makes-its-attempts-from-one-wording ()
+  "A draft that makes two attempts asks.  Its host makes the second, and
+the draft's own request never reaches it.  You change the prompt and ask
+again, with the same IDs: its host makes nothing from the new words
+beside the attempt it made from the old, and answers with that attempt.
+The draft stays, saying so, and asks next under a new ID, for both
+attempts at what it says now.  The model found it:
+NewTaskAttempts.attempt-whatever-its-group.cfg undoes the fix."
+  (roost-test--draft-world
+    (let* (opened records
+           ;; Their host, which answers as the helper's `create' and
+           ;; `make_task' do: with the task a creation ID made before, or
+           ;; one of the attempt's group made from other words, or a new one.
+           (host (lambda (params)
+                   (let* ((attempt (alist-get 'attempt params))
+                          (words (alist-get 'words attempt))
+                          (found (or (seq-find (lambda (task)
+                                                 (equal (alist-get 'createId task) (alist-get 'createId params)))
+                                               records)
+                                     (seq-find (lambda (task)
+                                                 (let ((theirs (alist-get 'attempt task)))
+                                                   (and words (alist-get 'words theirs)
+                                                        (equal (alist-get 'group theirs) (alist-get 'group attempt))
+                                                        (not (equal (alist-get 'words theirs) words)))))
+                                               records))))
+                     (if found
+                         (cons '(alreadyMade . t) found)
+                       (car (push (append `((name . ,(alist-get 'name params)) (repo . "/repo")
+                                            (prompt . ,(alist-get 'prompt params))
+                                            (createId . ,(alist-get 'createId params)) (attempt . ,attempt))
+                                          (roost-test--task (format "%016x" (1+ (length records)))))
+                                  records))))))
+           (reach (lambda (request) (funcall (nth 1 request) (copy-tree (funcall host (car request))))))
+           (words (lambda (request) (alist-get 'words (alist-get 'attempt (car request))))))
+      (cl-letf (((symbol-function 'roost-open-task) (lambda (task &rest _) (push (roost--field task 'id) opened)))
+                ((symbol-function 'roost--project-value) (lambda (&rest _) nil)))
+        (with-current-buffer roost--compose-buffer
+          (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "2")))
+            (roost-compose-set-attempts))
+          (roost-compose-submit)
+          (let ((group (alist-get 'createId (car (car asked)))))
+            ;; Attempt 2 is made.  The draft's own request is lost on its
+            ;; way, and you write on while it says Creating.
+            (funcall reach (cadr asked))
+            (goto-char (point-max))
+            (insert " and the lexer")
+            (funcall (nth 2 (car asked)) (propertize "No reply after 660s" 'roost-no-reply t))
+            (should (string-search "C-c C-c asks again" roost--draft-note))
+            ;; Asked again: the same IDs, for another prompt.
+            (roost-compose-submit)
+            (should (equal (mapcar (lambda (request) (alist-get 'createId (car request))) (seq-take asked 2))
+                           (list group (concat group "02"))))
+            (should (equal (alist-get 'prompt (car (car asked))) "Fix the parser and the lexer"))
+            (funcall reach (cadr asked))
+            (funcall reach (car asked))
+            ;; Nothing is made from it beside the attempt at the first.
+            (should (equal (mapcar (lambda (task) (list (alist-get 'name task) (alist-get 'prompt task))) records)
+                           '(("fix-parser 2" "Fix the parser"))))
+            ;; The draft stays, and says which task was made from what.
+            (should (get-buffer roost--compose-buffer))
+            (should (equal (roost--compose-prompt) "Fix the parser and the lexer"))
+            (should (string-search "Made fix-parser 2 from what you sent before" roost--draft-note))
+            (should-not roost--compose-submitting)
+            (should-not roost--compose-asked)
+            (should-not opened)
+            ;; Each ask named its words, the same for both its attempts,
+            ;; and other words once the draft said something else.
+            (should (equal (mapcar words asked)
+                           (mapcar words (list (nth 0 asked) (nth 0 asked) (nth 2 asked) (nth 2 asked)))))
+            (should-not (equal (funcall words (nth 0 asked)) (funcall words (nth 2 asked))))
+            (should (string-match-p "\\`[0-9a-f]\\{16,32\\}\\'" (funcall words (car asked))))
+            ;; C-c C-c makes another task, as it says: under a new ID, both
+            ;; attempts at what the draft says now.
+            (roost-compose-submit)
+            (should-not (equal (alist-get 'createId (car (car asked))) group))
+            (funcall reach (cadr asked))
+            (funcall reach (car asked))
+            (should (equal (mapcar (lambda (task)
+                                     (list (alist-get 'name task) (alist-get 'prompt task)
+                                           (equal (alist-get 'group (alist-get 'attempt task)) group)))
+                                   (reverse records))
+                           '(("fix-parser 2" "Fix the parser" t)
+                             ("fix-parser-lexer 2" "Fix the parser and the lexer" nil)
+                             ("fix-parser-lexer" "Fix the parser and the lexer" nil))))))
+        ;; The draft closes for its own task, which opens, and the attempt
+        ;; at the first prompt is one of no others.
+        (should-not (get-buffer roost--compose-buffer))
+        (should (equal opened '("0000000000000003")))
+        (should (equal (mapcar (lambda (task) (roost--field task 'name))
+                               (roost--attempts (gethash '("dev" "0000000000000003") roost--tasks)))
+                       '("fix-parser-lexer 2")))
+        (should-not (roost--attempts (gethash '("dev" "0000000000000001") roost--tasks)))))))
+
+(ert-deftest roost-what-a-draft-says-has-one-name-whatever-its-text-looks-like ()
+  ;; Its host tells the words of two requests apart by this name, so what
+  ;; is `equal', as `roost--compose-made' compares it, must have the same.
+  (roost-test--isolated
+   (let* ((fields (lambda (agent attempts conversation)
+                    `("/repo/" ,agent nil nil ((number . 7) (title . "Off by one") (labels . ["bug"]))
+                      nil ,attempts nil ,conversation)))
+          (what (list "Fix the parser" (funcall fields "claude" 2 nil)))
+          (looks `(,(propertize "Fix the parser" 'face 'bold)
+                   ("/repo/" ,(propertize "claude" 'help-echo "An agent") nil nil
+                    ((number . 7) (title . ,(propertize "Off by one" 'face 'italic))
+                     (labels . [,(propertize "bug" 'face 'bold)]))
+                    nil 2 nil nil))))
+     (should (equal what looks))
+     (should (string-match-p "\\`[0-9a-f]\\{32\\}\\'" (roost--compose-words what)))
+     (should (equal (roost--compose-words what)
+                    (let ((print-length 1) (print-level 1))
+                      (roost--compose-words looks))))
+     (dolist (other (list (list "Fix the parser " (funcall fields "claude" 2 nil))
+                          (list "Fix the parser" (funcall fields "codex" 2 nil))
+                          (list "Fix the parser" (funcall fields "claude" 3 nil))
+                          (list "Fix the parser" (funcall fields "claude" 2 t))))
+       (should-not (equal (roost--compose-words what) (roost--compose-words other)))))))
+
+(defun roost-test--attempts ()
+  "Cache three attempts at one prompt on this machine, and return them.
+The first two change ledger.py, the first adds notes.md, all change
+report.py, and the third alone changes src/totals.py."
+  (let ((make (lambda (n id name files &rest more)
+                (roost--cache-task nil (append more
+                                               `((name . ,name) (worktree . ,(format "/tmp/roost-%d" n))
+                                                 (repo . "/srv/ledger") (files . ,files) (live . t)
+                                                 (integrationBranch . "main") (baseRef . "main")
+                                                 (attempt (group . "feedfacefeedface") (n . ,n) (of . 3)))
+                                               (roost-test--task id "ready"))))))
+    (list (funcall make 1 "1111111111111111" "fix-auth"
+                   '(((path . "ledger.py") (added . 4) (deleted . 1) (uncommitted . t))
+                     ((path . "notes.md") (untracked . t))
+                     ((path . "report.py") (added . 2) (deleted . 2)))
+                   '(diff . "2 files changed, 6 insertions(+), 3 deletions(-)") '(dirty . t))
+          (funcall make 2 "2222222222222222" "fix-auth 2"
+                   '(((path . "ledger.py") (added . 12) (deleted . 3))
+                     ((path . "report.py") (added . 1) (deleted . 0)))
+                   '(diff . "2 files changed, 13 insertions(+), 3 deletions(-)") '(ahead . 1) '(dirty))
+          (funcall make 3 "3333333333333333" "fix-auth 3"
+                   '(((path . "report.py") (added . 7) (deleted . 7))
+                     ((path . "src/totals.py") (added . 30) (deleted . 0)))
+                   '(diff . "2 files changed, 37 insertions(+), 7 deletions(-)") '(ahead . 2) '(dirty)))))
+
+(ert-deftest roost-attempts-are-compared-file-by-file ()
+  ;; Every file any attempt changed, with what each attempt did to it; two
+  ;; attempts' copies of a file open in Ediff, and one is merged from there.
+  (roost-test--isolated
+   (pcase-let ((`(,one ,two ,three) (roost-test--attempts))
+               (compared nil) (visited nil) (merged nil) (answers nil) (questions nil))
+     (save-window-excursion
+       (cl-letf (((symbol-function 'ediff-files) (lambda (a b &rest _) (push (list a b) compared)))
+                 ((symbol-function 'find-file) (lambda (file &rest _) (push file visited)))
+                 ((symbol-function 'roost-merge-retire) (lambda (task) (push (roost--field task 'name) merged)))
+                 ((symbol-function 'completing-read)
+                  (lambda (prompt &rest _) (push prompt questions) (pop answers))))
+         (roost-compare-attempts two)
+         (unwind-protect
+             (let ((row (lambda (text)
+                          (goto-char (point-min))
+                          (re-search-forward (concat "^  " (regexp-quote text)))
+                          (forward-line 0))))
+               (should (equal (buffer-name) "*roost attempts: fix-auth*"))
+               (should (derived-mode-p 'roost-attempts-mode))
+               ;; On the attempt you came from, each with its status and changes.
+               (should (equal (get-text-property (point) 'roost-task) (roost--key two)))
+               (dolist (line '("^  1  fix-auth    ready  2 files \\+6 −3 · 1 new · uncommitted$"
+                               "^  2  fix-auth 2  ready  2 files \\+13 −3 · 1 ahead$"
+                               "^  3  fix-auth 3  ready  2 files \\+37 −7 · 2 ahead$"
+                               ;; A column for each attempt, by its number.
+                               "^ +1 +2 +3$"
+                               "^  ledger\\.py +\\+4 −1 +\\+12 −3 +·$"
+                               "^  notes\\.md +new +· +·$"
+                               "^  report\\.py +\\+2 −2 +\\+1 −0 +\\+7 −7$"
+                               "^  src/totals\\.py +· +· +\\+30 −0$"))
+                 (should (string-match-p line (buffer-string))))
+               ;; Two changed it: their worktrees' copies, with no question.
+               (funcall row "ledger.py")
+               (roost-attempts-visit)
+               (should (equal compared '(("/tmp/roost-1/ledger.py" "/tmp/roost-2/ledger.py"))))
+               (should-not questions)
+               ;; As does a click on its name.
+               (setq compared nil)
+               (push-button (+ (point) 2))
+               (should (equal compared '(("/tmp/roost-1/ledger.py" "/tmp/roost-2/ledger.py"))))
+               ;; All three did: the two you choose.
+               (funcall row "report.py")
+               (setq compared nil answers '("3 fix-auth 3" "1 fix-auth"))
+               (roost-attempts-visit)
+               (should (equal compared '(("/tmp/roost-3/report.py" "/tmp/roost-1/report.py"))))
+               (should (= (length questions) 2))
+               ;; Chosen none of, nothing opens.
+               (setq compared nil answers '(""))
+               (roost-attempts-visit)
+               (should-not compared)
+               ;; One did: its copy.
+               (funcall row "src/totals.py")
+               (roost-attempts-visit)
+               (should (equal visited '("/tmp/roost-3/src/totals.py")))
+               ;; An attempt's line is its task's: m merges that one, and
+               ;; the menu's commands act on it.
+               (funcall row "3  fix-auth 3")
+               (should (equal (roost--key (roost--task-at-point)) (roost--key three)))
+               (roost-attempts-merge)
+               (should (equal merged '("fix-auth 3")))
+               ;; Elsewhere, m asks which.
+               (goto-char (point-min))
+               (setq answers '("1 fix-auth"))
+               (roost-attempts-merge)
+               (should (equal merged '("fix-auth" "fix-auth 3")))
+               (should-error (roost-attempts-visit) :type 'user-error)
+               ;; One that went leaves the rest, as Roost redraws.
+               (remhash (roost--key three) roost--tasks)
+               (roost--redraw)
+               (should-not (string-search "fix-auth 3" (buffer-string)))
+               (should-not (string-search "src/totals.py" (buffer-string)))
+               (should (string-match-p "^  report\\.py +\\+2 −2 +\\+1 −0$" (buffer-string)))
+               ;; The same buffer, asked for from another of them.
+               (let ((buffer (current-buffer)))
+                 (roost-compare-attempts one)
+                 (should (eq (current-buffer) buffer))
+                 (should (equal (get-text-property (point) 'roost-task) (roost--key one)))))
+           (kill-buffer "*roost attempts: fix-auth*")))))))
+
+(ert-deftest roost-a-task-says-which-attempt-it-is ()
+  ;; In its panel's details, with the key that compares them while there
+  ;; are others; = applies to no other task.
+  (roost-test--isolated
+   (pcase-let ((`(,one ,two ,_three) (roost-test--attempts))
+               (lone (roost--cache-task nil (append '((name . "alone") (repo . "/srv/ledger"))
+                                                    (roost-test--task "4444444444444444" "ready"))))
+               (details (lambda (task)
+                          (with-temp-buffer
+                            (roost-task-info-mode)
+                            (setq roost--buffer-task-key (roost--key task))
+                            (cl-letf (((symbol-function 'roost--task-info-width) (lambda () 100)))
+                              (roost--render-task-info))
+                            (goto-char (point-min))
+                            (when (re-search-forward "^  Attempt +\\(.*\\)$" nil t)
+                              (list (match-string-no-properties 1)
+                                    (get-text-property (match-beginning 1) 'roost-key-command)
+                                    ;; A click on the key it names.
+                                    (progn (goto-char (match-beginning 1))
+                                           (when (search-forward "=" (line-end-position) t)
+                                             (get-text-property (1- (point)) 'roost-key-command)))))))))
+     (should (equal (funcall details two)
+                    '("2 of 3, beside fix-auth, fix-auth 3 · = compares them" nil roost-compare-attempts)))
+     (should (roost--action-applies-p two 'roost-compare-attempts))
+     (should (eq (keymap-lookup roost-task-info-mode-map "=") 'roost-compare-attempts))
+     (should (eq (keymap-lookup roost-dashboard-mode-map "=") 'roost-compare-attempts))
+     (should (eq (keymap-lookup roost-sidebar-list-mode-map "=") 'roost-compare-attempts))
+     ;; A task that is no attempt says nothing of it, and refuses.
+     (should-not (funcall details lone))
+     (should-not (roost--action-applies-p lone 'roost-compare-attempts))
+     (should (equal (substring-no-properties (cadr (should-error (roost-compare-attempts lone) :type 'user-error)))
+                    "alone is the only attempt at its prompt; C-c C-x in the draft of a new task makes several"))
+     ;; The list keeps the attempts together, in their order, wherever
+     ;; their host started each among the project's tasks.
+     (cl-loop for (id . started) in '(("1111111111111111" . "5") ("2222222222222222" . "2")
+                                      ("3333333333333333" . "4") ("4444444444444444" . "3"))
+              do (roost--cache-task nil (cons (cons 'startedAt started) (gethash (list nil id) roost--tasks))))
+     (should (equal (mapcar (lambda (task) (roost--field task 'name)) (cdar (roost--task-groups (roost-tasks))))
+                    '("fix-auth" "fix-auth 2" "fix-auth 3" "alone")))
+     ;; The last one left is an attempt with nothing to compare with.
+     (remhash (roost--key one) roost--tasks)
+     (remhash '(nil "3333333333333333") roost--tasks)
+     (should (equal (car (funcall details two)) "2 of 3; the others are finished"))
+     (should-not (roost--action-applies-p two 'roost-compare-attempts))
+     (should (equal (cadr (should-error (roost-compare-attempts two) :type 'user-error))
+                    "fix-auth 2 is the only attempt left")))))
+
+(ert-deftest roost-merging-an-attempt-says-which-remain ()
+  ;; The others are not discarded for you: Roost deletes work only when
+  ;; you discard a task.
+  (roost-test--isolated
+   (pcase-let ((`(,_one ,two ,three) (roost-test--attempts))
+               (roost-merge-style 'merge)
+               (said nil))
+     (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
+               ((symbol-function 'roost--request)
+                (lambda (_host _action params success &optional _failure _timeout)
+                  (funcall success (append '((status . "retired"))
+                                           (gethash (list nil (alist-get 'id params)) roost--tasks)))))
+               ((symbol-function 'roost--refresh-host) #'ignore)
+               ((symbol-function 'message)
+                (lambda (format &rest args) (when format (push (apply #'format format args) said)))))
+       (roost-merge-retire two)
+       (should (equal (car said)
+                      (concat "Merged fix-auth 2 into main, and removed its worktree and branch; "
+                              "fix-auth and fix-auth 3 remain: x on each discards it")))
+       (should (= (length (roost-tasks)) 2))
+       (roost-merge-retire three)
+       (should (equal (car said)
+                      (concat "Merged fix-auth 3 into main, and removed its worktree and branch; "
+                              "fix-auth remains: x discards it")))))))

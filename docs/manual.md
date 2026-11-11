@@ -245,6 +245,39 @@ until it replies again; one that failed or stopped by itself stops counting
 once you've seen it. What you've seen is kept on the task's host, for your
 other machines and the next session.
 
+**Take the tasks an agent offers.** An agent
+that comes across work outside its task, such as a bug in code it read,
+offers it as a task of its own and goes on with its own work. The offer
+waits, dim, under its task in the dashboard and sidebar
+(`Fix add in calc.py  offer`), with its brief when you hover over it, and the
+agent says in its reply what it offered. Nothing waits on you: the task's
+own status is as it would be without it.
+
+- Click it, or press `RET` on it, to open it as a new task draft, filled in:
+  in the same project, with the same agent, starting from the branch the
+  offering task merges into, named and prompted as the agent offered it.
+  Opening it takes it, so it no longer waits there; the draft is like any
+  other, and cancelling it asks before it drops the brief. The task you
+  create shows under the one that offered it, each task's panel names the
+  other, and you stay where you were.
+- `e` on it, or **Do it here** from its right-click menu, sends that agent
+  `Do this task here: “TITLE”`, as `e` sends a prompt, and the offer no
+  longer waits. The agent wrote the brief, so the title is enough.
+- `x` on it, or **Dismiss**, drops it.
+
+A task keeps at most three offers waiting, and one offered again by its
+title changes its brief. An offer goes with its task, and the question before
+you merge, retire, discard or forget the task names it. One its agent makes
+while you read that question keeps the task, and Roost says which: ask again,
+and the question names it. A new task starts
+without the offering task's changes, and the agent is told so.
+
+Roost gives the agent a tool, `propose_task`, from an MCP server of the
+helper's, with a few sentences on when to use it, which cost tokens on each
+of its requests. Only Claude Code takes it so far, and only tasks you start
+after turning the option on have it. How often an agent offers rests on the
+model. This is an experiment: it may change or go.
+
 **Keep them in view.** `b` in the dashboard, or `M-x roost-sidebar-mode`, keeps a
 compact task list at the left of the frame, through `C-x 1`; add
 `(roost-sidebar-mode 1)` to your configuration to have it from the start. With
@@ -258,7 +291,19 @@ since you last looked at it, if anything (below), where the whole name fits
 beside it. A click opens the task,
 quitting any question you left open in the minibuffer, which would hold it back,
 and closing a menu left open. Each project's heading ends with a `+` that
-drafts a task there. Below the tasks, under "Start a task in", are the
+drafts a task there. Below the tasks, "New conversation" opens an agent's
+terminal at once, in no project of yours, with nothing to write first: you
+say what you want in its terminal. A conversation is a task like the others,
+in a repository of Roost's own in the host's state directory, listed under
+"Conversations"; it has no branch to merge, so `x` just ends it.
+`roost-new-conversation` (`C` in the menu) does the same, and with `C-u`
+asks which host. A conversation is where to plan: ask its agent to look at
+one of your projects and split a piece of work into tasks, and each waits
+under the conversation, naming its project, for you to open as a draft
+there and start ([Take the tasks an agent offers](#a-day-with-roost)). It
+reads the projects that host has run tasks in without asking, and changes
+nothing in them without asking. Claude asks once whether to trust Roost's
+conversations folder, with the first conversation on a host. Under "Start a task in" are the
 projects with no tasks now that you used last on each host, three
 (`roost-sidebar-recent-projects`), and "Other directory…". A click on one, or
 `RET`, drafts a task there, taking a draft you have written there too, unless
@@ -269,11 +314,17 @@ for one on this machine. `X` on a project, or "Forget" on its menu, stops listin
 you start a task there again. With perspectives or tabs and no task yet, there
 is no sidebar to click: start the first with `M-x roost-new-task`. `I` docks a
 panel at the right of an open task's terminal,
-kept current as the agent works: what to do next, the start of the task's
-prompt, three lines there, the files it changed, those not yet committed
-first, and what a merge would rest on (below). Once you have sent the agent more, your latest prompt shows
-under the task's, a reminder of where you left off that the terminal may
-have scrolled away. A click or `RET` on a file
+kept current as the agent works. It is quiet until something is wrong: bold is
+the task's name, and colour is what wants you, which comes first, under the
+name, after a `▲`: its worktree on another branch, a merge under way or one
+that would conflict, its worktree gone, its last error. Then what to do next,
+the files it changed, those not yet committed first, and what a merge would
+rest on (below). While the agent works, the line under its name says what it
+is doing, as `Running make test`. At the foot, a row of keys opens the task's
+other views (`r Magit`, `f Files`, `t Shell`, `? More`), and two dim lines
+fold what you seldom need there: your latest prompt, a reminder of where you
+left off that the terminal may have scrolled away, and the details of where
+the work lives. `RET` or a click on either unfolds it. A click or `RET` on a file
 opens its diff in Magit, in a buffer of its own, as Magit's diff of the file
 you visit has, so another file's diff, in the same window, leaves it open behind (`magit-diff-buffer-file-locked`
 set to nil keeps one buffer for all). There `;` writes a note for the agent (more under
@@ -560,7 +611,9 @@ counted once you stop and resume it (`K`, then `s`).
 | --- | --- | --- |
 | `h`, `?` | `roost-dispatch` | A Magit-style menu of every command below, naming the task they act on and what to do next |
 | `RET` | `roost-open-task` | Open the task's agent terminal and workspace; for a stopped or crashed agent, offer to resume it, in the same question as the others that crashed on its host |
-| `c` | `roost-new-task` | Draft a new task, from the region or Org entry if any (`C-u` forks the current task's commits) |
+| `c` | `roost-new-task` | Draft a new task, from the region or Org entry if any (`C-u` forks the current task, its agent's conversation too) |
+| | `roost-copy-attach-command` | Copy the shell command that attaches another terminal, as a phone's SSH app, to the task's agent |
+| `C` | `roost-new-conversation` | Open an agent's terminal in no project, with nothing to write first (`C-u` asks which host) |
 | `n` | `roost-next-waiting` | Next task waiting for you, permission requests first, saying why it waits; once none does, again goes back to where you started |
 | `t` | `roost-shell` | Shell beside the agent, in the worktree (reused) |
 | `f` | `roost-files` | Dired in the worktree |
@@ -570,6 +623,7 @@ counted once you stop and resume it (`K`, then `s`).
 | `e` | `roost-send` | Paste a prompt into the agent and press Enter |
 | `i` | `roost-task-info` | The task's next step, prompt, your latest prompt, changes, checks, open review threads, the agent's latest reply and details |
 | `R` | `roost-rename` | Rename the task, in Roost, its tab or perspective, and its agent's tmux window; its branch and worktree keep the name it started with |
+| `B` | `roost-retarget` | Change the branch the task starts from and merges into, as after you rebased its branch onto another: `m`, `u` and its counts follow; no commit moves, and a pull request already open keeps its base |
 | `l` | `roost-switch-task` | Choose a task by name, waiting tasks first |
 | `/` | `roost-search` | Find messages in your tasks' conversations, retired tasks' too; `RET` opens a live task, `TAB` shows more of a message (its first 1,500 characters) |
 | `b` | `roost-sidebar-mode` | Keep the task list at the left of the frame |
@@ -582,7 +636,25 @@ counted once you stop and resume it (`K`, then `s`).
 | `K` | `roost-stop` | Stop the agent's window; keep all work |
 | `s` | `roost-resume` | Restart a stopped, exited or crashed task in its recorded conversation; when other agents crashed on its host too, as after it restarted, ask whether to resume those as well. Refuses while the agent runs in the task's shell or another window of its tmux session, which Roost didn't start |
 | `w` | `roost-workload` | How long agents worked and waited on you, each day of the past week ([below](#how-many-agents-you-keep-up-with)) |
+| `=` | `roost-compare-attempts` | For a task a draft made with others from one prompt (`C-c C-x` there): list every file any of those attempts changed, with a column for each attempt saying what it did to the file |
 | `g` | `roost-refresh` | Refresh status and Git statistics |
+
+Where attempts are compared (`=`), each attempt has a line with its number,
+status and changes, and each file a line with `+12 −3`, `new` or `binary`
+under the attempts that changed it and `·` under those that left it alone:
+
+| Key | Command | |
+| --- | --- | --- |
+| `RET` | `roost-attempts-visit` | On a file, compare two attempts' copies of it in Ediff, each in its own worktree: the two that changed it, or of more, the two you choose. A file only one attempt changed opens there. On an attempt, open it |
+| `m` | `roost-attempts-merge` | Merge the attempt at point and retire it, as `m` does for any task; elsewhere, ask which. The others stay until you finish them, as with `x` on each: Roost deletes work only when you discard a task |
+| `g` | `roost-attempts-refresh` | Redraw, and ask the host for each attempt's changes as they are now |
+| `h`, `?` | `roost-dispatch` | The menu, for the attempt at point |
+
+On an offer an agent made, listed under its task in the dashboard and
+sidebar: `RET` (`roost-open-offer`) opens it as a new task draft, `e`
+(`roost-offer-here`) has that agent do it there, and `x`
+(`roost-offer-dismiss`) dismisses it; `mouse-3` offers all three. The other
+keys act on the task it sits under.
 
 `j`/`k` or `TAB` move between tasks; `mouse-1` opens one and `mouse-3` shows its actions.
 Outside the dashboard, commands act on the task of the current terminal,
@@ -647,6 +719,38 @@ name. `C-c C-t` starts from a GitHub or GitLab issue (with `gh` or `glab` on
 the project's host) or a Jira work item (with `twg` on this machine). An empty name is derived
 from the prompt; `R` renames the task later.
 
+`C-c C-x` sets how many attempts the draft makes at its prompt, which its
+Attempts line shows: a number from 1 to 5, each by the draft's agent, or
+agents' names with spaces between, as `claude codex`, one by each. `C-c C-c`
+then creates a task for each at once, from the same prompt, project and
+starting ref. The first has the draft's name and opens, as one task does;
+the others have that name with 2, 3 and so on after it, and start without
+taking you anywhere. Asked again after no reply, each is made once. If you
+changed the draft before asking again, and its host had made one of them
+from what it said before, none is made from what it says now beside that
+one: the draft stays, saying which task was made from what you sent before,
+and `C-c C-c` then makes every attempt from what it says now. One of
+the others that fails says so in the echo area, and the rest go on. They
+are tasks like any other, kept together in the dashboard and sidebar, and
+`=` on one [compares them](#commands).
+
+`C-u c` on a task drafts a fork of it, so you can take the work another way
+and keep whichever goes better. Once the task's agent has a conversation,
+the fork goes on with it: its agent starts from a copy of that
+conversation, as Claude's `--fork-session`, `codex fork`, Pi's `--fork` and
+OpenCode's `--fork` make one, and its worktree has the task's uncommitted
+changes as well as its commits, unstaged as they were, since the
+conversation expects them. Ignored files, and untracked ones too large for
+"since you last looked" to keep, stay behind. The task's own conversation
+and work go on as before. Your prompt is the fork's first message, after a
+sentence Roost puts before it, telling the agent it now works in a new
+worktree and should leave the task's alone: its conversation names the
+task's worktree, which the agent would otherwise look in too. The
+draft's Context line says which conversation the fork has, and `C-c C-f`
+trades it for a new one, a fork of the task's commits alone. Only the
+task's agent can go on with its conversation, so choosing another agent
+starts a new one too.
+
 Emacs waits up to eleven minutes for a new task's worktree, which a
 repository with gigabytes of Git LFS files can take that long to check
 out. With no reply by then, the draft stays and says so, and the task opens
@@ -675,7 +779,9 @@ branch the task starts from, and the draft says so next to the starting ref
 gives the local branch of its name, which Roost makes to track it if there
 isn't one, as `git switch` would. A task's branch, as when you fork one with
 `C-u c`, gives that task's integration branch. With no starting ref, or a
-tag or commit, it is the branch the primary checkout has checked out.
+tag or commit, it is the branch the primary checkout has checked out. `B`
+changes it later, by the same rules, for a task started from the wrong
+branch.
 
 In the pull request draft: `C-c C-c` creates the pull request (`C-u` as a draft)
 and `C-c C-k` cancels, as do the Create, Create draft and Cancel buttons in its
@@ -766,6 +872,25 @@ header line. A failed creation keeps the draft.
   then shows at once, and for Claude Code a declined request and Esc too. A
   Codex task is `ready` once you have answered its startup questions, rather
   than at its first turn.
+- `roost-decorate` (t): draw the views with more than their text: a tint
+  behind a status that wants you, a band behind what is wrong with a task,
+  a hairline under each heading, line counts in a column, a little air
+  between a list's rows, and a status light in the shape of its status
+  (a disc in a ring asks, a disc finished, a triangle failed, most of a
+  ring is at work, a ring of dots is starting, two bars stopped, a tick
+  merged, a dash is a host out of reach, a small dot waits for nothing).
+  The colours are made from your theme's, and no text differs; nil draws
+  the same words without any of it, each light a dot.
+- `roost-remote-control` (nil): start each Claude Code task with Remote
+  Control (`--remote-control`, `--name`), named for the task, so it shows
+  in the Claude app and at claude.ai/code, which notify your phone when
+  its agent needs a decision. Needs a Claude subscription. For tasks
+  started after you turn it on.
+- `roost-agent-offers` (t): let a task's agent offer tasks of their own,
+  which wait under its task for you to take
+  ([Take the tasks an agent offers](#a-day-with-roost)), and a
+  conversation's agent offer tasks in your projects. Claude Code only. Nil
+  gives agents no tools of Roost's, for tasks started after you change it.
 - `roost-large-change` (`(:lines 400 :files 10 :directories 3)`): when a
   task's row gets its `±`. Leave one out to mark by the others, as
   `(:lines 400)`; nil marks none.
@@ -964,8 +1089,20 @@ Things to know:
   you decline or press Esc. Claude Code's other tools, and Codex, may keep
   showing `permission` until the agent moves on, and `e` asks before sending
   to a task in that state. What a subagent does beside one that asks doesn't
-  count as moving on. With `roost-program-status` on, both say so themselves,
-  at once.
+  count as moving on. A Claude Code subagent that asks from the background
+  keeps the task at `permission` after the main agent's turn ends, until
+  that subagent goes on or ends, or you send a prompt; with several asking
+  at once, one of them a subagent, until a turn ends with nothing left in
+  the background, or you send a prompt. With
+  `roost-program-status` on, both say so themselves, at once.
+- In Plan mode, Codex ends its turn with a plan and then asks, in a menu,
+  whether to implement it. Text sent to it then would be dropped, and the
+  Enter after it would implement the plan, so the task shows `permission`
+  ("Asks whether to implement its plan"), its latest reply is the plan, and
+  `e` asks before sending. Codex says nothing when you close the menu, with
+  Esc or "No, stay in Plan mode", so the task shows `permission` until your
+  next prompt: answer `e`'s question with yes. Retiring and merging go
+  ahead meanwhile, as its turn is over.
 - In auto mode, Claude Code refuses some commands without asking: the
   task stays `running`, and Claude's reply says what it refused. A
   dangerous `rm` asks for two minutes, and is refused if you don't
@@ -1075,6 +1212,19 @@ What runs where:
   Python, Roost's files in the state directory and the task's IDs. The
   other shell commands are your `roost-setup-command` and
   `roost-teardown-command`.
+- With `roost-agent-offers` on, Claude Code starts the helper as an MCP
+  server of its own (`--mcp-config`), over its standard input and output,
+  and ends it with itself. Its tool `propose_task` writes an offer
+  into the record of the task whose agent called it, and nothing else, and
+  `list_projects` names the projects that host has run tasks in: neither
+  runs a program or reaches another task. The task's own Claude
+  settings allow both without asking. An offer may name another project,
+  by the folder of a Git repository there, which you read in its draft; a
+  conversation's must, and its Claude settings also let it read, and only
+  read, the files of the projects `list_projects` names without asking. An offer's title and brief can
+  hold no control character, nor one that doesn't show as itself, and you
+  read both in the draft before anything starts from them; Do it here
+  sends only a fixed line with the title.
 - When the helper measures a task, keeps where you last looked at it, or
   checks it is clean, Git runs no program that config names for its file
   system monitor, diffs or signatures, which an agent may write for a
@@ -1217,7 +1367,13 @@ bubblewrap.
 
 `make test compile` runs the ERT suite, the Python lifecycle tests against real
 Git and isolated tmux sockets (fixture agents drive the actual hook commands,
-without model calls), and a warning-free byte-compile. CI runs it on Emacs 29.1
+without model calls), and a warning-free byte-compile. `make test` uses every
+core, each Emacs and Python taking a share (`test/run.py`): about four minutes
+on four cores, where one process takes eighteen. While you work, `make quick`
+runs one case in twelve of each sweep, and leaves out the Python suite when
+neither the helper nor its tests have changed since it last passed: half a
+minute after a change to `roost.el` alone. `make quick K=REGEXP` runs only the
+tests that match. CI runs it on Emacs 29.1
 and 30.1, except for a change only to Markdown files or `docs/`, which no test
 reads: then its checks pass without running it. The tests of Roost in Magit need Magit and its dependencies on the
 load path, as `make test TEST_LOAD_PATH="-L …/magit/lisp -L …"`, Evil
@@ -1364,6 +1520,18 @@ screenshots too: the checks don't see what merely looks wrong. Emacs needs
 tmux-control and its dependencies:
 
     make qa QA_FLAGS="-L ../tmux-control --package-dir ~/.emacs.d/elpa"
+
+Each step is captured as a screenshot on macOS and under X. On a machine
+with no display, such as a container or CI, Xvfb gives it one:
+
+    Xvfb :99 -screen 0 1760x1000x24 &
+    DISPLAY=:99 make qa QA_FLAGS="-L ../tmux-control -L ../eat answer offer"
+
+`make gallery`, with the same display, needs no agent, tmux or host: it draws
+the task panel and the dashboard for every task state of the sweep's gallery,
+a few to a sheet, in seconds, and captures each sheet in `gallery/`. Use it to
+see what a change to a view looks like in every state at once;
+`GALLERY_THEME=modus-operandi` draws it in that theme.
 
 Package directories are read, never written. `--load FILE` in `QA_FLAGS` loads
 Emacs Lisp after Roost, such as a change to try, and `--keep` leaves the Emacs

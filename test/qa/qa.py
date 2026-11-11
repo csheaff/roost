@@ -529,10 +529,25 @@ class Run:
         registry = subprocess.run(["ioreg", "-n", "Root", "-d1", "-a"], capture_output=True, text=True).stdout
         return bool(re.search(r"<key>CGSSessionScreenIsLocked</key>\s*<true/>", registry))
 
-    def shot(self):
-        """Capture the frame, on macOS; return the file's name, or None."""
-        if sys.platform != "darwin" or self.args.no_shots:
+    def shot_x11(self):
+        """Capture the display Emacs is on, under X, as with Xvfb: its root
+        window, which a display of Emacs's own shows nothing else on."""
+        if not (os.environ.get("DISPLAY") and shutil.which("import")):
             return None
+        self.shots += 1
+        name = "%s/%02d.png" % (self.name, self.shots)
+        subprocess.run(["import", "-window", "root", str(self.out / name)], capture_output=True)
+        if not (self.out / name).exists():
+            self.notes.add("Some screenshots failed: import could not capture the display")
+            return None
+        return name
+
+    def shot(self):
+        """Capture the frame, on macOS or under X; return the file's name, or None."""
+        if self.args.no_shots:
+            return None
+        if sys.platform != "darwin":
+            return self.shot_x11()
         if self.screen_locked():
             self.notes.add("No screenshots while the screen was locked")
             return None
@@ -895,9 +910,20 @@ def fold(qa, repo):
     qa.keys("C-c r l")
     qa.type(name + "\r")
     # Once its changes are in: they may still be refreshing when it first shows.
-    qa.wait("its panel", lambda s: "Show the whole prompt" in panel_text(qa, s)
+    qa.wait("its panel", lambda s: "▸ Details" in panel_text(qa, s)
             and "Refreshing" not in panel_text(qa, s))
-    folded = qa.step("Its panel folds the prompt")
+    # Beside its terminal, the prompt is one quiet line, at the foot.
+    line = lambda s: next((line for line in panel_text(qa, s).split("\n")
+                           if line.startswith("▸ ") and line != "▸ Details"), None)
+    folded = qa.step("Its panel folds the prompt to a line", expect=[
+        ("the line starts as the prompt does", lambda s: (line(s) or "").startswith("▸ " + LONG_PROMPT[:20])),
+        ("the prompt is nowhere else", lambda s: "Show the whole prompt" not in panel_text(qa, s))])
+    label = line(folded)
+    qa.click(label)
+    qa.step("Unfolded", expect=[
+        ("its start, with a way to see the rest",
+         lambda s: "▾ Prompts" in panel_text(qa, s) and "Show the whole prompt" in panel_text(qa, s)),
+        ("point on the way back", lambda s: s["at"] == "▾ Prompts")])
     qa.click("Show the whole prompt")
     qa.step("Shown whole", expect=[
         ("the whole prompt, with a way to fold it",
@@ -905,10 +931,11 @@ def fold(qa, repo):
          and "keep the existing ones passing" in panel_text(qa, s)),
         ("point on the way back", lambda s: s["at"] == "Collapse prompt")])
     qa.click("Collapse prompt")
+    qa.click("▾ Prompts")
     qa.step("Folded again", expect=[
         ("the panel as it was",
          lambda s: unclocked(panel_text(qa, s)) == unclocked(panel_text(qa, folded))),
-        ("point on the way back", lambda s: s["at"] == "Show the whole prompt")])
+        ("point on the way back", lambda s: s["at"] == label)])
 
 
 def panel_fits(qa, screen):
@@ -1594,6 +1621,36 @@ def by_clicks(qa, repo):
             "(json-encode (roost--project-label %s))" % lisp(place)))])
 
 
+@journey("A conversation in no project")
+def conversation(qa, repo):
+    """One click on "New conversation" opens an agent's terminal, with
+    nothing to write first, under a heading of its own; it is in no
+    project of yours, and x ends it."""
+    qa.emacs.eval("(qa-scroll-to-text %s \"roost-sidebar-list-mode\")" % lisp("New conversation"))
+    known = {t["key"] for t in qa.screen()["tasks"]}
+    qa.click_text("New conversation", "roost-sidebar-list-mode")
+    screen = qa.wait("the conversation", lambda s: {t["key"] for t in s["tasks"]} - known)
+    name = next(t["name"] for t in screen["tasks"] if t["key"] not in known)
+    qa.status(name, "ready", "idle")
+    qa.wait("its terminal", shows(qa, name))
+    worktree = task_worktree(qa, name)
+    home = json.loads(qa.emacs.eval("(roost--field (seq-find (lambda (task) (equal (roost--field task 'name) %s))"
+                                    " (roost-tasks)) 'repo)" % lisp(name)))
+    qa.step("A click opens a conversation's terminal", expect=[
+        ("named for when it started", lambda s: re.fullmatch(r"Conversation \d\d:\d\d", name)),
+        ("its terminal is open", shows(qa, name)),
+        ("under Conversations", lambda s: re.search(r"· Conversations +\+\n(?:.*\n)*? *%s" % re.escape(name),
+                                                    sidebar_rows(s))),
+        ("in no project of yours", lambda s: str(repo) not in worktree and home.endswith("/conversations")),
+        ("which isn't offered to start a task in",
+         lambda s: not re.search(r"Start a task in\n(?:.*\n)*? \S+ · conversations", sidebar_rows(s)))])
+    qa.keys("C-c r x")
+    qa.wait("the question", lambda s: (s["prompt"] or "").startswith("Retire " + name))
+    qa.type("y")
+    qa.wait("the conversation to go", lambda s: qa.task(s, name) is None, timeout=30)
+    qa.step("x ends it", expect=[("its folder is gone", lambda s: not os.path.exists(worktree))])
+
+
 @journey("A task's next steps, with clicks")
 def clicks(qa, repo):
     """With a hand on the mouse: a prompt drafted from a task's row menu
@@ -2222,11 +2279,11 @@ def send(qa, repo):
     qa.wait("the agent to get it", lambda s: any("PROMPT How are you?" in w["text"] for w in terminals(s)))
     qa.status(name, "ready", "idle")
     qa.step("Sent", expect=[("the echo area says so", lambda s: "Sent to " + name in (s["echo"] or ""))])
-    latest = lambda s: re.search(r"Your latest prompt\n\s*How are you\?", panel_text(qa, s))
+    # The line that folds the prompts is the latest of them.
+    latest = lambda s: re.search(r"^▸ How are you\?$", panel_text(qa, s), re.M)
     qa.wait("the panel to hear it", latest)
     qa.step("The panel shows what you last said", expect=[
-        ("under the task's prompt", lambda s: latest(s) and panel_text(qa, s).index("Say hi")
-         < panel_text(qa, s).index("Your latest prompt"))])
+        ("in place of the task's prompt", lambda s: latest(s) and "▸ Say hi" not in panel_text(qa, s))])
     # Half a prompt, then another task: the draft waits for its task.
     other = start_task(qa, "Say bye")
     open_task(qa, name)
@@ -2259,11 +2316,10 @@ def send(qa, repo):
         qa.type("And you, %s?\r" % label)
         qa.wait("the agent to get it", lambda s: any("PROMPT And you, %s?" % label in w["text"]
                                                     for w in terminals(s)))
-        latest = lambda s: re.search(r"Your latest prompt\n\s*And you, %s\?" % label, panel_text(qa, s))
+        latest = lambda s: re.search(r"^▸ And you, %s\?$" % label, panel_text(qa, s), re.M)
         qa.wait("the panel to hear it", latest)
         qa.step("%s %s task's panel shows what you last said" % (article, label), expect=[
-            ("under the task's prompt", lambda s: latest(s) and panel_text(qa, s).index("Greet " + label)
-             < panel_text(qa, s).index("Your latest prompt"))])
+            ("in place of the task's prompt", lambda s: latest(s) and "▸ Greet " + label not in panel_text(qa, s))])
 
 
 def attached(text, name):
@@ -2783,6 +2839,40 @@ def go_other_directory(qa, target):
     qa.click_text("Other directory…", "roost-sidebar-list-mode")
 
 
+def offer_row(qa, screen, title):
+    """Whether the sidebar lists an offer of TITLE under its task."""
+    return any(re.match(r" +%s.* offer$" % re.escape(title), line) for line in sidebar_rows(screen).split("\n"))
+
+
+def click_offer(qa, title, button=1):
+    """Click the offer of TITLE in the sidebar, which many tasks can scroll
+    out of sight."""
+    qa.emacs.eval("(qa-scroll-to-text %s \"roost-sidebar-list-mode\")" % lisp(title))
+    qa.click_text(title, "roost-sidebar-list-mode", button)
+
+
+WALK_OFFER = "Tally it later"
+
+
+def draft_kept(qa):
+    """Whether a draft still holds what the walk left half written."""
+    return any("Half a thought" in draft for draft in qa.emacs.json("(json-encode (vconcat (qa-drafts)))"))
+
+
+def go_offer(qa, target):
+    # TARGET's agent offers a task as you were away: sent the prompt as `e'
+    # sends one, which moves nothing. Then a click on the offer, once it is
+    # this one: one a pair before left waiting, its agent would offer again
+    # after the click took it.
+    task = "(seq-find (lambda (task) (equal (roost--field task 'name) %s)) (roost-tasks))" % lisp(target)
+    made = lambda: qa.emacs.json("(json-encode (or (alist-get 'at (seq-find (lambda (offer) (equal (alist-get 'title offer)"
+                                 " %s)) (roost--offers %s))) \"\"))" % (lisp(WALK_OFFER), task))
+    before = made()
+    qa.emacs.eval("(progn (roost--act %s \"send\" '((text . %s))) t)" % (task, lisp("offer " + WALK_OFFER)))
+    qa.wait("its offer", lambda s: offer_row(qa, s, WALK_OFFER) and made() not in ("", before))
+    click_offer(qa, WALK_OFFER)
+
+
 WALK_INTERRUPTERS = [
     ("a click on another task", go_click, "other"),
     ("l in the sidebar", go_switch, "other"),
@@ -2799,6 +2889,7 @@ WALK_INTERRUPTERS = [
     ("a click on a notification", go_notification, "other"),
     ("a click in the terminal", go_terminal, None),
     ("a click on a project to start a task in", go_project, None),
+    ("a click on an agent's offer", go_offer, "other"),
     ("a click on Other directory…", go_other_directory, None),
 ]
 
@@ -2809,6 +2900,8 @@ def walk_away(qa, repo):
     draft, a task still opening, a mouse press in a terminal.  Then go to
     a task another way.  The task you went to opens, what you left is quit
     or kept, and nothing waits unseen."""
+    # So that the other task's agent can offer one.
+    qa.emacs.eval("(setq roost-agent-offers t)")
     home = start_task(qa, "Sort the notes")
     # A change of its own, not committed: a line to write a note on in
     # Magit, and a file discarding it would lose.
@@ -2876,6 +2969,16 @@ def walk_away(qa, repo):
                 # A draft begun stays as it is; an untouched one is the project's.
                 opens = ("a new task's draft opens, selected",
                          lambda s: (qa.window(s, "roost-compose-mode") or {}).get("selected"))
+            elif go is go_offer:
+                # A new task's draft you wrote in stays, and so does the
+                # offer; else the offer opens as a draft, and is taken.
+                opens = (("your draft stays, and the offer waits",
+                          lambda s: draft_kept(qa) and offer_row(qa, s, WALK_OFFER))
+                         if leave is leave_draft else
+                         ("the offer's draft opens, selected, and the offer is taken",
+                          lambda s: (qa.window(s, "roost-compose-mode") or {}).get("selected")
+                          and "offered by " + target in qa.window(s, "roost-compose-mode")["text"]
+                          and not offer_row(qa, s, WALK_OFFER)))
             elif go is go_other_directory:
                 # Where more than one host is known, it asks which first.
                 opens = ("its host or folder is the one question open",
@@ -2920,8 +3023,9 @@ def walk_away(qa, repo):
             qa.step(pair, expect=expect)
             if go is go_other_directory:
                 qa.emacs.eval("(setq use-file-dialog t)")
-    # GitHub as other journeys find it.
+    # GitHub and offers as other journeys find them.
     github(qa, list=[], reviews={})
+    qa.emacs.eval("(setq roost-agent-offers nil)")
 
 
 @journey("A second frame")
@@ -3335,6 +3439,94 @@ def fork(qa, repo):
                                               "roost/%s-*" % fork_name)))])
 
 
+@journey("A task an agent offers")
+def offer(qa, repo):
+    """An agent offers a task of its own, which waits under the task that
+    offered it. Opening it takes it, as a draft that starts it under that
+    task, where each panel names the other, and you stay where you were.
+    Or its agent does it, or you dismiss it."""
+    qa.emacs.eval("(setq roost-agent-offers t)")
+    parent = new_task(qa, "offer Document the notes")
+    qa.status(parent, "ready", "idle")
+
+    def under(screen, title, word=None):
+        lines = sidebar_rows(screen).split("\n")
+        row = next((i for i, line in enumerate(lines) if line.startswith(" " + parent[:12])), None)
+        return row is not None and row + 1 < len(lines) and lines[row + 1].startswith("   " + title[:12]) \
+            and (word is None or lines[row + 1].endswith(" " + word))
+
+    qa.wait("the offer under its task", lambda s: under(s, "Document the notes", "offer"))
+    # By name: n goes first to what other journeys left waiting longer.
+    open_task(qa, parent)
+    qa.step("The agent offers a task, which waits under its own", expect=[
+        ("the sidebar lists it under the task that offered it", lambda s: under(s, "Document the notes", "offer")),
+        ("the agent says where it waits",
+         lambda s: "It waits in Roost under this task" in selected_terminal(s)["text"])])
+
+    click_offer(qa, "Document the notes")
+    draft = lambda s: qa.window(s, "roost-compose-mode") or {}
+    qa.wait("its draft", lambda s: draft(s).get("selected"))
+    qa.wait("the offer taken", lambda s: not offer_row(qa, s, "Document the notes"))
+    qa.step("Opening it takes it, as a draft filled in", expect=[
+        ("it names the task that offered it", lambda s: "New task, offered by " + parent in draft(s)["text"]),
+        ("its prompt is the agent's brief", lambda s: "Brief for Document the notes" in draft(s)["text"]),
+        ("an ordinary draft's buttons", lambda s: draft(s).get("header", "").endswith(" Cancel   Create ")),
+        ("the offer no longer waits", lambda s: not offer_row(qa, s, "Document the notes"))])
+    before = {t["key"] for t in qa.screen()["tasks"]}
+    qa.click_in("header", " Create ")
+    qa.wait("the task it offered", lambda s: {t["key"] for t in s["tasks"]} - before)
+    qa.wait("its row", lambda s: under(s, "Document the notes"))
+    qa.step("Started under the task that offered it, and you stay where you were", expect=[
+        ("the sidebar shows it indented under that task", lambda s: under(s, "Document the notes")),
+        ("the draft is gone", lambda s: not draft(s)),
+        ("the terminal of the task that offered it is still yours",
+         lambda s: (s.get("task") or {}).get("name") == parent and selected_terminal(s))])
+    # Where its work lives is a line to unfold, beside a terminal.
+    open_task(qa, "Document the notes")
+    qa.click("▸ Details")
+    qa.step("Its panel names where it came from", expect=[
+        ("it says which task it was started from",
+         lambda s: re.search(r"Started from\s+%s" % re.escape(parent), panel_text(qa, s)))])
+    qa.click("▾ Details")
+    open_task(qa, parent)
+    qa.click("▸ Details")
+    qa.step("The other panel names it", expect=[
+        ("it says which task it started", lambda s: re.search(r"Started\s+Document the notes", panel_text(qa, s)))])
+    qa.click("▾ Details")
+    # Back in its terminal, where the next offer is asked for.
+    open_task(qa, parent)
+
+    # Done by the agent that offered it, from the offer's menu.
+    qa.type("offer Tidy the notes\r")
+    qa.wait("the second offer", lambda s: offer_row(qa, s, "Tidy the notes"))
+    qa.status(parent, "ready", "idle")
+    qa.emacs.eval("(qa-take-popups)")
+    qa.answer_popups("Do it here")
+    click_offer(qa, "Tidy the notes", 3)
+    qa.wait("the offer gone", lambda s: not offer_row(qa, s, "Tidy the notes"))
+    open_task(qa, parent)
+    line = 'PROMPT Do this task here: “Tidy the notes”'
+    qa.wait("the line in its terminal", lambda s: line in (selected_terminal(s) or {}).get("text", ""))
+    qa.step("Done where it was offered", expect=[
+        ("its agent got a line that names it", lambda s: line in selected_terminal(s)["text"]),
+        ("the offer no longer waits, and started nothing",
+         lambda s: not offer_row(qa, s, "Tidy the notes") and not qa.task(s, "Tidy the notes"))])
+
+    # Dismissed, from its menu too.
+    qa.status(parent, "ready", "idle")
+    qa.type("offer Lint the notes\r")
+    qa.wait("the third offer", lambda s: offer_row(qa, s, "Lint the notes"))
+    qa.emacs.eval("(qa-take-popups)")
+    qa.answer_popups("Dismiss")
+    click_offer(qa, "Lint the notes", 3)
+    qa.wait("the offer gone", lambda s: not offer_row(qa, s, "Lint the notes"))
+    qa.step("Dismissed", expect=[
+        ("the offer no longer waits, and started nothing",
+         lambda s: not offer_row(qa, s, "Lint the notes") and not qa.task(s, "Lint the notes")),
+        ("the echo area says so", lambda s: "Dismissed " + parent in (s["echo"] or ""))])
+    qa.emacs.eval("(setq roost-agent-offers nil)")
+
+
 @journey("Start from another branch")
 def other_branch(qa, repo):
     """A task started from a branch merges into it, not the primary checkout's."""
@@ -3383,15 +3575,17 @@ def switched_branch(qa, repo):
                         " && printf 'x\\n' > FEAT.md && git add FEAT.md && git commit -qm 'On feat'"
                         " && git push -q origin %s\"" % (feat, feat, feat))
     answer_yes(qa, name)
-    qa.wait("the branch", lambda s: "worktree is on " + feat in panel_text(qa, s))
+    qa.wait("the branch", lambda s: "▲ On " + feat in panel_text(qa, s))
     qa.step("On another branch", expect=[
-        ("the panel says how to finish it",
-         lambda s: ("Its worktree is on %s, not the task's branch: x discards the task, keeping %s; to merge its work"
-                    " with m or P" % (feat, feat)) in panel_text(qa, s)),
+        ("the panel says so first, under the task's name",
+         lambda s: re.match(r"[^\n]*\n[^\n]*\n▲ On %s, not the task's branch roost/[^ ]*, so the changes\s+below"
+                            r"\s+are\s+%s's\." % (feat, feat), panel_text(qa, s))),
+        ("then how to finish it",
+         lambda s: ("x discards the task, keeping %s; to merge its work with m or P" % feat) in panel_text(qa, s)
+         and "Its worktree is on" not in panel_text(qa, s)),
         ("its changes are that branch's, said once",
-         lambda s: re.search(r"These are %s's changes, not roost/[^ ]*'s\.\n\s*Committed\n\s*FEAT\.md" % feat,
-                             panel_text(qa, s))
-         and "The worktree is on" not in panel_text(qa, s)),
+         lambda s: re.search(r"Committed\n\s*FEAT\.md", panel_text(qa, s))
+         and panel_text(qa, s).count("▲") == 1),
         ("its row doesn't say merged", lambda s: not sidebar_row(qa, s, name).endswith("merged"))])
     # GitHub's word counts once asked half a minute after the agent's last
     # event, its push and the end of its turn, which come before this.
@@ -3987,8 +4181,9 @@ JOURNEYS = [sweep, answer, next_waiting, fold, resize, merge, review, notes, sin
             dashboard, panel_keys, stop_resume, retire, discard, teardown, send, attach, update, conflicts, restart,
             search, workload, question_left,
             walk_away,
-            frames, draft_frames, org, drafts, draft_fields, by_clicks, clicks, overlap, region, tabs, own_workspace,
-            forget, rename, fork, other_branch, switched_branch, merged, large, pull_request, merge_request, exits,
+            frames, draft_frames, org, drafts, draft_fields, by_clicks, conversation, clicks, overlap, region, tabs,
+            own_workspace,
+            forget, rename, fork, offer, other_branch, switched_branch, merged, large, pull_request, merge_request, exits,
             include, slow_create,
             unreachable,
             doctor, scrollback,

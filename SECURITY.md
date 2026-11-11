@@ -44,6 +44,14 @@ worth scrutiny:
 - **What agents report.** Hook payloads, and the transcripts the helper
   reads for an agent's latest reply and what it asks, are written by the
   agent, and through it by anything it read.
+- **What agents offer.** With `roost-agent-offers` on, an agent offers a
+  task through Roost's MCP server, whose tool for it, which the task's own
+  Claude settings allow without asking, writes a title, a brief and, for
+  a task in another project, that project's folder into that task's
+  record. A conversation's agent may also read, without asking, the files
+  of the projects its host has run tasks in. Opened, the brief becomes a new task's prompt, after
+  you read it in the draft; Do it here sends only a fixed line with the
+  title.
 - **What GitHub says.** Pull request titles, checks and review comments,
   and issues, come from `gh`. An issue's text becomes a task's prompt as
   written; Roost shows it in the draft before the agent gets it.

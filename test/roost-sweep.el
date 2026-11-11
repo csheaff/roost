@@ -81,6 +81,7 @@ KIND is `committed', `uncommitted', `untracked' or `binary'."
     ("opencode failed turn" (status . "failed") (agent . "opencode") (live . t) (lastEvent . "StopFailure")
      (error . "Its turn ended on an error (APIError): invalid x-api-key"))
     ("running" (status . "running") (live . t) (task . ,roost-sweep--long-prompt)
+     (activity . "Running python3 -m unittest discover -s test -p 'test_*.py'")
      (diff . "") (ahead . 0))
     ("in the background, under a name longer than a narrow sidebar" (status . "background") (live . t)
      (diff . "") (ahead . 0))
@@ -100,6 +101,10 @@ KIND is `committed', `uncommitted', `untracked' or `binary'."
      (diff . "1 file +12 −3") (ahead . 2) (files . ,(roost-sweep--files '("report.py" . committed))))
     ("seen" (status . "ready") (live . t) (lastMessage . "Done.") (seen . "2026-10-03T20:00:00+00:00")
      (diff . "") (ahead . 0))
+    ;; In no project of yours: in the helper's own repository.
+    ("conversation" (status . "ready") (live . t) (conversation . t)
+     (repo . "/home/user/.local/share/roost/conversations") (integrationBranch . "main")
+     (lastMessage . "Short answer: yes, but only if the hosts share a clock.") (diff . "") (ahead . 0))
     ("interrupted" (status . "ready") (lastEvent . "Interrupt") (live . t) (diff . "") (ahead . 0))
     ("failed turn" (status . "failed") (live . t) (error . "You've hit your usage limit")
      (diff . "") (ahead . 0))
@@ -221,11 +226,28 @@ KIND is `committed', `uncommitted', `untracked' or `binary'."
                               '("docs" "scripts" "src" "test" "tools")))))
     ("with notes" (status . "ready") (live . t) (dirty . t) (diff . "1 file +4 −1 · uncommitted")
      (files . ,(roost-sweep--files '("ledger.py" . uncommitted))))
+    ;; Its agent offered a task, which waits under it for you.
+    ("offers a task" (status . "ready") (live . t)
+     (offers ((id . "0a1b2c3d") (title . "Show each budget's total in the report")
+              (brief . "The report lists each entry but no budget's total.\n\nAdd one per budget.")
+              (at . "2026-10-03T19:58:00+00:00"))))
+    ;; Offered by the agent of the state named, and started by you.
+    ("started from another task" (status . "running") (live . t) (parentState . "offers a task"))
+    ("started from a task since retired" (status . "ready") (live . t) (parent . "ffffffffffffffff"))
+    ;; Two of the three tasks a draft made from one prompt: both change
+    ;; ledger.py, and each a file the other leaves alone.  The third is finished.
+    ("first attempt" (status . "ready") (live . t) (seen . "2026-10-03T20:00:00+00:00") (ahead . 1)
+     (attempt (group . "a77e3b7a77e3b7a7") (n . 1) (of . 3)) (diff . "2 files +24 −6")
+     (files . ,(roost-sweep--files '("ledger.py" . committed) '("report.py" . committed))))
+    ("second attempt" (status . "ready") (live . t) (dirty . t) (ahead . 0)
+     (attempt (group . "a77e3b7a77e3b7a7") (n . 2) (of . 3)) (diff . "2 files +4 −1 · uncommitted")
+     (files . ,(roost-sweep--files '("ledger.py" . uncommitted) '("notes.md" . untracked))))
     ("unreachable host" (host . "gone") (status . "running") (live . t)))
   "Task states the views are drawn for: (NAME . FIELDS).
 FIELDS go over those of `roost-test--task', on host \"dev\" unless they
-name another.  Each state is a task of its own, with an ID from its
-place here, so the dashboard and sidebar show them all at once.")
+name another; parentState names the state whose task's agent offered
+this one.  Each state is a task of its own, with an ID from its place
+here, so the dashboard and sidebar show them all at once.")
 
 (defun roost-sweep--key (name)
   "The key of the task for gallery state NAME."
@@ -250,8 +272,10 @@ Each has what a host lists for every task, as where it started and the
 size of its changes, unless its state says otherwise."
   (cl-loop for (name . fields) in roost-sweep--gallery
            for key = (roost-sweep--key name)
+           for parent = (alist-get 'parentState fields)
            do (roost--cache-task (car key)
-                                 (append (assq-delete-all 'host (copy-tree fields))
+                                 (append (assq-delete-all 'host (assq-delete-all 'parentState (copy-tree fields)))
+                                         (when parent `((parent . ,(cadr (roost-sweep--key parent)))))
                                          `((id . ,(cadr key)) (name . ,name) (repo . "/home/user/ledger")
                                            (branch . ,(format "roost/%s" (replace-regexp-in-string " " "-" name)))
                                            (baseRef . "main")
@@ -278,7 +302,7 @@ size of its changes, unless its state says otherwise."
       start-file-process call-process roost--notify
       ;; A task's terminal, the menu, other packages and the browser
       roost--display-task transient-setup magit-status magit-diff-working-tree magit-diff-dwim
-      find-file find-file-other-window dired browse-url popup-menu x-popup-menu)
+      find-file find-file-other-window dired browse-url popup-menu x-popup-menu ediff-files)
     "Functions that reach outside the view.
 Called, they are recorded and stop the command.")
 
@@ -440,6 +464,22 @@ among them."
     (dolist (file (seq-take files 2))
       (insert "\n\n" (roost--quoting file) ":3-4\n\ntotal = 0"))))
 
+(defun roost-sweep--offer-draft-setup (state)
+  "Make the current buffer the draft that STATE's task's agent's offer opened."
+  (let ((inhibit-modification-hooks t))
+    (setq roost--compose-body (copy-marker (point-min))
+          roost--compose-fields (list :directory "/ssh:dev:/home/user/ledger/" :agent "claude"
+                                      :base "refs/heads/main" :integration "main"
+                                      :name "Show each budget's total" :parent (roost-sweep--key state)))
+    (insert "Add one per budget.")))
+
+(defun roost-sweep--attempts-setup (state)
+  "Make the current buffer compare the attempts STATE's task is one of.
+For a task that is none, attempts that have all gone since."
+  (let ((task (gethash (roost-sweep--key state) roost--tasks)))
+    (setq roost--attempts-shown
+          (list (roost--field task 'host) (or (alist-get 'group (roost--attempt task)) "gone")))))
+
 (defvar roost-sweep--views
   '((panel :mode roost-task-info-mode :render roost--render-task-info :widths (40 100)
            :layouts (selected none other both) :setup roost-sweep--panel-setup)
@@ -455,7 +495,13 @@ among them."
               :keys (roost-workload))
     (draft :mode roost-compose-mode :render roost--compose-render :buffer "*roost new task*"
            :layouts (selected none other both) :setup roost-sweep--draft-setup
-           :keys (roost-compose-submit roost-compose-cancel roost-compose-set-project)))
+           :keys (roost-compose-submit roost-compose-cancel roost-compose-set-project))
+    (offer-draft :mode roost-compose-mode :render roost--compose-render :buffer "*roost new task*"
+                 :layouts (selected none other both) :setup roost-sweep--offer-draft-setup
+                 :keys (roost-compose-submit roost-compose-cancel roost-compose-set-project))
+    (attempts :mode roost-attempts-mode :render roost--render-attempts
+              :layouts (selected none other both) :setup roost-sweep--attempts-setup :point roost-sweep--row
+              :keys (roost-attempts-visit roost-attempts-merge roost-attempts-refresh)))
   "Roost's views, each (NAME . PLIST).
 :mode makes the buffer, :setup gives it what it shows for a state,
 :render draws it, :point finds the state's task in it, and :buffer names
@@ -835,6 +881,41 @@ A buffer named with a leading space goes without Font Lock, so
         (kill-buffer buffer)
         problems))))
 
+(defun roost-sweep--check-decoration (view state width)
+  "Problems with what `roost-decorate' draws on VIEW for STATE at WIDTH.
+It may add colours and say where things show, and no more: the text is
+the same with it and without, so a terminal with few colours, and
+whoever turns it off, reads the same words."
+  (let ((drawn (lambda (decorated)
+                 (let (text tinted)
+                   (roost-sweep--world
+                     (save-window-excursion
+                       (cl-letf (((symbol-function 'roost--decorated-p) (lambda () decorated))
+                                 ;; Batch Emacs has no colours to mix.
+                                 ((symbol-function 'roost--mix)
+                                  (lambda (&rest _) (and decorated "#123456"))))
+                         (let ((roost-decorate decorated)
+                               (buffer (roost-sweep--draw view state width)))
+                           (setq text (roost-sweep--text)
+                                 tinted (text-property-any (point-min) (point-max) 'roost-tint t))
+                           (kill-buffer buffer)))))
+                   (cons text tinted)))))
+    (pcase-let ((`(,plain . ,_) (funcall drawn nil))
+                (`(,decorated . ,marked) (funcall drawn t)))
+      (delq nil
+            (list (unless (equal plain decorated)
+                    (format "decorated, its text differs: %S, not %S"
+                            (roost-sweep--difference decorated plain) (roost-sweep--difference plain decorated)))
+                  ;; The mark that says what to tint is taken off once it has.
+                  (when marked "it keeps a mark of what to tint"))))))
+
+(defun roost-sweep--difference (text other)
+  "The line of TEXT where it first differs from OTHER."
+  (let ((mine (split-string text "\n")) (theirs (split-string other "\n")))
+    (while (and mine theirs (equal (car mine) (car theirs)))
+      (setq mine (cdr mine) theirs (cdr theirs)))
+    (car mine)))
+
 (defun roost-sweep--project-row-failure (label key)
   "The Lisp error from KEY on the sidebar's row LABEL for a new task, or nil.
 KEY is a key sequence, or the name of a mouse event."
@@ -910,7 +991,7 @@ Return them as (PROBLEM . PLACES), PLACES naming the view, state and width."
     (dolist (view views)
       (dolist (state (mapcar #'car roost-sweep--gallery))
         (dolist (width (or (roost-sweep--view view :widths) '(nil)))
-          (dolist (problem (funcall rule view state width))
+          (dolist (problem (and (roost-test--mine-p) (funcall rule view state width)))
             (let ((place (format "%s, %s%s" view state (if width (format " at %d" width) "")))
                   (entry (assoc problem problems)))
               (if entry
@@ -941,7 +1022,10 @@ Return them as (PROBLEM . PLACES), PLACES naming the view, state and width."
              (pcase action
                (`(button ,label . ,_) (cl-pushnew label buttons :test #'equal))
                (`(key ,_ . ,command) (cl-pushnew (cons view command) keys :test #'equal)))))))
-     (dolist (label '("Show the whole prompt" "Show the whole reply" "ledger.py" "notes.md" "#12" "#70"
+     ;; A narrow panel folds its prompts under a line of the latest one,
+     ;; and its details under another.
+     (dolist (label '("▸ Make the report show how much is lef…" "▸ Now flag the categories that are ove…"
+                      "▸ Details" "Show the whole reply" "ledger.py" "notes.md" "#12" "#70"
                       "probe" "the report" "https://example.com/ci" "+" "conflicts with main"
                       "ledger.py:3"))
        (should (member label buttons)))
@@ -951,8 +1035,11 @@ Return them as (PROBLEM . PLACES), PLACES naming the view, state and width."
              (dolist (command commands) (should (member (cons view command) found)))
            (should (length> found 6))))))
    (pcase-dolist (`(,view ,state ,width ,action)
-                  '((panel "running" 40 (button "Show the whole prompt" . 0))
-                    (panel "after a later prompt" 40 (button "Show the whole prompt" . 0))
+                  '((panel "running" 40 (button "▸ Make the report show how much is lef…" . 0))
+                    (panel "after a later prompt" 40 (button "▸ Now flag the categories that are ove…" . 0))
+                    (panel "running" 40 (button "▸ Details" . 0))
+                    (panel "running" 100 (button "Show the whole prompt" . 0))
+                    (panel "after a later prompt" 100 (button "Show the whole prompt" . 0))
                     (panel "permission" 40 (button "Show the whole reply" . 0))
                     (search "running" nil (key [?\t] . roost-search-toggle))))
      (let ((start (roost-sweep--try view state width nil))
@@ -997,14 +1084,22 @@ Return them as (PROBLEM . PLACES), PLACES naming the view, state and width."
                                           t)))))))))
 
 (ert-deftest roost-sweep-views-draw-the-same-each-time ()
+  :tags '(sliced)
   (roost-test--isolated
    (roost-sweep--report (roost-sweep--run #'roost-sweep--check-drawing (mapcar #'car roost-sweep--views)))))
 
 (ert-deftest roost-sweep-buttons-and-keys-work-and-their-changes-go-back ()
+  :tags '(sliced)
   (roost-test--isolated
    (roost-sweep--report (roost-sweep--run #'roost-sweep--check-actions (mapcar #'car roost-sweep--views)))))
 
+(ert-deftest roost-sweep-decoration-changes-no-text ()
+  :tags '(sliced)
+  (roost-test--isolated
+   (roost-sweep--report (roost-sweep--run #'roost-sweep--check-decoration (mapcar #'car roost-sweep--views)))))
+
 (ert-deftest roost-sweep-clicks-never-ask ()
+  :tags '(sliced)
   ;; A click that asked which task left the question open, hidden by a
   ;; completion popup once you clicked again, and every later open
   ;; waited behind it.
@@ -1014,11 +1109,13 @@ Return them as (PROBLEM . PLACES), PLACES naming the view, state and width."
                                                       (mapcar #'car roost-sweep--views))))))
 
 (ert-deftest roost-sweep-named-keys-apply ()
+  :tags '(sliced)
   ;; Only the task panel says what to do next.
   (roost-test--isolated
    (roost-sweep--report (roost-sweep--run #'roost-sweep--check-named-keys '(panel)))))
 
 (ert-deftest roost-sweep-named-keys-can-be-clicked ()
+  :tags '(sliced)
   (roost-test--isolated
    (roost-sweep--report (roost-sweep--run #'roost-sweep--check-key-clicks '(panel)))))
 
@@ -1043,6 +1140,7 @@ Return them as (PROBLEM . PLACES), PLACES naming the view, state and width."
                (should-not (roost--waiting-p task))))))))))
 
 (ert-deftest roost-sweep-the-sidebar-needs-no-font-lock ()
+  :tags '(sliced)
   (roost-test--isolated
    (roost-sweep--report (roost-sweep--run #'roost-sweep--check-plain-faces '(sidebar)))))
 
@@ -1063,6 +1161,7 @@ Return them as (PROBLEM . PLACES), PLACES naming the view, state and width."
      (should-not problems))))
 
 (ert-deftest roost-sweep-n-says-where-it-went-and-why ()
+  :tags '(sliced)
   (roost-test--isolated
    (roost-sweep--report (roost-sweep--run #'roost-sweep--check-next-message '(echo)))
    ;; It looked at tasks of each kind that wait.

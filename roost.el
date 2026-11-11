@@ -32,6 +32,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'color)
 (require 'json)
 (require 'subr-x)
 (require 'seq)
@@ -73,6 +74,7 @@
 (declare-function magit-insert-heading "magit-section" (&rest args))
 (declare-function magit-add-section-hook "magit-section" (hook function &optional at append local))
 (declare-function magit--insert-log "magit-log" (keep-error revs &optional args files))
+(declare-function magit-insert-log "magit-log" (revs &optional args files))
 (declare-function magit-log-insert-child-count "magit-log" ())
 (declare-function magit-rev-verify "magit-git" (rev))
 (declare-function magit-diff-range "magit-diff" (rev-or-range &optional args files))
@@ -97,7 +99,11 @@
 (declare-function svg-rectangle "svg" (svg x y width height &rest args))
 (declare-function svg-line "svg" (svg x1 y1 x2 y2 &rest args))
 (declare-function svg-image "svg" (svg &rest props))
+(declare-function svg-circle "svg" (svg x y radius &rest args))
+(declare-function svg-polygon "svg" (svg points &rest args))
+(declare-function svg-polyline "svg" (svg points &rest args))
 (declare-function dired-get-marked-files "dired" (&optional localp arg filter distinguish-one-marked error))
+(declare-function ediff-files "ediff" (file-a file-b &optional startup-hooks))
 (declare-function evil-define-minor-mode-key "evil-core" (state mode key def &rest bindings))
 (declare-function evil-normalize-keymaps "evil-core" (&optional state))
 (declare-function org-back-to-heading "org" (&optional invisible-ok))
@@ -113,6 +119,8 @@
 (defvar magit-diff-buffer-file-locked)
 (defvar magit-buffer-diff-files)
 (defvar magit-buffer-diff-range)
+(defvar magit-buffer-range)
+(defvar magit-root-section)
 (defvar magit-status-headers-hook)
 (defvar magit-status-sections-hook)
 (defvar magit-refresh-buffer-hook)
@@ -353,6 +361,43 @@ for Claude Code when you press Esc or decline one, which hooks don't
 report.  New tasks, and tasks you resume, follow this."
   :type 'boolean)
 
+(defcustom roost-agent-offers t
+  "Whether a task's agent can offer tasks of their own, for you to start.
+An agent that comes across work outside its task, such as a bug in
+code it read, offers it, and goes on with its own work.  The offer
+waits, dim, under its task in the dashboard and sidebar, until you open
+it as a new task draft, have that agent do it there, or dismiss it.
+An agent in a conversation, which has no project, offers tasks in your
+projects: ask it to plan a piece of work, and each task it would split
+it into waits under the conversation for you to start.
+Roost gives the agent tools for this, from an MCP server of its own,
+with a few sentences on when to use them, which cost tokens on each of
+its requests.  Only Claude Code takes them so far.  Tasks you start
+after changing this follow it; nil gives agents no tools of Roost's."
+  :type 'boolean)
+
+(defcustom roost-remote-control nil
+  "Whether each Claude Code task starts with Remote Control, named for the task.
+The task then shows in the Claude app and at claude.ai/code, by its
+name, where you can read it and answer it, and which notify your phone
+when its agent needs a decision.  Its name also shows in Claude's own
+list of sessions.  Roost starts Claude with `--remote-control' and
+`--name' for this; Remote Control needs a Claude subscription, and
+Claude says so in the task's terminal without one.  Other agents have
+no such app, and start as ever.  Tasks you start after changing this
+follow it."
+  :type 'boolean)
+
+(defcustom roost-decorate t
+  "Whether Roost's views are drawn with more than their text.
+A quiet tint behind a status that wants you, a band behind what is
+wrong with a task, a hairline under each view's heading, changed lines
+in a column, and a little air between lines.  Each colour is made from
+your theme's own, afresh when the theme changes, and no text differs:
+nil draws the same words with none of it, as a terminal with few
+colours does anyway."
+  :type 'boolean)
+
 (defcustom roost-notes-file (locate-user-emacs-file "roost/notes.json")
   "Local file keeping review notes not yet sent to an agent.
 See `roost-note'."
@@ -364,6 +409,82 @@ See `roost-note'."
   "Titles of Roost buffers.")
 (defface roost-heading '((t :inherit bold))
   "Group and section headings.")
+(defface roost-label '((t :inherit shadow))
+  "Face for the word that names a block of the task panel.
+Quiet: what the block holds is what you read.")
+
+;;;; Colours made from the theme's
+
+(defvar roost--mixed (make-hash-table :test 'equal)
+  "Colours `roost--mix' made, by what they were made from.")
+
+(defun roost--mix (colour onto amount)
+  "COLOUR laid over ONTO, AMOUNT of it from 0 to 1, as a colour's name.
+Nil where either can't be read as a colour, as on a terminal that
+leaves its own unsaid."
+  (let ((key (list colour onto amount)))
+    (or (gethash key roost--mixed)
+        (when-let* (((stringp colour))
+                    ((stringp onto))
+                    (over (ignore-errors (color-name-to-rgb colour)))
+                    (under (ignore-errors (color-name-to-rgb onto))))
+          (puthash key
+                   (apply #'color-rgb-to-hex
+                          (append (cl-mapcar (lambda (a b) (+ (* amount a) (* (- 1 amount) b))) over under)
+                                  '(2)))
+                   roost--mixed)))))
+
+(defun roost--decorated-p ()
+  "Whether this display can show what `roost-decorate' draws."
+  (and roost-decorate (display-color-p) (> (display-color-cells) 255)))
+
+(defun roost--tint (face &optional amount)
+  "A background that says FACE's colour quietly: AMOUNT of it on the frame's own.
+An eighth unless given.  Nil where `roost-decorate' is off or the
+display can't show it; then the text stands as it is."
+  (when (roost--decorated-p)
+    (roost--mix (face-foreground face nil t) (face-background 'default nil t) (or amount 0.125))))
+
+(defun roost--hairline ()
+  "The colour of the lines Roost rules under headings: the text's, faintly."
+  (when (roost--decorated-p)
+    (roost--mix (face-foreground 'default nil t) (face-background 'default nil t) 0.22)))
+
+(defun roost--ruled (line)
+  "LINE, which ends in a newline, with a hairline under it to the window's edge.
+Where the display shows one; else LINE as it is."
+  (if-let* ((colour (roost--hairline)))
+      (let ((line (copy-sequence line)))
+        (add-face-text-property 0 (length line)
+                                (list :underline (list :color colour :position t) :extend t) t line)
+        line)
+    line))
+
+(defun roost--banded (line face)
+  "LINE, which ends in a newline, on a band of FACE's colour to the window's edge.
+For what is wrong and wants you.  Where the display shows one; else
+LINE as it is."
+  (if-let* ((tint (roost--tint face)))
+      (let ((line (copy-sequence line)))
+        (add-face-text-property 0 (length line) (list :background tint :extend t) t line)
+        line)
+    line))
+
+(defun roost--tinted (text face &optional amount)
+  "TEXT on a tint of FACE's colour, AMOUNT of it, where the display shows one.
+TEXT's own faces stay as they are, over the tint."
+  (if-let* ((tint (roost--tint face amount)))
+      (let ((text (copy-sequence text)))
+        (add-face-text-property 0 (length text) (list :background tint) t text)
+        text)
+    text))
+
+(defconst roost--line-spacing 0.1
+  "The space between the rows of Roost's lists, as a part of a line's height.
+With `roost-decorate': rows are easier to tell apart with a little air
+between them.  Not in a task's panel, which is read rather than scanned
+and has little height to spare beside a terminal.")
+
 (defface roost-dim '((t :inherit shadow))
   "Secondary text: labels, timestamps, prompts.")
 (defface roost-key '((t :inherit help-key-binding))
@@ -1129,6 +1250,37 @@ bringing back the old name, which the task's tab and panel no longer have."
         (when-let* ((cell (assq field old)))
           (setq task (cons cell (assq-delete-all field task))))))))
 
+(defun roost--newer-offers (task old)
+  "TASK, with OLD's offers when they changed since TASK was read.
+An offer made or taken is no event of the agent's, which
+`roost--newer-events' goes by: this keeps a reply read before you took
+an offer from bringing it back, and one read before an offer was made
+from hiding it."
+  (let ((changed (roost--field old 'offersAt)))
+    (if (not (and (stringp changed)
+                  (string< (or (roost--field task 'offersAt) "") changed)))
+        task
+      (dolist (field '(offers offersAt) task)
+        (setq task (assq-delete-all field task))
+        (when-let* ((cell (assq field old)))
+          (setq task (cons cell task)))))))
+
+(defun roost--newer-branch (task old)
+  "TASK, with the branch OLD merges into when that changed since TASK was read.
+Changing it, as `roost-retarget' does, is no event of the agent's, which
+`roost--newer-events' goes by: this keeps a reply read before the
+change, such as one to stopping the task, from bringing back the branch
+it merged into before, which `m' would then ask about while its host
+merged it into the other."
+  (let ((changed (roost--field old 'retargetedAt)))
+    (if (not (and (stringp changed)
+                  (string< (or (roost--field task 'retargetedAt) "") changed)))
+        task
+      (dolist (field '(baseRef baseCommit integrationBranch integrationRef retargetedAt) task)
+        (setq task (assq-delete-all field task))
+        (when-let* ((cell (assq field old)))
+          (setq task (cons cell task)))))))
+
 (defun roost--newer-look (task old)
   "TASK, with OLD's record of where you last looked when that is newer.
 A reply its host read before you last looked at the task, such as a
@@ -1169,13 +1321,17 @@ A reply to create read before then can come after.")
 (defun roost--cache-task (host task)
   "Cache TASK from HOST and notify only on attention transitions."
   (setf (alist-get 'host task) host)
-  (dolist (field '(pushed alreadySent alreadyMade))
+  (dolist (field '(pushed alreadySent alreadyMade note))
     (setq task (assq-delete-all field task)))
   (when-let* ((old (gethash (roost--key task) roost--tasks)))
     ;; Looks and the agent's events move apart: the newer of each counts.
     (let ((looked (roost--newer-look old task)))
       (setq task (roost--kept-reviews
-                  (roost--newer-look (roost--newer-name (roost--newer-events task old) old) looked)
+                  (roost--newer-look (roost--newer-branch
+                                      (roost--newer-offers (roost--newer-name (roost--newer-events task old) old)
+                                                           old)
+                                      old)
+                                     looked)
                   old))))
   (let* ((key (roost--key task))
          (old (gethash key roost--tasks))
@@ -1494,20 +1650,25 @@ in `roost--list-requests'; without one, TASKS count as asked for now."
     (remhash host roost--errors)))
 
 (defun roost--task-states (host)
-  "HOST's tasks, cached, as ID to (STATUS UPDATED-AT GIT-STAMP PR LOOKED).
+  "HOST's tasks, cached, as ID to (STATUS UPDATED-AT GIT-STAMP PR LOOKED INTO).
 Each agent hook event, such as finishing a tool, moves UPDATED-AT; Git
 commands in the worktree, such as your commit, change GIT-STAMP.  PR is
 the state its host recorded of its pull request, which another Emacs
 may have changed: closed, it no longer says whether the task conflicts.
 LOOKED is when you last looked at it, from this Emacs or another, which
-what changed since is measured against."
+what changed since is measured against.  INTO is the branch it merges
+into, which `B' in another Emacs, or one whose reply was lost, may have
+changed: what it is ahead of, and whether it is merged, are measured
+against that, and its reflog may have the time the other's had, which
+leaves GIT-STAMP as it was."
   (let (states)
     (maphash (lambda (key task)
                (when (equal (car key) host)
                  (push (list (cadr key) (roost--field task 'status)
                              (roost--field task 'updatedAt) (roost--field task 'gitStamp)
                              (alist-get 'state (roost--field task 'pr))
-                             (alist-get 'at (roost--field task 'looked)))
+                             (alist-get 'at (roost--field task 'looked))
+                             (roost--field task 'integrationBranch))
                        states)))
              roost--tasks)
     states))
@@ -1925,8 +2086,9 @@ A folder there can be named ~, which isn't your home."
 (defun roost--task-at-point ()
   "Task selected in the dashboard, terminal, linked Org entry, or workspace."
   (cond
-   ;; A search result of a live task is marked like a dashboard row.
-   ((derived-mode-p 'roost-dashboard-mode 'roost-search-mode)
+   ;; A search result of a live task is marked like a dashboard row, and
+   ;; so is an attempt among those compared.
+   ((derived-mode-p 'roost-dashboard-mode 'roost-search-mode 'roost-attempts-mode)
     (roost--dashboard-task))
    (roost--buffer-task-key
     (or (gethash roost--buffer-task-key roost--tasks)
@@ -2964,12 +3126,24 @@ a word, within 40 characters."
   (or (cdr (assoc agent roost-agent-commands))
       (list agent)))
 
+(defvar roost--project-values nil
+  "What `roost--project-value' has read, while a command binds this to (t).
+Then a list of t and each ((DIRECTORY . VARIABLE) . VALUE).  A command
+that asks a host for several things of one project, as a draft that
+makes several attempts, reads each value once, so that Emacs asks about
+the project's local variables once.")
+
 (defun roost--project-value (directory variable)
   "VARIABLE's value for the project in DIRECTORY, which may set it locally."
-  (with-temp-buffer
-    (setq default-directory directory)
-    (hack-dir-local-variables-non-file-buffer)
-    (symbol-value variable)))
+  (if-let* ((read (assoc (cons directory variable) (cdr roost--project-values))))
+      (cdr read)
+    (let ((value (with-temp-buffer
+                   (setq default-directory directory)
+                   (hack-dir-local-variables-non-file-buffer)
+                   (symbol-value variable))))
+      (when roost--project-values
+        (push (cons (cons directory variable) value) (cdr roost--project-values)))
+      value)))
 
 (defun roost--create-task (directory name base prompt agent &optional on-success on-failure extra)
   "Create an AGENT task NAME in DIRECTORY from BASE with PROMPT.
@@ -2979,7 +3153,9 @@ EXTRA is an alist of further request fields, such as the issue."
   (unless (member agent roost--agents)
     (user-error "Unsupported Roost agent: %s" agent))
   (let ((host (roost--directory-host directory))
-        (setup (roost--project-value directory 'roost-setup-command))
+        ;; A conversation is in no project of yours, so none's setup runs.
+        (setup (unless (alist-get 'conversation extra)
+                 (roost--project-value directory 'roost-setup-command)))
         (stayed (roost--you-stay)))
     (roost--request
      host "create"
@@ -2992,6 +3168,8 @@ EXTRA is an alist of further request fields, such as the issue."
            ,(cons 'setup setup)
            ,(cons 'branchPrefix roost-branch-prefix)
            ,(cons 'programStatus (if roost-program-status t :false))
+           ,(cons 'mayOffer (if roost-agent-offers t :false))
+           ,(cons 'remoteControl (if roost-remote-control t :false))
            ,(cons 'size (roost--terminal-size))
            ,(cons 'socket (or roost-socket-name
                               (bound-and-true-p tmux-control-default-socket-name)
@@ -3012,9 +3190,10 @@ ON-SUCCESS also gets whether an earlier request made it, which its host
 says.  Then open it, if STAYED, called once you are out of the minibuffer
 and before ON-SUCCESS moves anything, says you are still where you asked
 for it: making a task can take minutes.  Not if ON-SUCCESS returns
-non-nil, as for a draft that stays, which you are writing in."
+non-nil, as for a draft that stays, which you are writing in, or the
+draft of an agent's offer, which leaves you where you are."
   (roost--remember-host host)
-  (when (roost--field task 'repo)
+  (when (and (roost--field task 'repo) (not (roost--conversation-p task)))
     (roost--remember-project (roost--project-directory (cons (cons 'host host) task))))
   (let ((found (roost--field task 'alreadyMade)))
     ;; Unless it went since a list showed it, as you finished it: the reply
@@ -3032,9 +3211,49 @@ non-nil, as for a draft that stays, which you are writing in."
          (when (and stayed (not kept) (gethash (roost--key task) roost--tasks))
            (roost-open-task task))))))
   ;; By the name it has: asked again, its host answers with the task it made.
-  (message "Roost created %s on %s from %s; it merges into %s"
-           (or (roost--field task 'name) name) (roost--host-label host)
-           (roost--field task 'baseRef) (roost--field task 'integrationBranch)))
+  (if (roost--conversation-p task)
+      (message "Roost started %s on %s" (or (roost--field task 'name) name) (roost--host-label host))
+    (message "Roost created %s on %s from %s%s; it merges into %s"
+             (or (roost--field task 'name) name) (roost--host-label host)
+             (roost--field task 'baseRef)
+             (if-let* ((forked (roost--field task 'forkedFrom)))
+                 (format ", going on with %s's conversation" (alist-get 'name forked))
+               "")
+             (roost--field task 'integrationBranch))))
+
+(defun roost--conversation-p (task)
+  "Whether TASK is a conversation, in no project of yours."
+  (eq (roost--field task 'conversation) t))
+
+(defun roost--refuse-conversation (task why)
+  "Refuse to act on TASK if it is a conversation, saying it WHY."
+  (when (roost--conversation-p task)
+    (user-error "%s is a conversation, which %s; x ends it" (roost--field task 'name) why)))
+
+(defun roost--conversation-name ()
+  "A name for a new conversation: when it starts, and a number if taken."
+  (let* ((base (format-time-string "Conversation %H:%M"))
+         (taken (mapcar (lambda (task) (roost--field task 'name)) (roost-tasks)))
+         (name base) (n 1))
+    (while (member name taken)
+      (setq name (format "%s (%d)" base (cl-incf n))))
+    name))
+
+;;;###autoload
+(defun roost-new-conversation (&optional host)
+  "Start a conversation with an agent, in no project of yours.
+It opens the agent's own terminal at once, with nothing to write first:
+you say what you want there.  Its host keeps it in a folder of its own,
+so it has no branch to merge, and `roost-retire' ends it.  On HOST, nil
+for this machine; with a prefix argument, ask which."
+  (interactive
+   (list (when current-prefix-arg
+           (let* ((here "This machine")
+                  (pick (completing-read "Conversation on: " (cons here (roost--hosts)) nil nil)))
+             (unless (or (string-empty-p pick) (equal pick here)) pick)))))
+  (roost--create-task (if host (roost--host-directory host "~") (expand-file-name "~/"))
+                      (roost--conversation-name)
+                      nil nil nil nil nil '((conversation . t))))
 
 ;;;###autoload
 (defun roost-new-task (&optional directory name base prompt agent)
@@ -3043,7 +3262,9 @@ Interactively, open a buffer to choose the project, agent and starting
 point and to write the prompt; \\<roost-compose-mode-map>\\[roost-compose-submit] creates the task.
 An active region, or the Org entry at point, starts the prompt; code is
 quoted with its file and lines.  With a prefix argument, the defaults
-fork the current task's committed HEAD.
+fork the current task: its commits, and, once its agent has a
+conversation, that conversation and the task's uncommitted changes,
+which \\<roost-compose-mode-map>\\[roost-compose-set-conversation] in the draft trades for a new conversation.
 
 Called with DIRECTORY, create an AGENT task NAME there directly, from
 BASE with optional PROMPT.  DIRECTORY may be a TRAMP path.  Nil BASE uses
@@ -3143,7 +3364,15 @@ DIRECTORY's checkout, or a project Roost knows it is in."
 (defconst roost--compose-buffer "*roost new task*")
 
 (defvar-local roost--compose-fields nil
-  "Plist of the draft task: :directory :agent :base :integration :name :source.")
+  "Plist of the draft task: :directory :agent :base :integration :name :source.
+A draft of an agent's offer also has :parent, the key of the task whose
+agent offered it, which the task it makes shows under, and :offer, the
+offer's ID, which its host drops then, should taking it have failed.
+A fork also has :source-id and :source-agent, its task's, and
+:conversation, whether it goes on with that task's conversation.
+A draft that makes several attempts at its prompt has :attempts: how
+many, each by its agent, or the agents of those after the first.")
+
 (defvar-local roost--compose-body nil
   "Marker at the start of the prompt text.")
 (defvar-local roost--compose-timer nil)
@@ -3187,7 +3416,9 @@ often you ask: it answers again with the task it made.")
   "C-c C-a" #'roost-compose-set-agent
   "C-c C-b" #'roost-compose-set-base
   "C-c C-n" #'roost-compose-set-name
-  "C-c C-t" #'roost-compose-set-issue)
+  "C-c C-t" #'roost-compose-set-issue
+  "C-c C-f" #'roost-compose-set-conversation
+  "C-c C-x" #'roost-compose-set-attempts)
 
 (define-derived-mode roost-compose-mode text-mode "Roost New Task"
   "Draft a coding agent task.  Write the prompt below the line.
@@ -3246,7 +3477,8 @@ mouse tries again, or gives up."
 (defun roost--compose-default-directory (task fork)
   "Default project for a new task, given the TASK in context and FORK.
 On a project's heading in the dashboard or sidebar, that project."
-  (cond (task (if fork (roost--remote-directory task) (roost--project-directory task)))
+  (cond ((and task (not (roost--conversation-p task)))
+         (if fork (roost--remote-directory task) (roost--project-directory task)))
         ((get-text-property (point) 'roost-directory))
         ;; On another host, looking there takes a round trip for each
         ;; directory VC tries, and connects first if TRAMP hasn't, while you
@@ -3471,12 +3703,19 @@ Given with no SEED, DIRECTORY moves a written draft there too, unless
       (setq roost--compose-checkout-branch nil)
       ;; An untouched draft follows the current context; a written one is kept.
       (when (or fresh fork (string-empty-p (roost--compose-prompt)))
-        (setq roost--compose-fields
-              (list :directory directory
-                    :agent roost-default-agent
-                    :base (when fork "HEAD")
-                    :integration (when fork (roost--compose-integration directory "HEAD"))
-                    :source (when fork (roost--field task 'name)))))
+        (let ((agent (when fork (or (roost--field task 'agent) "claude")))
+              (talked (when fork (or (roost--field task 'agentSession) (roost--field task 'claudeSession)))))
+          (setq roost--compose-fields
+                (list :directory directory
+                      ;; A fork goes on with the task's conversation, when
+                      ;; it has one, and so with its agent.
+                      :agent (if talked agent roost-default-agent)
+                      :base (when fork "HEAD")
+                      :integration (when fork (roost--compose-integration directory "HEAD"))
+                      :source (when fork (roost--field task 'name))
+                      :source-id (when fork (roost--field task 'id))
+                      :source-agent agent
+                      :conversation (and talked t)))))
       (let ((here (plist-get roost--compose-fields :directory)))
         ;; However it is spelled.
         (when (and chosen (not (and here (equal (roost--project-place here) (roost--project-place project)))))
@@ -3547,14 +3786,38 @@ item's key, which Jira finds the branch by."
 (defun roost--compose-field (label value command &optional note)
   "Insert field LABEL showing VALUE as a button running COMMAND, then NOTE."
   (insert (propertize (format "%-9s" label) 'font-lock-face 'roost-dim))
+  ;; As it is, without a link's underline: what you chose is what the
+  ;; draft says, and it lights up under the mouse.
   (insert-text-button value 'action (lambda (_) (call-interactively command))
-                      'follow-link t 'font-lock-face 'roost-field
+                      'follow-link t 'face 'roost-field 'font-lock-face 'roost-field
                       'help-echo (format "mouse-1 or RET: change %s" (downcase label)))
-  (insert (propertize (concat "  " (substitute-command-keys
-                                    (format "\\<roost-compose-mode-map>\\[%s]" command))
-                              (if note (concat " · " note) ""))
-                      'font-lock-face 'roost-dim))
+  ;; Its key quietly, where the display can draw quietly: six of them in
+  ;; a key's own colours are louder than the fields they change.
+  (let ((key (substitute-command-keys (format "\\<roost-compose-mode-map>\\[%s]" command))))
+    (insert (propertize "  " 'font-lock-face 'roost-dim 'roost-field-gap t)
+            (propertize (concat (if (roost--decorated-p) (substring-no-properties key) key)
+                                (if note (concat " · " note) ""))
+                        'font-lock-face 'roost-dim)))
   (insert "\n"))
+
+(defun roost--compose-align-keys (start end)
+  "Draw the keys of the fields between START and END in a column.
+Two past the longest value, but for one that would take them past the
+middle of a wide window: its key follows it.  Only where the display
+can; the text is the same either way."
+  (when (roost--decorated-p)
+    (let (gaps)
+      (save-excursion
+        (goto-char start)
+        (while (setq start (text-property-any (point) end 'roost-field-gap t))
+          (goto-char start)
+          (push (cons start (current-column)) gaps)
+          (goto-char (or (next-single-property-change start 'roost-field-gap nil end) end))))
+      (when-let* ((near (seq-filter (lambda (gap) (<= (cdr gap) 56)) gaps))
+                  (column (+ 2 (apply #'max (mapcar #'cdr near)))))
+        (pcase-dolist (`(,at . ,_) near)
+          (put-text-property at (next-single-property-change at 'roost-field-gap nil end)
+                             'display `(space :align-to ,column)))))))
 
 (defun roost--compose-render ()
   "Redraw the draft's fields above the prompt, leaving the prompt untouched."
@@ -3576,7 +3839,14 @@ item's key, which Jira finds the branch by."
     (save-excursion
       (delete-region (point-min) roost--compose-body)
       (goto-char (point-min))
-      (insert (propertize "New task" 'font-lock-face 'roost-title) "\n\n")
+      (insert (propertize (if-let* ((parent (plist-get fields :parent)))
+                              (format "New task, offered by %s"
+                                      (if-let* ((task (gethash parent roost--tasks)))
+                                          (roost--field task 'name)
+                                        "a task Roost no longer has"))
+                            "New task")
+                          'font-lock-face 'roost-title)
+              "\n\n")
       (let* ((directory (plist-get fields :directory))
              (base (plist-get fields :base))
              (name (plist-get fields :name))
@@ -3585,18 +3855,43 @@ item's key, which Jira finds the branch by."
         (roost--compose-field "Project" (if directory (roost--project-label directory) "Choose a project…")
                               #'roost-compose-set-project)
         (roost--compose-field "Agent" (plist-get fields :agent) #'roost-compose-set-agent)
+        ;; How many tasks it makes from the prompt, and by which agents.
+        (let ((agents (roost--compose-agents)))
+          (roost--compose-field "Attempts" (cond ((integerp (plist-get fields :attempts))
+                                                  (number-to-string (length agents)))
+                                                 ((cdr agents) (string-join agents ", "))
+                                                 (t "1"))
+                                #'roost-compose-set-attempts
+                                (when (cdr agents)
+                                  (substitute-command-keys
+                                   "each a task of its own; \\<roost-dashboard-mode-map>\\[roost-compare-attempts] on one compares them"))))
         (roost--compose-field "Start" (cond ((plist-get fields :source)
                                             (format "%s of %s" base (plist-get fields :source)))
-                                           (base)
+                                           ;; By its short name, as an offer's is given in full.
+                                           (base (string-remove-prefix "refs/heads/" base))
                                            (t current))
                               #'roost-compose-set-base
                               ;; Not "the project's current branch" twice over.
                               (when (or base branch)
-                                (concat (when (plist-get fields :source) "fork: includes its commits; ")
+                                (concat (when (plist-get fields :source)
+                                          (if (roost--compose-continues)
+                                              "fork: includes its commits and uncommitted changes; "
+                                            "fork: includes its commits; "))
                                         (pcase (and base (plist-get fields :integration))
                                           ('nil (concat "merges into " current))
                                           ("" "no branch to merge into")
                                           (into (concat "merges into " into))))))
+        (when-let* ((source (plist-get fields :source)))
+          (roost--compose-field "Context" (if (roost--compose-continues)
+                                              (format "%s's conversation" source)
+                                            "a new conversation")
+                                #'roost-compose-set-conversation
+                                (cond ((roost--compose-continues) "its agent hears it now works in a new worktree")
+                                      ((and (plist-get fields :conversation)
+                                            (not (equal (plist-get fields :agent)
+                                                        (plist-get fields :source-agent))))
+                                       (format "%s can't continue %s's"
+                                               (plist-get fields :agent) (plist-get fields :source-agent))))))
         (roost--compose-field "Issue" (if-let* ((issue (plist-get fields :issue)))
                                           (format "%s %s" (roost--issue-label issue)
                                                   (or (alist-get 'title issue) ""))
@@ -3611,8 +3906,15 @@ item's key, which Jira finds the branch by."
                                           (t derived))
                               #'roost-compose-set-name
                               (unless (or name (string-empty-p derived)) "from the prompt")))
+      (roost--compose-align-keys (point-min) (point))
       (roost--compose-insert-changing changing)
-      (insert (propertize (make-string 60 ?─) 'font-lock-face 'roost-dim) "\n"
+      (insert (if-let* ((colour (and (display-graphic-p) (roost--hairline))))
+                  ;; Drawn as one line across the window, of the same text.
+                  (propertize (make-string 60 ?─) 'font-lock-face 'roost-dim
+                              'display '(space :align-to right)
+                              'face (list :strike-through colour))
+                (propertize (make-string 60 ?─) 'font-lock-face 'roost-dim))
+              "\n"
               (propertize "Describe the task for the agent below.\n" 'font-lock-face 'roost-dim))
       (add-text-properties (point-min) (point)
                            '(read-only "Write the prompt below the fields" rear-nonsticky t
@@ -3859,17 +4161,22 @@ then for a folder there, starting above the project used last on it."
 It says nothing of the project otherwise, and can go to another."
   (cond ((roost--compose-quoted-files) "it quotes that project's files")
         ((plist-get roost--compose-fields :source) "it forks a task there")
-        ((plist-get roost--compose-fields :issue) "it starts from an issue there")))
+        ((plist-get roost--compose-fields :issue) "it starts from an issue there")
+        ((plist-get roost--compose-fields :parent) "a task there offered it")))
 
 (defun roost--compose-move (directory)
-  "Make DIRECTORY the draft's project."
-  (let ((base (plist-get roost--compose-fields :base)))
+  "Make DIRECTORY the draft's project.
+Moved elsewhere, a draft of an offer is a task of its own, under none."
+  (let ((base (plist-get roost--compose-fields :base))
+        (here (plist-get roost--compose-fields :directory)))
     ;; The starting ref now names a ref of this project, not the task's.
     (setq roost--compose-fields
           (thread-first roost--compose-fields
                         (plist-put :directory directory)
                         (plist-put :integration (and base (roost--compose-integration directory base)))
-                        (plist-put :source nil)))))
+                        (plist-put :source nil)))
+    (unless (and here (equal (roost--project-place here) (roost--project-place directory)))
+      (setq roost--compose-fields (plist-put (plist-put roost--compose-fields :parent nil) :offer nil)))))
 
 (defun roost-compose-set-agent ()
   "Choose the draft's agent."
@@ -3880,6 +4187,41 @@ It says nothing of the project otherwise, and can go to another."
                                          roost-default-agent)))
     (roost--back-in-draft draft)
     (setq roost--compose-fields (plist-put roost--compose-fields :agent agent))
+    (roost--compose-render)))
+
+(defun roost--compose-continues (&optional agent)
+  "The ID of the task whose conversation the draft goes on with, or nil.
+That is a fork's, unless you chose a new conversation or another agent.
+With AGENT, whether an attempt of the draft's by AGENT goes on with it."
+  (let ((fields roost--compose-fields))
+    (and (plist-get fields :source)
+         (plist-get fields :conversation)
+         (equal (or agent (plist-get fields :agent)) (plist-get fields :source-agent))
+         (plist-get fields :source-id))))
+
+(defun roost-compose-set-conversation ()
+  "Choose whether a fork goes on with its task's conversation or starts a new one.
+Going on, its agent starts from a copy of the task's conversation, in a
+worktree with the task's uncommitted changes as well as its commits, and
+the task's own conversation goes on as before."
+  (interactive)
+  (let ((fields roost--compose-fields))
+    (unless (plist-get fields :source)
+      (user-error "Only a fork of a task goes on with its conversation: %s on the task drafts one"
+                  (substitute-command-keys "\\[universal-argument] \\[roost-new-task]")))
+    (cond ((roost--compose-continues)
+           (setq roost--compose-fields (plist-put fields :conversation nil)))
+          ((not (when-let* ((task (gethash (list (roost--directory-host (plist-get fields :directory))
+                                                 (plist-get fields :source-id))
+                                           roost--tasks)))
+                  (or (roost--field task 'agentSession) (roost--field task 'claudeSession))))
+           (user-error "%s's agent hasn't started a conversation yet" (plist-get fields :source)))
+          (t
+           ;; Its agent's conversation, so that agent.
+           (setq roost--compose-fields
+                 (thread-first fields
+                               (plist-put :conversation t)
+                               (plist-put :agent (plist-get fields :source-agent))))))
     (roost--compose-render)))
 
 (defun roost--compose-integration (directory ref)
@@ -3942,6 +4284,54 @@ A branch is also the one the task merges into."
     (roost--back-in-draft draft)
     (setq roost--compose-fields
           (plist-put roost--compose-fields :name (unless (string-empty-p name) name)))
+    (roost--compose-render)))
+
+(defconst roost--attempts-most 5
+  "The most tasks a draft makes from its prompt, which is as many as a host takes.")
+
+(defun roost--compose-agents ()
+  "The agent of each task the draft makes, in order.
+One, the draft's, unless it makes several attempts at its prompt."
+  (let ((agent (plist-get roost--compose-fields :agent))
+        (attempts (plist-get roost--compose-fields :attempts)))
+    (if (integerp attempts)
+        (make-list attempts agent)
+      (cons agent attempts))))
+
+(defun roost-compose-set-attempts ()
+  "Choose how many tasks the draft makes from its prompt, for you to compare.
+A number from 1 to 5 makes that many, each by the draft's agent.  Agents'
+names with spaces between, as \"claude codex\", make one by each, in
+that order; the first becomes the draft's agent.  Empty, or 1, makes one
+task.  The first task has the draft's name and the others that name with
+2, 3 and so on after it; `roost-compare-attempts' shows what each changed."
+  (interactive)
+  (let* ((draft (current-buffer))
+         (attempts (plist-get roost--compose-fields :attempts))
+         (said (string-trim
+                (read-string (format "Attempts (1 to %d, or an agent for each, as \"claude codex\"; empty = 1): "
+                                     roost--attempts-most)
+                             (cond ((integerp attempts) (number-to-string attempts))
+                                   (attempts (string-join (roost--compose-agents) " "))))))
+         (named (split-string said "[ \t,]+" t))
+         (unknown (seq-find (lambda (agent) (not (member agent roost--agents))) named)))
+    (roost--back-in-draft draft)
+    (cond ((string-match-p "\\`[0-9]*\\'" said)
+           (let ((count (if (string-empty-p said) 1 (string-to-number said))))
+             (unless (<= 1 count roost--attempts-most)
+               (user-error "A draft makes from 1 to %d attempts" roost--attempts-most))
+             (setq roost--compose-fields
+                   (plist-put roost--compose-fields :attempts (when (> count 1) count)))))
+          (unknown
+           (user-error "Roost has no agent named %s: give a number, or some of %s"
+                       unknown (string-join roost--agents ", ")))
+          ((length> named roost--attempts-most)
+           (user-error "A draft makes from 1 to %d attempts" roost--attempts-most))
+          (t
+           (setq roost--compose-fields
+                 (thread-first roost--compose-fields
+                               (plist-put :agent (car named))
+                               (plist-put :attempts (cdr named))))))
     (roost--compose-render)))
 
 (defun roost--issue-label (issue)
@@ -4100,7 +4490,11 @@ this doesn't return, as for `roost--quit-questions-left-open'."
 
 (defun roost-compose-submit (&optional event)
   "Create the drafted task.  The draft is kept if creation fails.
-EVENT, a click on the draft's Create button, says which draft."
+EVENT, a click on the draft's Create button, says which draft.
+A draft that makes several attempts creates a task for each, from the
+same prompt, project and starting point: the first is the draft's own,
+which opens, and the others have its name with 2, 3 and so on after it.
+One of the others that fails says so, and the draft goes on."
   (interactive (list last-nonmenu-event))
   (roost--draft-clicked event 'roost-compose-mode)
   (let ((fields roost--compose-fields)
@@ -4126,52 +4520,131 @@ EVENT, a click on the draft's Create button, says which draft."
                              (setq roost--compose-asked (list directory (roost--random-id) what))
                            (unless (equal (nth 2 roost--compose-asked) what)
                              (setcar (nthcdr 2 roost--compose-asked) nil)))
-                         (nth 2 roost--compose-asked))))
+                         (nth 2 roost--compose-asked)))
+           (group (cadr roost--compose-asked))
+           ;; The agent of each attempt after the first, for a draft that
+           ;; makes several.
+           (others (cdr (roost--compose-agents)))
+           (total (1+ (length others)))
+           ;; What they are all made from, for their host to keep them to.
+           (words (and others (roost--compose-words what)))
+           (sent nil)
+           ;; The project's setup command is read for each, and asked about once.
+           (roost--project-values (list t)))
       (setq roost--compose-submitting t
-            roost--draft-note (format " Creating %s…" name))
+            roost--draft-note (if others
+                                  (format " Creating %s and %d more…" name (length others))
+                                (format " Creating %s…" name)))
       (condition-case err
-          (roost--create-task
-           (plist-get fields :directory) name (plist-get fields :base) prompt
-           (plist-get fields :agent)
-           (lambda (task &optional found)
-             (roost--compose-made buffer fields task (if found first what) t))
-           (lambda (err)
-             (when (buffer-live-p buffer)
-               (with-current-buffer buffer
-                 (setq roost--compose-submitting nil)
-                 (if (not (get-text-property 0 'roost-no-reply err))
-                     (roost--draft-error "Could not create the task" err 'roost-compose-submit)
-                   ;; It may yet be made: then a poll of its host lists it.
-                   (roost--remember-host host)
-                   (roost-watch-mode 1)
-                   (setq roost--draft-note
-                         (format " No reply from %s after %s; the task opens here if it was made · %s asks again"
-                                 (roost--host-label host)
-                                 (let ((seconds (+ roost-request-timeout roost--create-seconds)))
-                                   (if (< seconds 60) (format "%ds" seconds) (format "%dm" (/ seconds 60))))
-                                 (substitute-command-keys "\\[roost-compose-submit]")))
-                   (message "Roost: no reply from %s about %s yet; it opens if it was made"
-                            (roost--host-label host) name)))))
-           `((createId . ,(cadr roost--compose-asked))
-             ,@(when-let* ((issue (plist-get fields :issue)))
-                 (list (cons 'issue issue)))))
+          (progn
+            ;; The attempts after the first, asked for with it rather than
+            ;; once it is made.  Each has an ID made from the draft's, the
+            ;; same however often the draft asks, so its host makes each
+            ;; once.  They go first: the draft's own task is the one that
+            ;; opens, and what is asked for last is what opens.
+            (seq-do-indexed
+             (lambda (agent index)
+               (let ((n (+ index 2)))
+                 (roost--create-task
+                  directory (format "%s %d" name n) (plist-get fields :base) prompt agent
+                  ;; You stay where you are.
+                  (lambda (&rest _) t)
+                  nil
+                  `((createId . ,(format "%s%02x" group n))
+                    ,@(roost--attempt-field group n total words)
+                    ,@(when-let* ((source (roost--compose-continues agent)))
+                        (list (cons 'forkFrom source)))
+                    ,@(when-let* ((issue (plist-get fields :issue)))
+                        (list (cons 'issue issue)))
+                    ,@(when-let* ((parent (plist-get fields :parent)))
+                        (list (cons 'parent (cadr parent))))))
+                 (setq sent t)))
+             others)
+            (roost--create-task
+             (plist-get fields :directory) name (plist-get fields :base) prompt
+             (plist-get fields :agent)
+             (lambda (task &optional found)
+               (or (roost--compose-made buffer fields task (if found first what) t)
+                   ;; One an agent offered leaves you where you are, as the
+                   ;; offer came while you were busy there.
+                   (and (plist-get fields :parent) t)))
+             (lambda (err)
+               (when (buffer-live-p buffer)
+                 (with-current-buffer buffer
+                   (setq roost--compose-submitting nil)
+                   (if (not (get-text-property 0 'roost-no-reply err))
+                       (roost--draft-error "Could not create the task" err 'roost-compose-submit)
+                     ;; It may yet be made: then a poll of its host lists it.
+                     (roost--remember-host host)
+                     (roost-watch-mode 1)
+                     (setq roost--draft-note
+                           (format " No reply from %s after %s; the task opens here if it was made · %s asks again"
+                                   (roost--host-label host)
+                                   (let ((seconds (+ roost-request-timeout roost--create-seconds)))
+                                     (if (< seconds 60) (format "%ds" seconds) (format "%dm" (/ seconds 60))))
+                                   (substitute-command-keys "\\[roost-compose-submit]")))
+                     (message "Roost: no reply from %s about %s yet; it opens if it was made"
+                              (roost--host-label host) name)))))
+             `((createId . ,(cadr roost--compose-asked))
+               ,@(roost--attempt-field group 1 total words)
+               ,@(when-let* ((source (roost--compose-continues)))
+                   (list (cons 'forkFrom source)))
+               ,@(when-let* ((issue (plist-get fields :issue)))
+                   (list (cons 'issue issue)))
+               ,@(when-let* ((parent (plist-get fields :parent)))
+                   (list (cons 'parent (cadr parent))))
+               ,@(when-let* (((plist-get fields :parent))
+                             (offer (plist-get fields :offer)))
+                   (list (cons 'offer offer)))))
+            (when others
+              (message "Roost: creating %s and %d more from its prompt…" name (length others))))
         ;; Nothing reached the host, as when you quit the question about
         ;; the project's setup command: the draft is ready to create again.
         ((quit error)
          (setq roost--compose-submitting nil
-               roost--draft-note nil
-               ;; Nor was it asked for what it says now.
-               roost--compose-asked asked)
+               roost--draft-note nil)
+         ;; Nor was it asked for what it says now; unless an attempt went,
+         ;; which asking again must name as it was.
+         (unless sent
+           (setq roost--compose-asked asked))
          (signal (car err) (cdr err)))))))
+
+(defun roost--attempt-field (group n total words)
+  "What a request to create attempt N of TOTAL at one prompt says of it.
+GROUP, the creation ID of the draft that asks, is what its attempts
+share.  WORDS, from `roost--compose-words', names what the draft says
+as it asks, the same for each of them: asked again with other words, as
+after you changed the draft, their host makes none beside one it made
+from these, and answers with that one.  Nothing for a draft that makes
+one task."
+  (when (> total 1)
+    `((attempt (group . ,group) (n . ,n) (of . ,total) (words . ,words)))))
 
 (defun roost--compose-what ()
   "What the draft asks for, to tell whether it says that still.
-All of it, though you have narrowed it to some."
+All of it, though you have narrowed it to some: every field a request to
+create is made from.  So also the task it would show under, which moving
+it elsewhere and back takes away, and whether a fork goes on with its
+task's conversation."
   (save-restriction
     (widen)
     (list (roost--compose-prompt)
           (mapcar (lambda (field) (plist-get roost--compose-fields field))
-                  '(:directory :agent :base :name :issue)))))
+                  '(:directory :agent :base :name :issue :parent :attempts :source :conversation)))))
+
+(defun roost--compose-words (what)
+  "A name for WHAT, as `roost--compose-what' gives it: 32 hex digits.
+The same for what is `equal', whatever properties its text has, and
+another for anything else, so a host can tell requests made from the
+same words from those made from others."
+  (cl-labels ((plain (value)
+                (cond ((stringp value) (substring-no-properties value))
+                      ((consp value) (cons (plain (car value)) (plain (cdr value))))
+                      ((vectorp value) (vconcat (mapcar #'plain value)))
+                      (t value))))
+    (let ((print-length nil) (print-level nil))
+      (substring (secure-hash 'sha256 (encode-coding-string (prin1-to-string (plain what)) 'utf-8-emacs t))
+                 0 32))))
 
 (defun roost--compose-made (buffer fields task what &optional own)
   "Close BUFFER, the draft with FIELDS, as its host made TASK from WHAT.
@@ -4217,7 +4690,10 @@ made the task anyway.  It opens where the draft is, if you are there."
     (let ((fields (buffer-local-value 'roost--compose-fields buffer))
           (generation roost--open-generation))
       (roost--task-made host task (roost--field task 'name)
-                        (lambda (task &rest _) (roost--compose-made buffer fields task (nth 2 asked)))
+                        (lambda (task &rest _)
+                          (or (roost--compose-made buffer fields task (nth 2 asked))
+                              ;; One an agent offered leaves you where you are.
+                              (and (plist-get fields :parent) t)))
                         (lambda ()
                           (and (= generation roost--open-generation)
                                (eq (window-buffer (roost--window-you-are-in)) buffer)))))))
@@ -4311,7 +4787,9 @@ terminal the action ended closes."
              (roost--discard-terminal terminals)
              (cl-incf (gethash host roost--revisions 0))
              ;; `pushed' is transient: the callback sees it, the cache does not.
+             ;; So is `note', what there is to say of a change of branch.
              (let ((pushed (assq 'pushed updated))
+                   (note (assq 'note updated))
                    (already (alist-get 'alreadySent updated))
                    (torn (alist-get 'teardownFailure updated))
                    (output (alist-get 'teardownOutput updated))
@@ -4322,7 +4800,7 @@ terminal the action ended closes."
                (when-let* ((said (cdr (assoc action roost--action-messages))))
                  (message (if already "Already sent to %s" said) (roost--field task 'name)))
                (when callback
-                 (funcall callback (if pushed (cons pushed updated) updated)))
+                 (funcall callback (append (delq nil (list pushed note)) updated)))
                (when left
                  (message "%s" (string-join (delq nil (list (current-message)
                                                             (concat "left in place: " (string-join left ", "))))
@@ -5449,8 +5927,11 @@ their changes together.  See `roost-magit-status-sections'."
          (magit-insert-heading
            (format (propertize "Unmerged into %s." 'font-lock-face 'magit-section-heading)
                    integration))
-         ;; With no commits, Magit leaves the section out.
-         (magit--insert-log nil range magit-buffer-log-args)
+         ;; With no commits, Magit leaves the section out.  Magit 3
+         ;; has the function under its older name.
+         (if (fboundp 'magit--insert-log)
+             (magit--insert-log nil range magit-buffer-log-args)
+           (magit-insert-log range magit-buffer-log-args))
          (magit-log-insert-child-count))))))
 
 (defvar-keymap roost-since-looked-section-map
@@ -5741,12 +6222,23 @@ in place of the note it edits."
               (push (roost--note-room-overlay room (plist-get box :room) (plist-get box :window))
                     roost--note-overlays))))))))
 
+(defun roost--map-sections (function &optional section)
+  "Call FUNCTION with each section of this Magit buffer, or of SECTION.
+A section's children before it, as `magit-map-sections' has it, which
+Magit 3 is without."
+  (if (fboundp 'magit-map-sections)
+      (magit-map-sections function section)
+    (when-let* ((section (or section magit-root-section)))
+      (dolist (child (roost--slot section 'children))
+        (roost--map-sections function child))
+      (funcall function section))))
+
 (defun roost--magit-file-lines ()
   "For each file in this Magit buffer's diffs, (FILE HEADINGS LINES).
 HEADINGS are the ends of its headings, and LINES its lines, from
 `roost--hunk-lines'."
   (let (files)
-    (magit-map-sections
+    (roost--map-sections
      (lambda (section)
        (when (magit-section-match '(file hunk) section)
          (let* ((hunk (magit-section-match 'hunk section))
@@ -6366,8 +6858,8 @@ rested there; while it rests, the looks slow down."
       (propertize "+ " 'face '(:inherit roost-note-button :inverse-video t))
     (let* ((width (* 2 (frame-char-width)))
            (height (default-line-height))
-           (fill (or (face-foreground 'roost-note-button nil t) "RoyalBlue"))
-           (plus (or (face-background 'default nil t) "white"))
+           (fill (roost--svg-colour (or (face-foreground 'roost-note-button nil t) "RoyalBlue")))
+           (plus (roost--svg-colour (or (face-background 'default nil t) "white")))
            (key (list width height fill plus)))
       (or (cdr (assoc key roost--note-button-images))
           (let* ((size (min width (- height 2)))
@@ -7024,6 +7516,7 @@ only open it.  One merged or closed that leaves commits to propose takes
 no more of them: draft another, unless SKIP-PUSH says only to open it."
   (interactive (list nil current-prefix-arg))
   (setq task (roost--choose task))
+  (roost--refuse-conversation task "has no project to propose its work to")
   (if-let* ((pr (roost--field task 'pr))
             (url (alist-get 'url pr))
             ((or skip-push (not (roost--pr-spent-p task)))))
@@ -7589,14 +8082,14 @@ there are no CI results, which looks unlike checks that passed.  As
          (number (roost--pr-name task))
          (counts (roost--pr-checks task))
          (mark (lambda (mark face text) (concat (propertize mark 'face face) " " text))))
-    (roost--insert-heading "Checks")
     (cond
-     ((not state) (roost--insert-indented "No CI results: no pull request" 'roost-dim))
-     ((not status) (roost--insert-indented (format "Not heard from %s about %s yet"
-                                                   (roost--forge-name (roost--field task 'pr)) number)
-                                           'roost-dim))
-     ((not counts) (roost--insert-indented (format "No CI results on %s" number) 'roost-dim))
+     ;; With none to list, one quiet line, under no heading.
+     ((not state) (roost--insert-quiet "No CI results: no pull request"))
+     ((not status) (roost--insert-quiet (format "Not heard from %s about %s yet"
+                                                (roost--forge-name (roost--field task 'pr)) number)))
+     ((not counts) (roost--insert-quiet (format "No CI results on %s" number)))
      (t
+      (roost--insert-heading "Checks")
       (pcase-let* ((`(,passing ,failing ,pending) counts)
                    (failed (seq-take (alist-get 'failingChecks status) (min failing roost--failed-checks-shown)))
                    (waiting (seq-take (alist-get 'pendingChecks status) (min pending 3)))
@@ -7767,6 +8260,29 @@ is headed so, and the task's own, if any, named below it."
                                 'roost-dim)))))
 
 ;;;###autoload
+(defun roost-copy-attach-command (&optional task)
+  "Copy the shell command that attaches a terminal to TASK's agent.
+Run it in another terminal, as a phone's SSH app or another machine,
+to see and answer the agent in its real terminal, whichever agent it
+is.  It attaches to the task's tmux session, over SSH for a task on
+another host, and leaves Emacs's view of it as it is."
+  (interactive)
+  (setq task (roost--choose task))
+  (unless (roost--field task 'live)
+    (user-error "%s's agent isn't running, so there is no terminal to attach to; resume it first"
+                (roost--field task 'name)))
+  (let* ((host (roost--field task 'host))
+         (attach (format "tmux -L %s attach -t %s"
+                         (shell-quote-argument (or (roost--field task 'socket) "main"))
+                         ;; By its whole name, not one that starts as it does.
+                         (shell-quote-argument (concat "=" (roost--field task 'session)))))
+         (command (if host
+                      (format "ssh -t %s %s" (shell-quote-argument host) (shell-quote-argument attach))
+                    attach)))
+    (kill-new command)
+    (message "Copied: %s" command)))
+
+;;;###autoload
 (defun roost-stop (&optional task)
   "Stop TASK's window, retaining its worktree, branch and conversation."
   (interactive)
@@ -7789,6 +8305,44 @@ Its branch and worktree keep the name it started with."
           (t (roost--act task "rename" `((name . ,name))
                          ;; Caching the reply renames its workspace and panel.
                          (lambda (_) (message "Renamed %s to %s" old name)))))))
+
+;;;###autoload
+(defun roost-retarget (&optional task base)
+  "Change the branch TASK starts from and merges into to BASE.
+As when it started from the wrong branch and you have since rebased its
+own onto the right one: `m' then merges it there, `u' merges that
+branch into it, and its commits and changes count from it.  A
+remote-tracking branch, such as origin/main, gives the local branch of
+its name, as for a new task.  No commit moves, and a pull request
+already open keeps its base, which Roost says."
+  (interactive)
+  (setq task (roost--choose task))
+  (roost--refuse-conversation task "has no branch to merge into")
+  (let* ((name (roost--field task 'name))
+         (now (roost--field task 'integrationBranch))
+         (base (string-trim
+                (or base
+                    (completing-read
+                     (format "%s merges into %s; change to: " name
+                             (if (member now '(nil "")) "no branch" now))
+                     ;; Git runs on the task's host.  Not its own branch,
+                     ;; which merges into no other.
+                     (remove (roost--field task 'branch)
+                             (when (roost--field task 'repo)
+                               (split-string (or (roost--git-in (roost--project-directory task) "for-each-ref"
+                                                                "--format=%(refname:short)"
+                                                                "refs/heads" "refs/remotes")
+                                                 "")
+                                             "\n" t))))))))
+    (when (string-empty-p base)
+      (user-error "Name the branch %s should merge into" name))
+    (roost--act task "retarget" `((base . ,base))
+                (lambda (updated)
+                  (message "%s now merges into %s%s" name (roost--field updated 'integrationBranch)
+                           (if-let* ((note (roost--field updated 'note))) (concat "; " note) ""))
+                  ;; What it is ahead and behind by, and conflicts with, as
+                  ;; measured against the new branch.
+                  (roost--refresh-host (roost--field updated 'host) nil (list (roost--field updated 'id)))))))
 
 (defun roost--landed (task &optional measured)
   "Whether TASK's commits are all merged, as its host last measured.
@@ -7863,6 +8417,9 @@ won't retire, offer to discard it, which keeps that branch."
   (let* ((name (roost--field task 'name))
          (key (roost--key task))
          (listed (gethash key roost--tasks))
+         ;; Its offers, read once: the question names them, and its host is
+         ;; told which, as its agent may offer another while you read.
+         (named (roost--offers task))
          (offer (lambda (&optional branch)
                   (when (y-or-n-p
                          (if branch
@@ -7883,7 +8440,7 @@ won't retire, offer to discard it, which keeps that branch."
                                       "\\<roost-task-info-mode-map>\\[roost-merge-retire] merges it")))))
                     (roost-discard task))))
          (retire (lambda ()
-                   (roost--act task "retire" nil
+                   (roost--act task "retire" (list (roost--offers-named named))
                                (lambda (retired)
                                  (roost--retired-workspace retired)
                                  (roost--kill-worktree-buffers retired)
@@ -7899,7 +8456,7 @@ won't retire, offer to discard it, which keeps that branch."
                                       key listed
                                       (lambda ()
                                         (funcall offer (if (equal branch "a detached HEAD") "HEAD" branch))))))
-                                  (t (message "Roost %s: %s" (roost--host-label (roost--field task 'host)) err))))))))
+                                  (t (roost--finish-refused task err))))))))
     (cond
      ((member (roost--field task 'status) '("starting" "running" "permission" "background"))
       (user-error "%s's agent is at work; stop it (K) first, or wait" name))
@@ -7907,7 +8464,9 @@ won't retire, offer to discard it, which keeps that branch."
       (funcall offer (roost--other-branch task)))
      ((roost--unmerged-work-p task)
       (funcall offer))
-     ((y-or-n-p (format "Retire %s, removing its worktree and branch (nothing in them would be lost)? " name))
+     ((y-or-n-p (concat (roost--offers-sentence named)
+                        (format "Retire %s, removing its worktree and branch (nothing in them would be lost)? "
+                                name)))
       (funcall retire)))))
 
 ;;;###autoload
@@ -7918,47 +8477,60 @@ comes in as one squashed commit, or a merge commit; see `roost-merge-style'.
 A branch that moved while you were asked isn't merged: you look again."
   (interactive)
   (setq task (roost--choose task))
-  (cond
-   ;; Nor will it merge from a worktree on another branch.
-   ((roost--other-branch task)
-    (user-error "%s's worktree is on %s, not its branch %s; check out %s there, with the commits to merge, first"
-                (roost--field task 'name) (roost--branch-label (roost--other-branch task))
-                (roost--field task 'branch) (roost--field task 'branch)))
-   ;; The host refuses a dirty worktree; say so rather than ask to merge.
-   ((roost--field task 'dirty)
-    (when (y-or-n-p (format "%s has uncommitted changes to commit first.  Open Magit? "
-                            (roost--field task 'name)))
-      (roost-review task)))
-   ((y-or-n-p (concat (roost--since-looked-sentence task)
-                      (format (if (eq roost-merge-style 'squash)
-                                  "Squash committed work from %s into one commit on %s and retire it? "
-                                "Merge committed work from %s into %s and retire it? ")
-                              (roost--field task 'name)
-                              (or (roost--field task 'integrationBranch) "its branch"))))
-    (roost--act task "merge" (append (when (eq roost-merge-style 'squash) '((style . "squash")))
-                                     ;; Where the branch was as you were asked: an
-                                     ;; agent can commit before you answer.
-                                     (when-let* ((tip (roost--field task 'branchTip)))
-                                       (list (cons 'expect tip))))
-                (lambda (merged)
-                  (roost--retired-workspace merged)
-                  (roost--kill-worktree-buffers merged)
-                  (roost--revert-merged-files merged)
-                  (roost--report-merge merged (roost--field merged 'retiringCommit)
-                                       (or (roost--field merged 'integrationBranch)
-                                           (roost--field task 'integrationBranch)))
-                  ;; The other tasks are measured against the branch that moved.
-                  (roost--refresh-host (roost--field merged 'host) nil)
-                  (message (if (eq roost-merge-style 'squash)
-                               "Squashed %s into %s, and removed its worktree and branch"
-                             "Merged %s into %s, and removed its worktree and branch")
-                           (roost--field task 'name)
-                           (or (roost--field task 'integrationBranch) "its branch")))
-                (lambda (err)
-                  (message "Roost %s: %s" (roost--host-label (roost--field task 'host)) err)
-                  ;; So that `m' asks about where it is now, watching or not.
-                  (when (string-prefix-p "The task's branch has moved" err)
-                    (roost--refresh-host (roost--field task 'host) nil (list (roost--field task 'id)))))))))
+  (roost--refuse-conversation task "has no project to merge into")
+  ;; Its offers, read once: the question names them, and its host is told
+  ;; which, as its agent may offer another while you read.
+  (let ((named (roost--offers task)))
+    (cond
+     ;; Nor will it merge from a worktree on another branch.
+     ((roost--other-branch task)
+      (user-error "%s's worktree is on %s, not its branch %s; check out %s there, with the commits to merge, first"
+                  (roost--field task 'name) (roost--branch-label (roost--other-branch task))
+                  (roost--field task 'branch) (roost--field task 'branch)))
+     ;; The host refuses a dirty worktree; say so rather than ask to merge.
+     ((roost--field task 'dirty)
+      (when (y-or-n-p (format "%s has uncommitted changes to commit first.  Open Magit? "
+                              (roost--field task 'name)))
+        (roost-review task)))
+     ((y-or-n-p (concat (roost--since-looked-sentence task)
+                        (roost--offers-sentence named)
+                        (format (if (eq roost-merge-style 'squash)
+                                    "Squash committed work from %s into one commit on %s and retire it? "
+                                  "Merge committed work from %s into %s and retire it? ")
+                                (roost--field task 'name)
+                                (or (roost--field task 'integrationBranch) "its branch"))))
+      (roost--act task "merge" (append (when (eq roost-merge-style 'squash) '((style . "squash")))
+                                       ;; Where the branch was as you were asked: an
+                                       ;; agent can commit before you answer.
+                                       (when-let* ((tip (roost--field task 'branchTip)))
+                                         (list (cons 'expect tip)))
+                                       (list (roost--offers-named named)))
+                  (lambda (merged)
+                    (roost--retired-workspace merged)
+                    (roost--kill-worktree-buffers merged)
+                    (roost--revert-merged-files merged)
+                    (roost--report-merge merged (roost--field merged 'retiringCommit)
+                                         (or (roost--field merged 'integrationBranch)
+                                             (roost--field task 'integrationBranch)))
+                    ;; The other tasks are measured against the branch that moved.
+                    (roost--refresh-host (roost--field merged 'host) nil)
+                    (message (concat (if (eq roost-merge-style 'squash)
+                                         "Squashed %s into %s, and removed its worktree and branch"
+                                       "Merged %s into %s, and removed its worktree and branch")
+                                     "%s")
+                             (roost--field task 'name)
+                             (or (roost--field task 'integrationBranch) "its branch")
+                             ;; The other attempts at its prompt stay until you finish them.
+                             (if-let* ((others (roost--attempts task)))
+                                 (format "; %s %s"
+                                         (roost--names (mapcar (lambda (other) (roost--field other 'name)) others))
+                                         (if (cdr others) "remain: x on each discards it" "remains: x discards it"))
+                               "")))
+                  (lambda (err)
+                    (roost--finish-refused task err)
+                    ;; So that `m' asks about where it is now, watching or not.
+                    (when (string-prefix-p "The task's branch has moved" err)
+                      (roost--refresh-host (roost--field task 'host) nil (list (roost--field task 'id))))))))))
 
 ;;;###autoload
 (defun roost-forget (&optional task)
@@ -7971,17 +8543,22 @@ running agent is stopped first."
   (let* ((name (roost--field task 'name))
          ;; The host refuses while the agent runs, so stop it first.
          (running (roost--agent-running-p task))
+         ;; Its offers, read once: the question names them, and its host is
+         ;; told which, as its agent may offer another while you read.
+         (named (roost--offers task))
          (forget (lambda (&rest _)
-                   (roost--act task "forget" nil
+                   (roost--act task "forget" (list (roost--offers-named named))
                                (lambda (forgotten)
                                  (roost--retired-workspace forgotten)
                                  (when-let* ((left (roost--field forgotten 'leftBehind)))
                                    (message "Forgot %s; left in place: %s"
-                                            name (string-join left ", "))))))))
-    (when (yes-or-no-p (format (if running
-                                   "Stop %s's agent and forget the task, leaving its worktree and branch as they are? "
-                                 "Forget %s, leaving its worktree and branch as they are? ")
-                               name))
+                                            name (string-join left ", "))))
+                               (lambda (err) (roost--finish-refused task err))))))
+    (when (yes-or-no-p (concat (roost--offers-sentence named)
+                               (format (if running
+                                           "Stop %s's agent and forget the task, leaving its worktree and branch as they are? "
+                                         "Forget %s, leaving its worktree and branch as they are? ")
+                                       name)))
       (if running
           (roost--act task "stop" nil forget)
         (funcall forget)))))
@@ -8026,27 +8603,34 @@ experiment you don't want; finished work is merged or retired instead."
          (label (if (> worktrees 0)
                     (format "%s, with %d worktree%s its agent made,"
                             name worktrees (if (= worktrees 1) "" "s"))
-                  name)))
+                  name))
+         ;; Its offers, read once: the question names them, and its host is
+         ;; told which, as its agent may offer another while you read.
+         (named (roost--offers task)))
     (if (not (if losses
                  (equal (string-trim
-                         (read-string (format "Discarding %s loses %s%s.  Type its name to discard it: "
+                         (read-string (format "%sDiscarding %s loses %s%s.  Type its name to discard it: "
+                                              (roost--offers-sentence named)
                                               label (if (cdr losses)
                                                         (concat (string-join (butlast losses) ", ")
                                                                 " and " (car (last losses)))
                                                       (car losses))
                                               (if (roost--agent-running-p task) ", and stops its agent" ""))))
                         name)
-               (y-or-n-p (format "Discard %s, %sdeleting its worktree and branch (nothing in them would be lost)? "
-                                 label (if (roost--agent-running-p task) "stopping its agent and " "")))))
+               (y-or-n-p (concat (roost--offers-sentence named)
+                                 (format "Discard %s, %sdeleting its worktree and branch (nothing in them would be lost)? "
+                                         label (if (roost--agent-running-p task) "stopping its agent and " ""))))))
         (message "%s was not discarded" name)
       (roost--act task "discard" (list (cons 'expect (alist-get 'commit told))
                                        ;; Its host counts again, as its agent may
                                        ;; have gone on working while you read.
-                                       (cons 'told (assq-delete-all 'commit (copy-alist told))))
+                                       (cons 'told (assq-delete-all 'commit (copy-alist told)))
+                                       (roost--offers-named named))
                   (lambda (discarded)
                     (roost--retired-workspace discarded)
                     (roost--kill-worktree-buffers discarded)
-                    (message "Discarded %s" name))))))
+                    (message "Discarded %s" name))
+                  (lambda (err) (roost--finish-refused task err))))))
 
 (defun roost--kill-worktree-buffers (task)
   "Kill the Magit and Dired buffers left in TASK's removed worktree.
@@ -8293,7 +8877,9 @@ rest from its end: its status and name come first, and are read first."
 
 (defun roost--project-name (task)
   "Short primary repository name for TASK."
-  (file-name-nondirectory (directory-file-name (or (roost--field task 'repo) "unknown"))))
+  (if (roost--conversation-p task)
+      "Conversations"
+    (file-name-nondirectory (directory-file-name (or (roost--field task 'repo) "unknown")))))
 
 ;;;; Since you last looked
 
@@ -8374,17 +8960,14 @@ colour, which reminds you the worktree is not on it."
               ((not (roost--field task 'worktreeMissing))))
     (let ((own (roost--field task 'branch))
           (changes (not (string-empty-p (roost--changes task)))))
-      (roost--insert-indented
-       (if (and changes (roost--names-key-p next "x"))
-           (if (equal branch "HEAD")
-               (format "These are the changes on a detached HEAD, not %s's." own)
-             (format "These are %s's changes, not %s's." branch own))
-         (concat (format "The worktree is on %s, not the task's branch %s" (roost--branch-label branch) own)
-                 (when changes
-                   (if (equal branch "HEAD") ", so these are the changes there" (format ", so these are %s's changes" branch)))
-                 (unless (or (roost--names-key-p next "x") (not (roost--action-applies-p task 'roost-retire)))
-                   (concat ": " (roost--other-branch-ways task (lambda (key) (propertize key 'face 'roost-key)))))
-                 "."))
+      (roost--insert-loud
+       (concat (format "On %s, not the task's branch %s" (roost--branch-label branch) own)
+               (when changes
+                 (if (equal branch "HEAD") ", so the changes below are those there"
+                   (format ", so the changes below are %s's" branch)))
+               (unless (or (roost--names-key-p next "x") (not (roost--action-applies-p task 'roost-retire)))
+                 (concat ": " (roost--other-branch-ways task (lambda (key) (propertize key 'face 'roost-key)))))
+               ".")
        'roost-status-permission))))
 
 (defun roost--insert-since-looked (task &optional next)
@@ -8853,6 +9436,96 @@ for the mode line."
     (when motion (roost--lights-start))
     (plist-get light :image)))
 
+(defun roost--status-shape (status waiting)
+  "The shape that stands for STATUS, from `roost--attention-status'.
+WAITING is whether its task waits for you.  Colour says whether a task
+wants you; the shape says what its agent is doing, and says the first
+again to those who can't tell the colours apart: `asks' for an agent
+held up on you, `wrong' for one that failed, `turn' for one that
+finished, `working', `starting', `stopped', `merged', `offline', and
+`idle' for the rest, which wait for nothing."
+  (pcase status
+    ((or "permission" "prompt") 'asks)
+    ((or "failed" "crashed" "error" "ci failed") 'wrong)
+    ((or "ready" "interrupted" "to merge" "comments" "conflicts") 'turn)
+    ((or "running" "background") 'working)
+    ("starting" 'starting)
+    ("stopped" 'stopped)
+    ("merged" 'merged)
+    ("offline" 'offline)
+    ("exited" (if waiting 'wrong 'idle))
+    (_ 'idle)))
+
+(defun roost--svg-colour (colour)
+  "COLOUR, a name as Emacs knows it, as #RRGGBB, which an SVG image knows.
+Emacs's own names, such as the grey70 of `shadow' where no theme sets
+it, are not all ones SVG has.  Mid-grey for one that can't be read."
+  (if-let* ((rgb (and (stringp colour) (ignore-errors (color-name-to-rgb colour)))))
+      (apply #'color-rgb-to-hex (append rgb '(2)))
+    "#808080"))
+
+(defvar roost--status-shapes (make-hash-table :test 'equal)
+  "The images of `roost--status-shape-image', by (SHAPE COLOUR WIDTH HEIGHT).")
+
+(defun roost--status-shape-image (shape face)
+  "An image of SHAPE, from `roost--status-shape', in FACE's colour, or nil.
+A column wide and no taller than a line of text, so that it stands
+where a status's dot does and moves nothing.  Nil where `roost-decorate'
+is off or the display draws no such image; then the dot stands."
+  (when (and (roost--decorated-p) (display-images-p) (image-type-available-p 'svg)
+             (require 'svg nil t))
+    (let* ((colour (roost--svg-colour (face-foreground face nil 'default)))
+           (width (default-font-width))
+           (height (default-font-height))
+           (key (list shape colour width height)))
+      (or (gethash key roost--status-shapes)
+          (let* ((svg (svg-create width height))
+                 (cx (/ width 2.0))
+                 (cy (/ height 2.0))
+                 ;; As wide as a column allows, with a little air each side.
+                 (r (* 0.44 width))
+                 (line (max 1.0 (* 0.15 width)))
+                 (stroke (list :fill "none" :stroke colour :stroke-width line
+                               :stroke-linecap "round" :stroke-linejoin "round")))
+            (pcase shape
+              ;; A disc: yours to look at.
+              ('turn (svg-circle svg cx cy r :fill colour))
+              ;; A disc in a ring: it can't go on until you answer.
+              ('asks (svg-circle svg cx cy (* 0.4 r) :fill colour)
+                     (apply #'svg-circle svg cx cy (- r (/ line 2)) stroke))
+              ;; As the mark before what is wrong in a task's panel.
+              ('wrong (svg-polygon svg (list (cons cx (- cy r))
+                                             (cons (+ cx r) (+ cy (* 0.8 r)))
+                                             (cons (- cx r) (+ cy (* 0.8 r))))
+                                   :fill colour :stroke colour :stroke-width (* 0.5 line)
+                                   :stroke-linejoin "round"))
+              ;; Three quarters of a ring, as a wheel that turns.
+              ('working (let ((ring (- r (/ line 2))))
+                          (apply #'svg-circle svg cx cy ring
+                                 :stroke-dasharray (format "%.2f %.2f" (* 1.5 float-pi ring)
+                                                           (* 2 float-pi ring))
+                                 stroke)))
+              ;; A ring of dots: not there yet.
+              ('starting (let ((ring (- r (/ line 2))))
+                           (apply #'svg-circle svg cx cy ring
+                                  :stroke-dasharray (format "0.01 %.2f" (/ (* 2 float-pi ring) 6))
+                                  stroke)))
+              ;; Two bars: paused, and yours to resume.
+              ('stopped (dolist (x (list (- cx (* 0.45 r)) (+ cx (* 0.45 r))))
+                          (apply #'svg-line svg x (- cy (* 0.75 r)) x (+ cy (* 0.75 r)) stroke)))
+              ;; A tick: its work is in.
+              ('merged (apply #'svg-polyline svg
+                              (list (cons (- cx r) (+ cy (* 0.1 r)))
+                                    (cons (- cx (* 0.3 r)) (+ cy (* 0.8 r)))
+                                    (cons (+ cx r) (- cy (* 0.7 r))))
+                              stroke))
+              ;; A dash: its host can't be reached.
+              ('offline (apply #'svg-line svg (- cx r) cy (+ cx r) cy stroke))
+              ;; A small dot: nothing to do here.
+              (_ (svg-circle svg cx cy (* 0.45 r) :fill colour)))
+            ;; A pixel for a pixel: scaled, it would outgrow its column.
+            (puthash key (svg-image svg :ascent 'center :scale 1) roost--status-shapes))))))
+
 (defun roost--status-light (task place &optional inline)
   "TASK's status dot at PLACE: a moving light when `roost--animations-p'.
 The light shows in the window's left margin, which no highlight covers,
@@ -8861,7 +9534,13 @@ dot.  Otherwise this is the dot, in TASK's status face."
   (let* ((status (roost--attention-status task))
          (face (roost--status-face status)))
     (if (not (roost--animations-p))
-        (propertize "●" 'face face)
+        (let ((dot (propertize "●" 'face face)))
+          ;; Where the display draws them, a shape of its own for each
+          ;; kind of status, in place of the dot.
+          (if-let* ((shape (roost--status-shape-image
+                            (roost--status-shape status (roost--waiting-p task)) face)))
+              (propertize dot 'display shape)
+            dot))
       ;; The margin has a face of its own since Emacs 31.
       (let ((image (roost--light place (roost--key task) (roost--light-motion task) face
                                  (if (and (not inline) (facep 'margin)) 'margin 'default)
@@ -9116,8 +9795,16 @@ own.  Each button shows all the file's changes since the task began."
                                         ("Committed" . ,(seq-remove uncommitted files))))
       (when (and group (> room 0))
         (insert "  " (propertize label 'face 'roost-dim) "\n")
-        (dolist (file (seq-take group room))
-          (roost--insert-changed-file task file width))
+        (let* ((shown (seq-take group room))
+               ;; Their counts in a column, two past the longest path shown.
+               (column (and (roost--decorated-p)
+                            (+ 4 (apply #'max
+                                        (mapcar (lambda (file)
+                                                  (min (string-width (alist-get 'path file))
+                                                       (roost--changed-file-room file width)))
+                                                shown))))))
+          (dolist (file shown)
+            (roost--insert-changed-file task file width column)))
         (setq room (max 0 (- room (length group))))))
     (when (length> files roost--changed-files-shown)
       (roost--insert-indented
@@ -9126,15 +9813,23 @@ own.  Each button shows all the file's changes since the task began."
                 (- (length files) roost--changed-files-shown)))
        'roost-dim))))
 
-(defun roost--insert-changed-file (task file width)
-  "Insert a button showing FILE, one of TASK's `files', within WIDTH columns."
+(defun roost--changed-file-counts (file)
+  "What FILE, one of a task's `files', changed: its lines, or that it is new."
+  (cond ((alist-get 'untracked file) (propertize "new" 'face 'roost-diff-added))
+        ((alist-get 'added file)
+         (roost--fontify-changes (format "+%d −%d" (alist-get 'added file) (alist-get 'deleted file))))
+        (t (propertize "binary" 'face 'roost-dim))))
+
+(defun roost--changed-file-room (file width)
+  "The columns FILE's path may take beside its counts, in WIDTH columns."
+  (max 8 (- width 6 (string-width (roost--changed-file-counts file)))))
+
+(defun roost--insert-changed-file (task file width &optional column)
+  "Insert a button showing FILE, one of TASK's `files', within WIDTH columns.
+Its counts start at COLUMN, if given, as the display can put them."
   (let* ((path (alist-get 'path file))
-         (counts (cond ((alist-get 'untracked file) (propertize "new" 'face 'roost-diff-added))
-                       ((alist-get 'added file)
-                        (roost--fontify-changes (format "+%d −%d" (alist-get 'added file)
-                                                        (alist-get 'deleted file))))
-                       (t (propertize "binary" 'face 'roost-dim))))
-         (room (max 8 (- width 6 (string-width counts)))))
+         (counts (roost--changed-file-counts file))
+         (room (roost--changed-file-room file width)))
     (insert "  ")
     ;; Long paths keep their end, which names the file.
     (insert-text-button (if (> (string-width path) room)
@@ -9150,7 +9845,8 @@ own.  Each button shows all the file's changes since the task began."
                                   (roost--quit-questions-left-open
                                    (lambda () (roost--diff-file task file)))
                                   (roost--diff-file task file)))
-    (insert "  " counts "\n")))
+    (insert (if column (propertize "  " 'display `(space :align-to ,column)) "  ")
+            counts "\n")))
 
 (defun roost--agent-work-left (task)
   "The worktrees TASK's agent made that hold work not on the task's branch."
@@ -9216,12 +9912,22 @@ untracked file, with nothing to compare, is opened instead."
                                  ;; By where it is now: updating past a
                                  ;; move leaves it no old path.
                                  (equal (car (last magit-buffer-diff-files)) path)
-                                 (not (equal magit-buffer-diff-range rev))
+                                 ;; Magit 3 has the range under another name.
+                                 (not (equal (if (boundp 'magit-buffer-diff-range)
+                                                 magit-buffer-diff-range
+                                               (bound-and-true-p magit-buffer-range))
+                                             rev))
                                  (roost--task-in-directory default-directory (list task)))
                         (kill-buffer buffer))))
-                  ;; What `magit-diff-working-tree' does, locked.
-                  (with-current-buffer (magit-diff-setup-buffer rev nil nil paths 'committed
-                                                                magit-diff-buffer-file-locked)
+                  ;; What `magit-diff-working-tree' does, locked.  Magit 4
+                  ;; takes the diff's type before that; Magit 3, as Debian
+                  ;; and Ubuntu have it, doesn't.
+                  (with-current-buffer
+                      (let ((most (cdr (func-arity #'magit-diff-setup-buffer))))
+                        (if (and (integerp most) (< most 6))
+                            (magit-diff-setup-buffer rev nil nil paths magit-diff-buffer-file-locked)
+                          (magit-diff-setup-buffer rev nil nil paths 'committed
+                                                   magit-diff-buffer-file-locked)))
                     (setq roost--file-diff t)))
               (find-file (roost--worktree-file path)))))))
 
@@ -9407,9 +10113,9 @@ keeps one process-wide registration per mode; a nil STATE removes it."
   "Turn off line numbers and wrapping that global modes enable in Roost buffers."
   (when (derived-mode-p 'roost-dashboard-mode 'roost-task-info-mode 'roost-compose-mode
                       'roost-send-mode 'roost-pr-mode 'roost-search-mode 'roost-doctor-mode
-                      'roost-note-box-mode 'roost-workload-mode)
+                      'roost-note-box-mode 'roost-workload-mode 'roost-attempts-mode)
     (display-line-numbers-mode -1)
-    (when (derived-mode-p 'roost-dashboard-mode 'roost-search-mode)
+    (when (derived-mode-p 'roost-dashboard-mode 'roost-search-mode 'roost-attempts-mode)
       (visual-line-mode -1)
       (setq truncate-lines t))))
 
@@ -9430,6 +10136,7 @@ there are no tasks at all."
     ["Diff the task's changes" roost-diff :active (roost--menu-applies-p 'roost-diff)]
     ["Mark as looked at" roost-mark-looked :active (roost--menu-applies-p 'roost-mark-looked)]
     ["Bring up to date" roost-update :active (roost--menu-applies-p 'roost-update)]
+    ["Compare attempts" roost-compare-attempts :active (roost--menu-applies-p 'roost-compare-attempts)]
     "---"
     ["Pull request…" roost-pr :active (roost--menu-applies-p 'roost-pr)]
     ["Merge and retire…" roost-merge-retire :active (roost--menu-applies-p 'roost-merge-retire)]
@@ -9440,7 +10147,10 @@ there are no tasks at all."
     ["Stop…" roost-stop :active (roost--menu-applies-p 'roost-stop)]
     ["Resume" roost-resume :active (roost--menu-applies-p 'roost-resume)]
     ["Details" roost-task-info :active (roost--menu-applies-p 'roost-task-info)]
-    ["Rename…" roost-rename :active (roost--menu-applies-p 'roost-rename)])
+    ["Rename…" roost-rename :active (roost--menu-applies-p 'roost-rename)]
+    ["Branch to merge into…" roost-retarget :active (roost--menu-applies-p 'roost-retarget)]
+    ["Copy attach command" roost-copy-attach-command
+     :active (roost--menu-applies-p 'roost-copy-attach-command)])
   "Menu items acting on the task at point.")
 
 (easy-menu-define roost-task-menu nil
@@ -9482,7 +10192,7 @@ With no task at all, none of the task commands do."
 ;; `roost--stop-inapt-p': older transient doesn't say which entry it asks about.
 (dolist (command '(roost-open-task roost-shell roost-files roost-send roost-task-info roost-review
                    roost-diff roost-mark-looked roost-update roost-pr roost-merge-retire roost-retire roost-forget
-                   roost-stop roost-resume roost-goto-note roost-rename))
+                   roost-stop roost-resume roost-goto-note roost-rename roost-retarget roost-compare-attempts))
   (defalias (intern (format "roost--%s-inapt-p" (string-remove-prefix "roost-" (symbol-name command))))
     (lambda () (roost--dispatch-inapt-p command))
     (format "Whether `%s' does not apply to the task of `roost-dispatch'." command)))
@@ -9508,14 +10218,22 @@ Unknown Git statistics count as making sense."
       ((or 'roost-files 'roost-review 'roost-diff 'roost-mark-looked 'roost-update) worktree)
       ((or 'roost-send 'roost-stop) (roost--agent-running-p task))
       ('roost-resume (and worktree (not (roost--agent-running-p task))))
-      ('roost-pr (and worktree (or (roost--field task 'pr) (not (eql ahead 0)))))
+      ;; A conversation's branch is Roost's own, with nothing to propose or merge.
+      ('roost-pr (and worktree (not (roost--conversation-p task))
+                      (or (roost--field task 'pr) (not (eql ahead 0)))))
       ;; Merged, the task's branch may be, but not work on another branch
       ;; there, which `m' merges once the task's has it.
-      ('roost-merge-retire (and (or (not merged) (roost--other-branch task)) (not (eql ahead 0)) (not active)
+      ('roost-merge-retire (and (not (roost--conversation-p task))
+                                (or (not merged) (roost--other-branch task)) (not (eql ahead 0)) (not active)
                                 (not (roost--agent-work-left task))))
       ;; Retires the task, or discards work merged nowhere.
       ('roost-retire (and (not active) (not (roost--agent-work-left task))))
       ('roost-goto-note (and worktree (roost--task-notes task) t))
+      ('roost-retarget (not (roost--conversation-p task)))
+      ;; A terminal attaches to an agent's window, while there is one.
+      ('roost-copy-attach-command (and (roost--field task 'live) t))
+      ;; With the other attempts at its prompt, while there are any.
+      ('roost-compare-attempts (and (roost--attempts task) t))
       (_ t))))
 
 (defun roost--next-step (task &optional menu beside)
@@ -9595,13 +10313,15 @@ terminal or worktree, or ask which task."
     ("f" "Files" roost-files :inapt-if roost--files-inapt-p)
     ("e" "Send prompt" roost-send :inapt-if roost--send-inapt-p)
     ("i" "Details" roost-task-info :inapt-if roost--task-info-inapt-p)
-    ("R" "Rename" roost-rename :inapt-if roost--rename-inapt-p)]
+    ("R" "Rename" roost-rename :inapt-if roost--rename-inapt-p)
+    ("B" "Branch to merge into" roost-retarget :inapt-if roost--retarget-inapt-p)]
    ["Review"
     ("r" "Magit" roost-review :inapt-if roost--review-inapt-p)
     ("D" "Diff" roost-diff :inapt-if roost--diff-inapt-p)
     ("v" "Mark looked at" roost-mark-looked :inapt-if roost--mark-looked-inapt-p)
     ("u" "Bring up to date" roost-update :inapt-if roost--update-inapt-p)
-    ("'" "Go to note" roost-goto-note :inapt-if roost--goto-note-inapt-p)]
+    ("'" "Go to note" roost-goto-note :inapt-if roost--goto-note-inapt-p)
+    ("=" "Compare attempts" roost-compare-attempts :inapt-if roost--compare-attempts-inapt-p)]
    ["Finish"
     ("P" "Pull request" roost-pr :inapt-if roost--pr-inapt-p)
     ("m" "Merge and retire" roost-merge-retire :inapt-if roost--merge-retire-inapt-p)
@@ -9612,6 +10332,7 @@ terminal or worktree, or ask which task."
     ("s" "Resume" roost-resume :inapt-if roost--resume-inapt-p)]]
   ["Roost"
    [("c" "New task" roost-new-task)
+    ("C" "New conversation" roost-new-conversation)
     ("n" "Next waiting" roost-next-waiting)
     ("l" "Switch task" roost-switch-task)
     ("/" "Search conversations" roost-search)]
@@ -9641,12 +10362,15 @@ terminal or worktree, or ask which task."
   "X" #'roost-forget
   "u" #'roost-update
   "R" #'roost-rename
+  "B" #'roost-retarget
+  "=" #'roost-compare-attempts
   "I" #'roost-task-panel-mode
   ;; Commands beyond this task, as in the dashboard and sidebar.
   "n" #'roost-next-waiting
   "l" #'roost-switch-task
   "/" #'roost-search
   "c" #'roost-new-task
+  "C" #'roost-new-conversation
   "b" #'roost-sidebar-mode
   "S" #'roost-dashboard
   "w" #'roost-workload
@@ -9824,10 +10548,34 @@ the last column is kept for the truncation mark."
     (roost--render-task-info)))
 
 (defun roost--insert-heading (title &optional note)
-  "Insert section TITLE, followed by NOTE, dim, when given."
-  (insert roost--gap (propertize title 'face 'roost-heading)
+  "Insert section TITLE, followed by NOTE, when given.
+Both quiet: the panel keeps bold for the task's name and colour for what
+wants you, so that either shows from the terminal beside it."
+  (insert roost--gap (propertize title 'face 'roost-label)
           (if note (concat "  " (propertize note 'face 'roost-dim)) "")
           "\n"))
+
+(defun roost--insert-quiet (text)
+  "Insert TEXT as a block of one quiet line, with no heading."
+  (insert roost--gap (propertize text 'face 'roost-dim 'wrap-prefix "  ") "\n"))
+
+(defun roost--insert-loud (text face)
+  "Insert TEXT in FACE as a line of what is wrong with the task.
+After a mark, with the lines it wraps to under its first word."
+  (let ((line (concat "▲ " text "\n")))
+    (add-face-text-property 0 (length line) face t line)
+    ;; On a band of its colour, to the window's edge: it is the one
+    ;; thing in the panel that is loud.
+    (let ((tint (roost--tint face)))
+      (when tint
+        (add-face-text-property 0 (length line) (list :background tint :extend t) t line))
+      ;; The band runs behind where its lines wrap to, too.
+      (insert (propertize line 'wrap-prefix
+                          (if tint (propertize "  " 'face (list :background tint)) "  "))))))
+
+(defvar-local roost--panel-open nil
+  "What a narrow task panel shows unfolded: `prompts' and `details' among them.
+Beside a terminal each is one quiet line until you open it.")
 
 (defvar-local roost--show-full-prompt nil
   "The task's prompt when the task panel shows it in full, or nil.")
@@ -9898,10 +10646,11 @@ know yet comes below."
     (when face (add-face-text-property 0 (length text) face t text))
     (insert text)))
 
-(defun roost--insert-toggle (label what action)
+(defun roost--insert-toggle (label what action &optional flush)
   "Insert a button LABEL on a line of its own that calls ACTION and redraws.
 WHAT names what it shows or hides, as `prompt': once redrawn, point is on
-the button for WHAT, so that pressing it again takes the change back."
+the button for WHAT, so that pressing it again takes the change back.
+With FLUSH, at the left edge, as a line that folds a block."
   (let ((start (point)))
     (insert-text-button label 'follow-link t 'face 'roost-dim 'roost-toggle what
                         'action (lambda (_)
@@ -9913,7 +10662,7 @@ the button for WHAT, so that pressing it again takes the change back."
                                     (when (eq (window-buffer) (current-buffer))
                                       (set-window-point nil button)))))
     (insert "\n")
-    (put-text-property start (point) 'line-prefix "  ")))
+    (unless flush (put-text-property start (point) 'line-prefix "  "))))
 
 (defun roost--insert-reply-toggle (reply expanded)
   "Insert a button to expand REPLY, or collapse it when EXPANDED."
@@ -10014,22 +10763,92 @@ Windows showing the panel keep their scroll position, and the mark stays."
          (next (roost--next-step task nil (setq roost--near-terminal
                                                 (roost--panel-beside-terminal-p task t)))))
     (roost--insert-task-title task width)
+    ;; First, and most of the time not there: what is wrong.
+    (roost--insert-wrong task next)
     (when next
-      (insert roost--gap next "\n"))
+      (insert roost--gap
+              ;; Which branch the worktree is on was just said, in its
+              ;; colour: here, only how to put it right.
+              (let ((said (and (roost--other-branch task)
+                               (not (roost--field task 'worktreeMissing))
+                               (format "Its worktree is on %s, not the task's branch: "
+                                       (roost--branch-label (roost--other-branch task))))))
+                (if (and said (string-prefix-p said next))
+                    (substring next (length said))
+                  next))
+              "\n"))
     (unless beside
       (roost--insert-question task))
-    (roost--insert-prompts task width)
-    (roost--insert-changes task width next)
-    (roost--insert-merge-state task next)
-    (when-let* ((overlaps (roost--overlaps task)))
-      (roost--insert-indented (roost--changing-text overlaps "also changes" "also change") 'roost-dim))
+    ;; With room, what you asked for comes before what came of it.
+    (unless (< width roost--wide-panel)
+      (roost--insert-prompts task width))
+    (let ((start (point)))
+      (roost--insert-changes task width next)
+      (roost--insert-merge-state task next)
+      (when-let* ((overlaps (roost--overlaps task)))
+        (roost--insert-indented (roost--changing-text overlaps "also changes" "also change") 'roost-dim))
+      ;; With its worktree gone, no summary line sets these apart.
+      (when (and (roost--field task 'worktreeMissing) (> (point) start))
+        (save-excursion (goto-char start) (insert roost--gap))))
     (roost--insert-agent-work task)
     (roost--insert-status-notes task)
     (roost--insert-evidence task width beside)
     (roost--insert-issue task)
     (roost--insert-pull-request task)
-    (roost--insert-details task width)
-    (roost--insert-panel-keys width)))
+    (if (>= width roost--wide-panel)
+        (progn (roost--insert-details task width)
+               (roost--insert-panel-keys task width))
+      ;; Beside a terminal, which shows your prompts, and where the rest
+      ;; rarely matters: the keys, then a quiet line for each.
+      (roost--insert-panel-keys task width)
+      (roost--insert-folded-prompts task width)
+      (roost--insert-folded-details task width))))
+
+(defun roost--insert-wrong (task next)
+  "Insert what is wrong with TASK and wants you to act, under its title.
+In colour, and most of the time nothing: the rest of the panel is plain
+or dim, so colour in it is news, which shows from the terminal beside
+it.  NEXT is the panel's next step, which comes below and says how to
+put it right; what it says already is said once, there."
+  (when (roost--field task 'worktreeMissing)
+    (roost--insert-loud "The worktree is gone" 'roost-status-failed))
+  (roost--insert-other-branch task next)
+  (roost--insert-merge-state task next t)
+  (when-let* ((error (roost--field task 'error)))
+    (roost--insert-loud (concat "Last error: " error) 'roost-status-failed)))
+
+(defun roost--insert-fold (label what)
+  "Insert a quiet line, LABEL, that unfolds WHAT in a narrow panel."
+  (roost--insert-toggle (concat "▸ " label) what (lambda () (cl-pushnew what roost--panel-open)) t))
+
+(defun roost--insert-unfold (label what)
+  "Insert the line, LABEL, that folds WHAT again, above it."
+  (roost--insert-toggle (concat "▾ " label) what
+                        (lambda () (setq roost--panel-open (delq what roost--panel-open))) t))
+
+(defun roost--insert-folded-prompts (task width)
+  "Insert TASK's prompts as one quiet line, in WIDTH columns, or unfolded.
+The line is your latest prompt, or the one the task began with when you
+have sent none since: where you left off, should the terminal have
+scrolled it away."
+  (when-let* ((prompt (or (roost--latest-prompt task) (roost--prompt-text task))))
+    (if (memq 'prompts roost--panel-open)
+        (progn (insert roost--gap)
+               (roost--insert-unfold "Prompts" 'prompts)
+               (roost--insert-prompts task width t))
+      (roost--insert-fold (truncate-string-to-width (roost--one-line prompt) (max 8 (- width 3)) nil nil "…")
+                          'prompts))))
+
+(defun roost--insert-folded-details (task width)
+  "Insert where TASK's work lives as one quiet line, or unfolded, in WIDTH columns."
+  ;; Apart from the prompts above it, when those are unfolded.
+  (when (and (memq 'prompts roost--panel-open)
+             (or (roost--latest-prompt task) (roost--prompt-text task)))
+    (insert roost--gap))
+  (if (memq 'details roost--panel-open)
+      (progn (roost--insert-unfold "Details" 'details)
+             (roost--insert-details task width t))
+    (roost--insert-fold "Details" 'details)))
 
 (defun roost--insert-task-title (task width)
   "Insert TASK's name, its status and where it runs, in WIDTH columns."
@@ -10044,14 +10863,42 @@ Windows showing the panel keep their scroll position, and the mark stays."
                         (unless (member word (append '("merged" "conflicts" "seen") roost--pr-turns))
                           (propertize (format " for %s" (roost--elapsed (roost--field task 'updatedAt)))
                                       'face 'roost-dim)))))
-    ;; The status keeps to one line, below the name when both don't fit.
-    (insert name (if (> (+ (roost--text-width name) 3 (roost--text-width state)) width) "\n" "   ")
-            state "\n"))
-  (insert (propertize (format "%s · %s · %s" (roost--host-label (roost--field task 'host))
-                              (roost--project-name task)
-                              (or (roost--field task 'agent) "claude"))
-                      'face 'roost-dim)
-          "\n"))
+    ;; The status keeps to one line, below the name when both don't fit:
+    ;; at the window's right edge, where the display can put it.  One
+    ;; that waits on you is on a tint of its colour, from a space before.
+    (let ((tint (and (roost--waiting-p task) (roost--status-face (roost--attention-status task))))
+          (apart (> (+ (roost--text-width name) 3 (roost--text-width state)) width)))
+      (insert name
+              (cond (apart "\n")
+                    ((roost--decorated-p)
+                     (concat (propertize "  " 'display
+                                         `(space :align-to (- right ,(+ 2 (roost--text-width state)))))
+                             (if tint (roost--tinted " " tint) " ")))
+                    (t "   "))
+              (if tint (roost--tinted state tint) state)
+              "\n")))
+  (let ((where (concat (propertize (format "%s · %s · %s" (roost--host-label (roost--field task 'host))
+                                           (roost--project-name task)
+                                           (or (roost--field task 'agent) "claude"))
+                                   'face 'roost-dim)
+                       "\n")))
+    ;; Ruled off from what follows, which is what the panel is for.
+    (insert (roost--ruled where)))
+  ;; While it works, what it is doing, which the status word can't say.
+  (when-let* ((doing (roost--activity task)))
+    (insert (propertize (concat (truncate-string-to-width doing (max 8 (1- width)) nil nil "…") "\n")
+                        'face 'roost-dim 'help-echo doing))))
+
+(defun roost--activity (task)
+  "What TASK's agent is doing now, as its host last heard, or nil.
+The tool it last started, as \"Running make test\" or \"Editing
+ledger.py\", while it works: an agent that reports none says nothing."
+  (when-let* ((doing (roost--field task 'activity))
+              ((stringp doing))
+              ((not (string-empty-p doing)))
+              ((member (roost--field task 'status) '("running" "background")))
+              ((roost--field task 'live)))
+    doing))
 
 (defun roost--insert-question (task)
   "Insert what TASK's agent asks your permission for, if it does."
@@ -10059,10 +10906,11 @@ Windows showing the panel keep their scroll position, and the mark stays."
     (roost--insert-heading "Waiting for your answer")
     (roost--insert-indented (roost--prose request))))
 
-(defun roost--insert-prompts (task width)
-  "Insert the prompt TASK began with and the one you last sent, in WIDTH columns."
+(defun roost--insert-prompts (task width &optional under)
+  "Insert the prompt TASK began with and the one you last sent, in WIDTH columns.
+UNDER means under the line that folds them, which is their heading."
   (when-let* ((prompt (roost--prompt-text task)))
-    (roost--insert-heading "Prompt")
+    (unless under (roost--insert-heading "Prompt"))
     (roost--insert-prompt prompt 'prompt 'roost--show-full-prompt width))
   ;; Where you left off, which the terminal may have scrolled away.
   (let ((prompt (roost--latest-prompt task)))
@@ -10077,19 +10925,20 @@ Windows showing the panel keep their scroll position, and the mark stays."
   "Insert what TASK changed, in WIDTH columns.
 NEXT is the panel's next step, which may already say some of it."
   (let ((changes (roost--changes task nil (roost--field task 'files))))
-    (roost--insert-heading "Changes")
-    (roost--insert-indented
-     (cond ((roost--field task 'worktreeMissing)
-            (propertize "The worktree is gone"
-                        'face 'roost-status-failed))
-           ((not (assq 'diff task)) (propertize "Refreshing…" 'face 'roost-dim))
-           ((string-empty-p changes) (propertize "No changes yet" 'face 'roost-dim))
-           (t (concat (when-let* ((mark (roost--large-change-mark task))) (concat mark " "))
-                      (roost--fontify-changes changes))))))
+    ;; No heading: what it changed is most of the panel, and its place
+    ;; says so.  How much, quietly, and the files under it plainly.
+    (unless (roost--field task 'worktreeMissing)
+      (let ((summary (copy-sequence
+                      (cond ((not (assq 'diff task)) "Refreshing…")
+                            ((string-empty-p changes) "No changes yet")
+                            (t (concat (when-let* ((mark (roost--large-change-mark task))) (concat mark " "))
+                                       (roost--fontify-changes changes)))))))
+        ;; Under the faces of its line counts, which keep theirs.
+        (add-face-text-property 0 (length summary) 'roost-dim t summary)
+        (insert roost--gap (propertize summary 'wrap-prefix "  ") "\n"))))
   (when-let* (((not (roost--field task 'worktreeMissing)))
               (spread (roost--spread task)))
     (roost--insert-indented spread))
-  (roost--insert-other-branch task next)
   ;; Those of its last full refresh, which no diff can show now.
   (unless (roost--field task 'worktreeMissing)
     (roost--insert-changed-files task width))
@@ -10112,32 +10961,36 @@ NEXT is the panel's next step, which may already say some of it."
                " writes a note for the agent")
        'roost-dim))))
 
-(defun roost--insert-merge-state (task next)
+(defun roost--insert-merge-state (task next &optional wrong)
   "Insert how TASK stands with the branch it merges into.
-NEXT is the panel's next step, which may already say so."
+NEXT is the panel's next step, which may already say so.  With WRONG,
+only what is wrong and wants you, for the top of the panel: a merge
+under way, or one that would conflict.  Without, only the rest."
   (let ((integration (roost--field task 'integrationBranch)))
     (if-let* ((merging (roost--field task 'merging)))
-        (roost--insert-indented
-         (substitute-command-keys
-          (if-let* ((conflicts (alist-get 'conflicts merging)))
-              (format "Merging %s into it conflicts in %s: resolve them and commit in Magit (\\<roost-task-info-mode-map>\\[roost-review]), or ask its agent to (\\[roost-send])."
-                      integration (string-join conflicts ", "))
-            (format "A merge of %s is under way in it: commit it in Magit (\\<roost-task-info-mode-map>\\[roost-review])."
-                    integration)))
-         'roost-status-permission)
+        (when wrong
+          (roost--insert-loud
+           (substitute-command-keys
+            (if-let* ((conflicts (alist-get 'conflicts merging)))
+                (format "Merging %s into it conflicts in %s: resolve them and commit in Magit (\\<roost-task-info-mode-map>\\[roost-review]), or ask its agent to (\\[roost-send])."
+                        integration (string-join conflicts ", "))
+              (format "A merge of %s is under way in it: commit it in Magit (\\<roost-task-info-mode-map>\\[roost-review])."
+                      integration)))
+           'roost-status-permission))
       (cond
        ;; Said once: the next step may say it already.
        ((roost--names-key-p next "u"))
        ;; Nor would an update or a merge happen there.
        ((roost--other-branch task))
        ((consp (roost--conflicts task))
-        (roost--insert-indented
-         (substitute-command-keys
-          (format "Merging it into %s would conflict in %s: \\<roost-task-info-mode-map>\\[roost-update] merges %s into this task, to resolve them here first."
-                  integration (roost--file-list (roost--conflicts task) 10) integration))
-         'roost-status-permission))
+        (when wrong
+          (roost--insert-loud
+           (substitute-command-keys
+            (format "Merging it into %s would conflict in %s: \\<roost-task-info-mode-map>\\[roost-update] merges %s into this task, to resolve them here first."
+                    integration (roost--file-list (roost--conflicts task) 10) integration))
+           'roost-status-permission)))
        ;; Not when it moved on by merging the task.
-       ((and (> (or (roost--field task 'behind) 0) 0) (not (eq (roost--landed task t) t)))
+       ((and (not wrong) (> (or (roost--field task 'behind) 0) 0) (not (eq (roost--landed task t) t)))
         (roost--insert-indented
          (substitute-command-keys
           (format "%s has moved on; \\<roost-task-info-mode-map>\\[roost-update] merges it into this task before you merge the task back."
@@ -10145,7 +10998,7 @@ NEXT is the panel's next step, which may already say so."
          'roost-dim))))))
 
 (defun roost--insert-status-notes (task)
-  "Insert what TASK's status leaves to explain, and its last error."
+  "Insert what TASK's status leaves to explain."
   ;; How an agent ended, or why it waits, is the next step's, above.
   (pcase (roost--display-status task)
     ("offline"
@@ -10156,9 +11009,7 @@ NEXT is the panel's next step, which may already say so."
         (if (roost--field task 'programStatus)
             "Codex may be asking you to trust this folder or Roost's hooks; answer in its terminal. Sending prompts from Emacs works once it waits for one."
           "Codex reports status from its first turn. Open the terminal, review any hook or startup prompts, and enter the first prompt there; sending prompts from Emacs works after that.")
-        'roost-dim))))
-  (when-let* ((error (roost--field task 'error)))
-    (roost--insert-indented (concat "Last error: " error) 'roost-status-failed)))
+        'roost-dim)))))
 
 (defun roost--insert-evidence (task width beside)
   "Insert what a merge of TASK would rest on, in WIDTH columns.
@@ -10188,18 +11039,33 @@ EVIDENCE means results stand above it, and its heading says whose it is."
       (when (and (not expanded) (not (equal preview reply)))
         (roost--insert-reply-toggle reply nil)))))
 
-(defun roost--insert-details (task width)
-  "Insert where TASK's work lives, in WIDTH columns."
+(defun roost--insert-details (task width &optional under)
+  "Insert where TASK's work lives, in WIDTH columns.
+UNDER means under the line that folds it, which is its heading."
   (let ((base (roost--field task 'baseRef))
-        (integration (roost--field task 'integrationBranch)))
-    (roost--insert-heading "Details")
-    (dolist (entry `(("Branch" . ,(format "%s, from %s%s%s" (roost--field task 'branch) base
+        (integration (roost--field task 'integrationBranch))
+        (retarget (propertize "B" 'face 'roost-key)))
+    (unless under (roost--insert-heading "Details"))
+    (dolist (entry `(,@(unless (roost--conversation-p task)
+                         ;; A conversation's branch is Roost's own, with nothing to merge.
+                         `(("Branch" . ,(format "%s, from %s%s%s" (roost--field task 'branch) base
+                                          ;; Where you see that it is the wrong one.
                                           (if (and integration (not (string-empty-p integration)))
-                                              (format ", merges into %s" integration)
-                                            "")
+                                              (format ", merges into %s (%s changes that)" integration retarget)
+                                            (format " (%s gives it a branch to merge into)" retarget))
                                           (if-let* ((other (roost--other-branch task)))
                                               (format "; the worktree is on %s" (roost--branch-label other))
-                                            "")))
+                                            "")))))
+                     ;; One of several tasks a draft made from one prompt.
+                     ,@(when-let* ((attempt (roost--attempt-detail task)))
+                         `(("Attempt" . ,attempt)))
+                     ;; Offered by an agent and started by you.
+                     ,@(when (roost--field task 'parent)
+                         `(("Started from" . ,(if-let* ((parent (roost--parent-task task)))
+                                                  (roost--task-label parent)
+                                                "a task Roost no longer has"))))
+                     ,@(when-let* ((started (roost--started-tasks task)))
+                         `(("Started" . ,(mapconcat #'roost--task-label started ", "))))
                      ,@(unless (< width roost--wide-panel)
                          `(("Worktree" . ,(roost--abbreviate-path (or (roost--field task 'worktree) "")
                                                                   (roost--field task 'host)))
@@ -10219,16 +11085,34 @@ EVIDENCE means results stand above it, and its heading says whose it is."
                                     (or (cdr entry) "unknown") "\n")
                             'wrap-prefix (make-string 15 ?\s)))))))
 
-(defun roost--insert-panel-keys (width)
-  "Insert what ready means and the panel's keys, in WIDTH columns."
+(defun roost--quiet-but-keys (text)
+  "TEXT dim, but for the keys it names, which keep their face.
+So they look as keys do elsewhere, and can be clicked as those can."
+  (let ((text (copy-sequence text)))
+    (add-face-text-property 0 (length text) 'roost-dim t text)
+    text))
+
+(defun roost--insert-panel-keys (task width)
+  "Insert the keys of TASK's panel, in WIDTH columns.
+Beside a terminal, a row of the keys that open the task's other views,
+the same for every task but for one that has no such view now: what to
+do with the task next is the next step's, at the top.  With room, what
+ready means, and the menu's key."
   (insert roost--gap
-          (propertize (substitute-command-keys
-                       (concat (unless (< width roost--wide-panel)
-                                 "Ready means the agent is waiting for you, not that the work is reviewed.\n")
-                               "\\<roost-task-info-mode-map>\\[roost-dispatch] opens the menu · "
-                               (unless (< width roost--wide-panel) "\\[roost-task-info-refresh] refreshes · ")
-                               "\\[roost-task-info-quit] closes"))
-                      'face 'roost-dim)
+          (roost--quiet-but-keys
+           (substitute-command-keys
+            (if (< width roost--wide-panel)
+                (concat "\\<roost-task-info-mode-map>"
+                        (mapconcat (lambda (view) (format "\\[%s] %s" (car view) (cdr view)))
+                                   (append (seq-filter (lambda (view) (roost--action-applies-p task (car view)))
+                                                       '((roost-review . "Magit") (roost-files . "Files")
+                                                         (roost-shell . "Shell")))
+                                           '((roost-dispatch . "More")))
+                                   "  "))
+              (concat "Ready means the agent is waiting for you, not that the work is reviewed.\n"
+                      "\\<roost-task-info-mode-map>\\[roost-dispatch] opens the menu · "
+                      "\\[roost-task-info-refresh] refreshes · "
+                      "\\[roost-task-info-quit] closes"))))
           "\n"))
 
 (defun roost--task-label (task)
@@ -10312,6 +11196,7 @@ are told apart."
   "j" #'roost-dashboard-next-task
   "k" #'roost-dashboard-previous-task
   "c" #'roost-new-task
+  "C" #'roost-new-conversation
   "r" #'roost-review
   "D" #'roost-diff
   "v" #'roost-mark-looked
@@ -10330,6 +11215,8 @@ are told apart."
   "X" #'roost-forget
   "u" #'roost-update
   "R" #'roost-rename
+  "B" #'roost-retarget
+  "=" #'roost-compare-attempts
   "n" #'roost-next-waiting
   "/" #'roost-search
   "w" #'roost-workload
@@ -10363,9 +11250,20 @@ are told apart."
   "<mouse-1>" #'roost-sidebar-new-task
   "<mouse-3>" #'roost-sidebar-project-menu)
 
+(defvar-keymap roost--offer-row-map
+  :doc "Keys on an offer the dashboard or sidebar lists under its task.
+As a task's keys do for a task: open it, send its agent a prompt, and
+finish with it.  The others act on the task it sits under."
+  "RET" #'roost-open-offer
+  "e" #'roost-offer-here
+  "x" #'roost-offer-dismiss
+  "<mouse-1>" #'roost-open-offer
+  "<mouse-3>" #'roost-offer-mouse-menu)
+
 (defconst roost--clicked-commands
   '(roost-dashboard-mouse-open roost-dashboard-mouse-menu roost-compose-open-task
     roost-sidebar-new-task roost-sidebar-project-menu roost-compose-submit roost-compose-cancel
+    roost-open-offer roost-offer-mouse-menu
     roost-click-key roost-send-submit roost-send-cancel roost-send-attach
     roost-pr-submit roost-pr-submit-draft roost-pr-cancel)
   "Commands that clicks on Roost's rows and buttons run.")
@@ -10380,6 +11278,7 @@ are told apart."
   "Coding agent tasks across hosts, grouped by project.
 Refreshes are asynchronous; rendering uses only cached state.
 \\{roost-dashboard-mode-map}"
+  (when roost-decorate (setq-local line-spacing roost--line-spacing))
   (setq-local truncate-lines t
               revert-buffer-function (lambda (&rest _) (roost-refresh)))
   (setq header-line-format
@@ -10404,13 +11303,301 @@ Refreshes are asynchronous; rendering uses only cached state.
         (if group (push task (cdr group)) (push (list key task) groups))))
     (sort (mapcar (lambda (group)
                     (cons (car group)
-                          (sort (cdr group)
-                                (lambda (a b) (string< (or (roost--field a 'startedAt) "")
-                                                       (or (roost--field b 'startedAt) ""))))))
+                          (roost--under-parents
+                           (roost--attempts-together
+                            (sort (cdr group)
+                                  (lambda (a b) (string< (or (roost--field a 'startedAt) "")
+                                                         (or (roost--field b 'startedAt) ""))))))))
                   groups)
           (lambda (a b)
             (string< (format "%s %s" (roost--host-label (caar a)) (cadar a))
                      (format "%s %s" (roost--host-label (caar b)) (cadar b)))))))
+
+;;;; Tasks agents offer, and the tasks you start from them
+
+(defun roost--parent-task (task)
+  "The task whose agent offered TASK, which you started, if Roost has it."
+  (when-let* ((parent (roost--field task 'parent)))
+    (gethash (list (roost--field task 'host) parent) roost--tasks)))
+
+(defun roost--started-tasks (task)
+  "The tasks TASK's agent offered and you started, oldest first."
+  (sort (seq-filter (lambda (other) (eq (roost--parent-task other) task))
+                    (hash-table-values roost--tasks))
+        (lambda (a b) (string< (or (roost--field a 'startedAt) "")
+                               (or (roost--field b 'startedAt) "")))))
+
+(defconst roost--nesting-shown 3
+  "How many levels of tasks started from others a view indents.")
+
+(defun roost--nesting (task)
+  "How many tasks up TASK was started from, as far as views indent it."
+  (let ((depth 0) (seen (list task)))
+    (while (and (< depth roost--nesting-shown)
+                (setq task (roost--parent-task task))
+                (not (memq task seen)))
+      (push task seen)
+      (cl-incf depth))
+    depth))
+
+(defun roost--nesting-indent (task)
+  "The indent of TASK's row under the task it was started from."
+  (make-string (* 2 (roost--nesting task)) ?\s))
+
+(defun roost--under-parents (tasks)
+  "TASKS in order, each followed by those it started that are among them."
+  (let ((started (make-hash-table :test 'eq))
+        (shown (make-hash-table :test 'eq))
+        (among (make-hash-table :test 'eq))
+        roots ordered)
+    (dolist (task tasks)
+      (puthash task t among))
+    (dolist (task tasks)
+      (let ((parent (roost--parent-task task)))
+        (if (and parent (gethash parent among))
+            (push task (gethash parent started))
+          (push task roots))))
+    (cl-labels ((walk (task)
+                  (unless (gethash task shown)
+                    (puthash task t shown)
+                    (push task ordered)
+                    (mapc #'walk (reverse (gethash task started))))))
+      (mapc #'walk (nreverse roots))
+      ;; Tasks each started from the other, which no record should say.
+      (mapc #'walk tasks))
+    (nreverse ordered)))
+
+(defun roost--offers (task)
+  "The offers TASK's agent made that wait for you, oldest first."
+  (let ((offers (roost--field task 'offers)))
+    (seq-filter (lambda (offer)
+                  (and (consp offer)
+                       (stringp (alist-get 'id offer)) (stringp (alist-get 'title offer))
+                       (stringp (alist-get 'brief offer))))
+                (if (listp offers) offers (append offers nil)))))
+
+(defun roost--offer-project (task offer)
+  "The project OFFER, of TASK's agent, is for when it isn't TASK's own, or nil.
+As a local or TRAMP directory on TASK's host.  A conversation, which has
+no project, offers tasks in yours."
+  (when-let* ((project (alist-get 'project offer))
+              ((stringp project))
+              ((not (string-empty-p project))))
+    (roost--remote-directory (cons (cons 'worktree project) task))))
+
+(defun roost--offer-row (offer)
+  "Where the row of OFFER, a task's key and an offer's ID, starts, if shown."
+  (save-excursion
+    (goto-char (point-min))
+    (when-let* ((match (text-property-search-forward 'roost-offer offer t)))
+      (prop-match-beginning match))))
+
+(defun roost--insert-offer-row (task offer line)
+  "Insert LINE, the row of OFFER, which TASK's agent made, under TASK's."
+  (let ((row (list 'roost-offer (list (roost--key task) (alist-get 'id offer))
+                   'keymap roost--offer-row-map)))
+    (insert (apply #'propertize line
+                   'mouse-face 'highlight
+                   'help-echo (format "%s offers: %s%s\n\n%s\n\nmouse-1: open it as a task draft · mouse-3: more"
+                                      (roost--field task 'name) (alist-get 'title offer)
+                                      (if-let* ((project (roost--offer-project task offer)))
+                                          (format ", in %s" (roost--project-label project))
+                                        "")
+                                      (truncate-string-to-width (alist-get 'brief offer) 600 nil nil "…"))
+                   row)
+            ;; Without `mouse-face', so each row lights up alone.
+            (apply #'propertize "\n" row))))
+
+(defun roost--dashboard-offer-row (task offer layout width)
+  "The dashboard line for OFFER, which TASK's agent made, in LAYOUT.
+Under TASK's line, fitting WIDTH columns, and dim, as nothing waits on
+it: its title, the word offer where a task's status goes, how long ago
+it was made, and its brief, where a task's latest reply goes."
+  (let* ((size (plist-get layout :name))
+         (nested (concat (roost--nesting-indent task) "  "))
+         ;; Within the name column, which keeps a letter of the title.
+         (indent (substring nested 0 (min (length nested) (+ 2 (or (plist-get layout :indent) 0))
+                                          (max 0 (1- size)))))
+         (title (truncate-string-to-width (alist-get 'title offer) (max 1 (- size (length indent))) nil nil "…"))
+         (at (alist-get 'at offer))
+         (line (concat
+                ;; Where a task's dot is, unless its light is in the margin.
+                "  " (if (roost--animations-p) "" " ") " "
+                indent title
+                (make-string (max 0 (- size (length indent) (string-width title))) ?\s)
+                "  " (truncate-string-to-width "offer" 11 nil ?\s) " "
+                (truncate-string-to-width (if (stringp at) (roost--elapsed at) "") 6 nil ?\s "…") "  "
+                ;; Past the columns only tasks fill.
+                (make-string (+ (if (> (plist-get layout :pr) 0) (+ (plist-get layout :pr) 2) 0)
+                                (if (plist-get layout :agent) 10 0)
+                                (if (> (plist-get layout :changes) 0) (+ (plist-get layout :changes) 2) 0))
+                             ?\s)))
+         (room (- width (string-width line) 1)))
+    (concat (propertize line 'face 'roost-dim)
+            (when (> room 8)
+              (roost--truncate-width
+               (propertize (truncate-string-to-width (roost--one-line (alist-get 'brief offer)) (* 3 room)
+                                                     nil nil "…")
+                           'face '(roost-dim roost-prose))
+               room)))))
+
+(defun roost--sidebar-offer-row (task offer width)
+  "The sidebar line for OFFER, which TASK's agent made, within WIDTH columns.
+Under TASK's line, and dim, as nothing waits on it: its title, then the
+word offer where a task's status goes.  Its brief is in its help-echo."
+  (let* ((label "offer")
+         (nested (concat (roost--nesting-indent task) "  "))
+         ;; As far as leaves room for a letter of the title and the label.
+         (indent (substring nested 0 (min (length nested) (max 0 (- width 1 2 (length label))))))
+         (room (- width 1 (length indent)))
+         (title (truncate-string-to-width (alist-get 'title offer) (max 1 (- room (length label) 1)) nil nil "…")))
+    (propertize (concat " " indent title
+                        (make-string (max 1 (- room (string-width title) (length label))) ?\s)
+                        label)
+                'face 'roost-dim)))
+
+(defun roost--offer-at (&optional event)
+  "The offer at point, or clicked in EVENT, and its task, as (TASK OFFER)."
+  (when (mouse-event-p event)
+    (mouse-set-point event))
+  (pcase-let* ((`(,key ,id) (or (get-text-property (point) 'roost-offer) (user-error "No offer here")))
+               (task (or (gethash key roost--tasks)
+                         (user-error "That task is no longer listed; refresh with `g'")))
+               (offer (or (seq-find (lambda (offer) (equal (alist-get 'id offer) id)) (roost--offers task))
+                          (user-error "That offer no longer waits; refresh with `g'"))))
+    (list task offer)))
+
+(defun roost--take-offer (task offer &optional then)
+  "Take OFFER, which TASK's agent made: it no longer waits under TASK.
+Then call THEN, if given, once TASK's host has done it.  Not once TASK
+went, as when you forgot its host while Do it here's prompt went: the
+reply would bring it back, and its offers went with it."
+  (when (gethash (roost--key task) roost--tasks)
+    (roost--act task "take-offer" (list (cons 'offer (alist-get 'id offer)))
+                (lambda (_task) (when then (funcall then)))
+                (lambda (err)
+                  (message "Roost could not take %s's offer %s: %s"
+                           (roost--field task 'name) (alist-get 'title offer) err)))))
+
+(defun roost-open-offer (&optional event)
+  "Open the offer at point, or the one clicked in EVENT, as a new task draft.
+The dashboard and sidebar list the offers a task's agent made under it.
+Opening one takes it, so it no longer waits there.  The draft is in that
+task's project, with its agent, starts from the branch that task merges
+into, and is named and prompted as the agent offered it, to change as
+you like.  Create leaves you where you are, and the task it makes shows
+under the one that offered it."
+  (interactive (list last-nonmenu-event))
+  (pcase-let ((`(,task ,offer) (roost--offer-at event)))
+    (let ((open (lambda () (roost--compose-offer task offer))))
+      ;; A question left open would give back the windows it found,
+      ;; without the draft, once it ended.
+      (or (roost--quit-questions-left-open open)
+          (funcall open)))))
+
+(defun roost--compose-offer (task offer)
+  "Open OFFER, which TASK's agent made, as a new task draft, and take it.
+A draft that holds a prompt of yours, or says what became of a request
+of its own, stays as it is, and so does the offer.  An offer's draft
+starts anew, as a request asked before with the one it replaces would
+be answered with that one's task."
+  (when-let* ((buffer (get-buffer roost--compose-buffer)))
+    (with-current-buffer buffer
+      (when (or roost--compose-submitting roost--draft-note (not (string-empty-p (roost--compose-prompt))))
+        (roost--pop-to-buffer-in-place buffer)
+        (user-error "%s" (substitute-command-keys
+                          "Create this draft (\\<roost-compose-mode-map>\\[roost-compose-submit]) or cancel it (\\[roost-compose-cancel]) first; the offer waits"))))
+    (kill-buffer buffer))
+  (let* ((elsewhere (roost--offer-project task offer))
+         ;; In another project, it starts where that project's checkout is.
+         (into (unless elsewhere (roost--field task 'integrationBranch))))
+    (roost--compose nil (cons (alist-get 'brief offer) t) (or elsewhere (roost--project-directory task)))
+    (with-current-buffer roost--compose-buffer
+      (setq roost--compose-fields
+            (thread-first roost--compose-fields
+                          (plist-put :agent (or (roost--field task 'agent) roost-default-agent))
+                          ;; By its full name, as a tag of the same name would
+                          ;; otherwise stand for it.
+                          (plist-put :base (and (stringp into) (not (string-empty-p into))
+                                                (or (roost--field task 'integrationRef)
+                                                    (concat "refs/heads/" into))))
+                          (plist-put :integration (and (stringp into) (not (string-empty-p into)) into))
+                          (plist-put :name (alist-get 'title offer))
+                          (plist-put :parent (roost--key task))
+                          (plist-put :offer (alist-get 'id offer))))
+      (roost--compose-render)))
+  ;; Once its draft is open, which holds all of it.
+  (roost--take-offer task offer))
+
+(defun roost-offer-here (&optional event)
+  "Have the agent that made the offer at point, or clicked in EVENT, do it.
+Its task gets the prompt Do this task here: “TITLE”, as `e' sends
+one, and the offer no longer waits.  The agent wrote the brief, so the
+title is all it needs."
+  (interactive (list last-nonmenu-event))
+  (pcase-let ((`(,task ,offer) (roost--offer-at event)))
+    (when (roost--offer-project task offer)
+      (user-error "%s is for %s, which %s isn't in; open it as a task there"
+                  (alist-get 'title offer)
+                  (roost--project-label (roost--offer-project task offer))
+                  (roost--field task 'name)))
+    (unless (roost--agent-running-p task)
+      (user-error "%s's agent isn't running; resume it first" (roost--field task 'name)))
+    (roost--send-text task (format "Do this task here: “%s”" (alist-get 'title offer))
+                      (lambda (_task) (roost--take-offer task offer))
+                      nil nil
+                      ;; The same for the same offer, so that asking again,
+                      ;; as after no reply, pastes it once.
+                      (concat (roost--field task 'id) (alist-get 'id offer)))))
+
+(defun roost-offer-dismiss (&optional event)
+  "Dismiss the offer at point, or the one clicked in EVENT.
+It no longer waits under its task, and nothing starts."
+  (interactive (list last-nonmenu-event))
+  (pcase-let ((`(,task ,offer) (roost--offer-at event)))
+    (roost--take-offer task offer
+                       (lambda () (message "Dismissed %s's offer %s"
+                                           (roost--field task 'name) (alist-get 'title offer))))))
+
+(easy-menu-define roost-offer-menu nil
+  "Menu for an offer the dashboard or sidebar lists under its task."
+  '("Offer"
+    ["Open as a task draft" roost-open-offer]
+    ["Do it here" roost-offer-here]
+    ["Dismiss" roost-offer-dismiss]))
+
+(defun roost-offer-mouse-menu (event)
+  "Show what can be done with the offer clicked in EVENT."
+  (interactive "e")
+  (mouse-set-point event)
+  (popup-menu roost-offer-menu event))
+
+(defun roost--offers-sentence (offers)
+  "OFFERS, which go with their task, as a sentence to ask after, or \"\".
+They are its offers that wait, as `roost--offers' gave them: the request
+that follows the question says which it named, with `roost--offers-named'
+of the same list."
+  (pcase offers
+    ('nil "")
+    (`(,offer) (format "Its offer %s goes with it.  " (alist-get 'title offer)))
+    (_ (format "Its %d offers go with it.  " (length offers)))))
+
+(defun roost--offers-named (offers)
+  "What a request to finish a task says of OFFERS, which its question named.
+Their IDs, as `roost--offers-sentence' named them: its host refuses when
+the task holds another, which its agent offered while you read, and
+which would go with the task unseen.  A vector, as an empty list would
+say nothing, and its host would then check nothing."
+  (cons 'offers (vconcat (mapcar (lambda (offer) (alist-get 'id offer)) offers))))
+
+(defun roost--finish-refused (task err)
+  "Say ERR, with which TASK's host refused to finish it.
+When that is for an offer its agent made since you were asked, list
+TASK again, watching or not: asking again then names the offer, where it
+would be refused the same way until a poll listed it."
+  (message "Roost %s: %s" (roost--host-label (roost--field task 'host)) err)
+  (when (string-search "Its agent has offered " err)
+    (roost--refresh-host (roost--field task 'host) nil (list (roost--field task 'id)))))
 
 (defconst roost--row-words
   '("permission" "starting" "error" "failed" "crashed" "ci failed" "conflicts" "comments"
@@ -10439,14 +11626,38 @@ A count is in the colour of the most pressing of its tasks, as for
         (cl-incf (gethash word counts 0))
         (unless (equal (gethash word attention) "prompt")
           (puthash word status attention))))
-    (string-join
-     (mapcar (lambda (word)
-               (propertize (format "%d %s" (gethash word counts) word)
-                           'face (roost--status-word-face (gethash word attention))))
-             (seq-filter (lambda (word) (gethash word counts))
-                         ;; Words of statuses Roost doesn't know yet come last.
-                         (seq-uniq (append roost--row-words (hash-table-keys counts)))))
-     (propertize " · " 'face 'roost-dim))))
+    (let* ((words (seq-filter (lambda (word) (gethash word counts))
+                              ;; Words of statuses Roost doesn't know yet come last.
+                              (seq-uniq (append roost--row-words (hash-table-keys counts)))))
+           ;; A count in a status's colour is on a tint of it, from the
+           ;; space before to the space after, where there is one.
+           (tint (lambda (word)
+                   (let ((face (roost--status-word-face (gethash word attention))))
+                     (and (memq face '(roost-status-permission roost-status-failed)) face))))
+           (line (mapconcat
+                  (lambda (word)
+                    (propertize (format "%d %s" (gethash word counts) word)
+                                'face (roost--status-word-face (gethash word attention))
+                                'roost-tint (funcall tint word)))
+                  words (propertize " · " 'face 'roost-dim))))
+      (roost--tint-marked line))))
+
+(defun roost--tint-marked (line)
+  "LINE with each run marked `roost-tint' on a tint of that face's colour.
+The tint takes in the space before the run and the space after, which
+pad it, and the mark is taken off."
+  (let ((line (copy-sequence line))
+        (pos 0))
+    (while (setq pos (text-property-not-all pos (length line) 'roost-tint nil line))
+      (let* ((face (get-text-property pos 'roost-tint line))
+             (end (or (next-single-property-change pos 'roost-tint line) (length line)))
+             (from (if (and (> pos 0) (eq (aref line (1- pos)) ?\s)) (1- pos) pos))
+             (to (if (and (< end (length line)) (eq (aref line end) ?\s)) (1+ end) end)))
+        (when-let* ((colour (roost--tint face)))
+          (add-face-text-property from to (list :background colour) t line))
+        (setq pos end)))
+    (remove-text-properties 0 (length line) '(roost-tint nil) line)
+    line))
 
 (defvar roost--name-counts nil
   "While a list of tasks is drawn, how many tasks have each name in each project.
@@ -10487,9 +11698,11 @@ them: a row that narrow keeps its room for its status."
 
 (defun roost--dashboard-layout (tasks width)
   "Column widths for TASKS in a window WIDTH columns wide.
-The changes column shrinks first, then the agent column is dropped."
-  (let* ((name (min 28 (max 8 (apply #'max (mapcar (lambda (task) (string-width (roost--row-name task)))
-                                                   tasks)))))
+Rows started from another task indent only as far as the window leaves
+room beside the name and the columns that always show.  The changes
+column shrinks first, then the agent column is dropped."
+  (let* ((plain (min 28 (max 8 (apply #'max (mapcar (lambda (task) (string-width (roost--row-name task)))
+                                                    tasks)))))
          (agent (> (length (delete-dups (mapcar (lambda (task) (or (roost--field task 'agent) "claude"))
                                                 tasks)))
                    1))
@@ -10498,14 +11711,32 @@ The changes column shrinks first, then the agent column is dropped."
          (changes widest)
          (pr (apply #'max (mapcar (lambda (task) (string-width (roost--pr-marker task))) tasks)))
          ;; Bullet, name, status, since and their separators.
-         (fixed (+ 4 name 2 11 1 6 2 (if (> pr 0) (+ pr 2) 0)))
+         (base (+ 4 plain 2 11 1 6 2 (if (> pr 0) (+ pr 2) 0)))
+         (indent (max 0 (min (apply #'max (mapcar (lambda (task) (length (roost--nesting-indent task))) tasks))
+                             (- width base))))
+         (name (apply #'max plain
+                      (append
+                       (mapcar (lambda (task)
+                                 (+ (min indent (length (roost--nesting-indent task)))
+                                    (min 28 (string-width (roost--row-name task)))))
+                               tasks)
+                       ;; An offer's title, a level further in, as far as
+                       ;; the window leaves room.
+                       (mapcan (lambda (task)
+                                 (mapcar (lambda (offer)
+                                           (min (+ plain (max 0 (- width base)))
+                                                (+ (min (+ 2 indent) (+ 2 (length (roost--nesting-indent task))))
+                                                   (min 28 (string-width (alist-get 'title offer))))))
+                                         (roost--offers task)))
+                               tasks))))
+         (fixed (+ base (- name plain)))
          (over (- (+ fixed (if agent 10 0) (if (> changes 0) (+ changes 2) 0)) width)))
     (when (> over 0)
       (setq changes (max 0 (- changes over)))
       (when (and agent (< changes 12))
         (setq agent nil changes (min widest (max 0 (- width fixed 2))))))
     (when (< changes 6) (setq changes 0))
-    (list :name name :agent agent :changes changes :pr pr)))
+    (list :name name :indent indent :agent agent :changes changes :pr pr)))
 
 (defun roost--dashboard-row (task layout width)
   "Dashboard line for TASK using column LAYOUT, fitting WIDTH columns."
@@ -10513,11 +11744,21 @@ The changes column shrinks first, then the agent column is dropped."
          (face (roost--status-word-face (roost--attention-status task)))
          (cell (lambda (text size &optional cell-face)
                  (propertize (truncate-string-to-width text size nil ?\s "…") 'face cell-face)))
-         (name (roost--row-name task (plist-get layout :name)))
+         ;; Under the task it was started from.
+         (indent (let ((nested (roost--nesting-indent task)))
+                   (substring nested 0 (min (length nested) (or (plist-get layout :indent) 0)))))
+         (name (concat indent (roost--row-name task (max 1 (- (plist-get layout :name) (length indent))))))
          (line (concat "  " (roost--status-light task 'dashboard) " "
                        name (make-string (max 0 (- (plist-get layout :name) (string-width name))) ?\s)
-                       "  "
-                       (funcall cell status 11 face) " "
+                       (roost--tint-marked
+                        (concat "  "
+                                (propertize (truncate-string-to-width status 11 nil nil "…")
+                                            'face face
+                                            'roost-tint (and (memq face '(roost-status-permission
+                                                                          roost-status-failed))
+                                                             face))
+                                (make-string (max 0 (- 11 (string-width status))) ?\s)
+                                " "))
                        (funcall cell (roost--elapsed (roost--field task 'updatedAt)) 6 'roost-dim) "  "
                        (if (> (plist-get layout :pr) 0)
                            (concat (truncate-string-to-width (roost--pr-marker task) (plist-get layout :pr)
@@ -10542,6 +11783,8 @@ The changes column shrinks first, then the agent column is dropped."
               (let ((text (truncate-string-to-width
                            (roost--one-line (roost--with-since-looked
                                              task (or (roost--permission-request task)
+                                                      ;; While it works, what it is doing.
+                                                      (roost--activity task)
                                                       (roost--last-message-summary task)
                                                       (roost--prompt-text task))))
                            (* 3 room) nil nil "…")))
@@ -10573,7 +11816,9 @@ says only that the host is unreachable."
             "  \\<roost-dashboard-mode-map>\\[roost-new-task]  Start a task: choose a project (local, or remote over TRAMP), an agent, and a prompt.\n"
             "     Run \\<global-map>\\[roost-new-task] on an Org heading or with a region selected to start from it;\n"
             "     in the draft, \\<roost-compose-mode-map>\\[roost-compose-set-issue] picks an issue from GitHub, GitLab or Jira.\n"
-            "  \\<roost-dashboard-mode-map>\\[roost-dispatch]  Every command.\n"
+            "  \\<roost-dashboard-mode-map>\\[roost-new-conversation]  Or talk first: an agent in no project, with nothing to write beforehand.\n"
+            "     Ask it to plan a piece of work, and each task it offers waits here for you to start.\n"
+            "  \\[roost-dispatch]  Every command.\n"
             "  \\[roost-doctor]  Check this machine and each host.\n"))
           (format "\n  Watching %s.\n"
                   (string-join (mapcar #'roost--host-label (roost--hosts)) ", "))))
@@ -10586,7 +11831,8 @@ The mark stays where it was."
   (let* ((window (get-buffer-window (current-buffer) t))
          (position (if window (window-point window) (point)))
          (key (get-text-property position 'roost-task))
-         (heading (unless key (get-text-property position 'roost-directory)))
+         (offer (get-text-property position 'roost-offer))
+         (heading (unless (or key offer) (get-text-property position 'roost-directory)))
          (mark (roost--mark-place))
          (start-line (when window (line-number-at-pos (window-start window))))
          ;; Without fringes, as in a terminal, a full line would lose its last
@@ -10611,12 +11857,14 @@ The mark stays where it was."
                            ""))
                    ;; A long path keeps its end, which names the project.
                    (room (- width (roost--text-width heading) (roost--text-width note) 2)))
-              (insert roost--gap heading
-                      (if (< room 4) ""
-                        (propertize (concat "  " (roost--truncate-start
-                                                  (roost--abbreviate-path (or repo "") host) room))
-                                    'face 'roost-dim))
-                      note "\n"))
+              (insert roost--gap
+                      (roost--ruled
+                       (concat heading
+                               (if (< room 4) ""
+                                 (propertize (concat "  " (roost--truncate-start
+                                                           (roost--abbreviate-path (or repo "") host) room))
+                                             'face 'roost-dim))
+                               note "\n"))))
             ;; `c' on the heading starts a task in this project.
             (when repo
               (put-text-property start (point) 'roost-directory
@@ -10630,8 +11878,12 @@ The mark stays where it was."
                                row)
                         ;; Without `mouse-face', so each row lights up alone,
                         ;; but still the task's, for point and clicks there.
-                        (apply #'propertize "\n" row))))))))
+                        (apply #'propertize "\n" row)))
+              (dolist (offer (roost--offers task))
+                (roost--insert-offer-row task offer (roost--dashboard-offer-row task offer layout width))))))))
     (let ((target (or (and key (roost--task-row key))
+                      ;; One no longer waiting leaves you on its task.
+                      (and offer (or (roost--offer-row offer) (roost--task-row (car offer))))
                       (and heading (roost--heading-row heading))
                       (text-property-not-all (point-min) (point-max) 'roost-task nil)
                       (point-min))))
@@ -10645,19 +11897,24 @@ The mark stays where it was."
     (roost--lights-forget 'dashboard (mapcar #'roost--key tasks))))
 
 (defun roost--dashboard-task ()
-  "The task on the current dashboard line, if any."
-  (when-let* ((key (get-text-property (line-beginning-position) 'roost-task)))
+  "The task on the current dashboard line, if any: on an offer's, the one
+whose agent made it, which its row sits under."
+  (when-let* ((start (line-beginning-position))
+              (key (or (get-text-property start 'roost-task)
+                       (car (get-text-property start 'roost-offer)))))
     (gethash key roost--tasks)))
 
 (defun roost-dashboard-next-task (&optional count)
-  "Move to the next task line, or COUNT lines of tasks."
+  "Move to the next task line, or COUNT lines of tasks.
+An offer listed under its task's line counts as one."
   (interactive "p")
   (dotimes (_ (abs (or count 1)))
-    (let ((step (if (< (or count 1) 0) -1 1)) (origin (point)))
+    (let ((step (if (< (or count 1) 0) -1 1)) (origin (point))
+          (row (lambda () (or (get-text-property (point) 'roost-task) (get-text-property (point) 'roost-offer)))))
       (forward-line step)
-      (while (and (not (get-text-property (point) 'roost-task))
+      (while (and (not (funcall row))
                   (zerop (forward-line step))))
-      (unless (get-text-property (point) 'roost-task) (goto-char origin)))))
+      (unless (funcall row) (goto-char origin)))))
 
 (defun roost-dashboard-previous-task (&optional count)
   "Move to the previous task line, or COUNT lines of tasks."
@@ -10756,8 +12013,11 @@ The mark stays where it was."
   (roost--compose-redraw-changing)
   (dolist (buffer (buffer-list))
     (with-current-buffer buffer
-      (when (derived-mode-p 'roost-task-info-mode)
-        (roost--render-visible #'roost--render-task-info)))))
+      (cond ((derived-mode-p 'roost-task-info-mode)
+             (roost--render-visible #'roost--render-task-info))
+            ;; Attempts compared show each as it is now.
+            ((derived-mode-p 'roost-attempts-mode)
+             (roost--render-visible #'roost--render-attempts))))))
 
 ;;;###autoload
 (defun roost-dashboard ()
@@ -10772,6 +12032,374 @@ The mark stays where it was."
     (roost--redraw))
   (roost-watch-mode 1)
   (roost-refresh))
+
+;;;; Several attempts at one prompt
+
+;; A draft can make several tasks from its prompt (see
+;; `roost-compose-set-attempts').  Each is a task like any other, whose
+;; host records which attempt it is.  What Roost adds is a way to see what
+;; each changed, file by file, and to compare two of them in Ediff: you
+;; merge one, and finish the others yourself.
+
+(defun roost--attempt (task)
+  "What TASK's host records of it as one of several attempts at a prompt, or nil.
+An alist: `group', which the attempts of one draft share, `n', which of
+them this is, from 1, and `of', how many the draft asked for."
+  (let ((attempt (roost--field task 'attempt)))
+    (and (consp attempt)
+         (stringp (alist-get 'group attempt))
+         (integerp (alist-get 'n attempt))
+         (integerp (alist-get 'of attempt))
+         attempt)))
+
+(defun roost--attempts-in-order (tasks)
+  "TASKS, each an attempt, by which attempt each is."
+  (sort tasks (lambda (a b) (< (alist-get 'n (roost--attempt a)) (alist-get 'n (roost--attempt b))))))
+
+(defun roost--attempt-group (host group)
+  "The attempts of GROUP that Roost has on HOST, in their order."
+  (roost--attempts-in-order
+   (seq-filter (lambda (task)
+                 (and (equal (roost--field task 'host) host)
+                      (equal (alist-get 'group (roost--attempt task)) group)))
+               (hash-table-values roost--tasks))))
+
+(defun roost--attempts (task)
+  "The other attempts at the prompt TASK was made from, in their order.
+Those Roost has still: the tasks one draft made with TASK, on its host."
+  (when-let* ((attempt (roost--attempt task)))
+    (let ((key (roost--key task)))
+      (seq-remove (lambda (other) (equal (roost--key other) key))
+                  (roost--attempt-group (roost--field task 'host) (alist-get 'group attempt))))))
+
+(defun roost--attempts-together (tasks)
+  "TASKS in order, with the attempts at one prompt together, in their own order.
+They go where the first of them is: their host starts them at the same
+time, so in any order, and another task may start among them."
+  (if (not (seq-some #'roost--attempt tasks))
+      tasks
+    (let ((groups (make-hash-table :test 'equal))
+          ordered)
+      (dolist (task tasks)
+        (when-let* ((attempt (roost--attempt task)))
+          (push task (gethash (alist-get 'group attempt) groups))))
+      (dolist (task tasks)
+        (if-let* ((attempt (roost--attempt task)))
+            (when-let* ((group (gethash (alist-get 'group attempt) groups)))
+              (remhash (alist-get 'group attempt) groups)
+              (setq ordered (nconc (nreverse (roost--attempts-in-order group)) ordered)))
+          (push task ordered)))
+      (nreverse ordered))))
+
+(defun roost--names (names)
+  "NAMES joined for a sentence, as \"a, b and c\"."
+  (if (cdr names)
+      (concat (string-join (butlast names) ", ") " and " (car (last names)))
+    (car names)))
+
+(defun roost--attempt-detail (task)
+  "Which attempt at its prompt TASK is, and the others Roost has, as words.
+Nil for a task that is no attempt."
+  (when-let* ((attempt (roost--attempt task)))
+    (let ((which (format "%d of %d" (alist-get 'n attempt) (alist-get 'of attempt)))
+          (others (roost--attempts task)))
+      (if others
+          (format "%s, beside %s · %s compares them" which
+                  (string-join (mapcar (lambda (other) (roost--field other 'name)) others) ", ")
+                  (propertize "=" 'face 'roost-key))
+        (concat which "; the others are finished")))))
+
+(defun roost--attempt-label (task)
+  "TASK, an attempt, as a choice among the attempts at its prompt."
+  (format "%d %s" (alist-get 'n (roost--attempt task)) (roost--field task 'name)))
+
+(defun roost--attempt-file (task path)
+  "The entry of TASK's changed files for PATH, or nil if TASK leaves it alone."
+  (seq-find (lambda (file) (equal (alist-get 'path file) path)) (roost--field task 'files)))
+
+(defvar-local roost--attempts-shown nil
+  "The attempts this buffer compares, as (HOST GROUP).")
+
+(defun roost--attempts-of (shown)
+  "The attempts Roost has of those SHOWN, as `roost--attempts-shown' names them."
+  (when shown
+    (roost--attempt-group (car shown) (cadr shown))))
+
+(defvar-keymap roost-attempts-mode-map
+  :doc "Keys where the attempts at one prompt are compared."
+  "RET" #'roost-attempts-visit
+  "m" #'roost-attempts-merge
+  "g" #'roost-attempts-refresh
+  "h" #'roost-dispatch
+  "?" #'roost-dispatch)
+
+(define-derived-mode roost-attempts-mode special-mode "Roost Attempts"
+  "The attempts at one prompt, and what each changed, file by file.
+On an attempt's line, task commands such as those in
+\\[roost-dispatch] act on that attempt.
+\\{roost-attempts-mode-map}"
+  (when roost-decorate (setq-local line-spacing roost--line-spacing))
+  (setq-local truncate-lines t)
+  (add-hook 'after-change-major-mode-hook #'roost--quiet-display 90 t)
+  (roost--evil-state 'roost-attempts-mode roost-evil-state)
+  (roost--quiet-display))
+
+(defun roost--attempts-buffer (host group)
+  "The buffer that compares the attempts of GROUP on HOST, made if there is none.
+Named for the first of them Roost has."
+  (let ((shown (list host group)))
+    (or (seq-find (lambda (buffer) (equal (buffer-local-value 'roost--attempts-shown buffer) shown))
+                  (buffer-list))
+        (with-current-buffer (generate-new-buffer
+                              (format "*roost attempts: %s*"
+                                      (roost--field (car (roost--attempt-group host group)) 'name)))
+          (roost-attempts-mode)
+          (setq roost--attempts-shown shown)
+          (current-buffer)))))
+
+(defun roost--attempt-cell (file)
+  "What an attempt did to a file, for its column: FILE is its entry, or nil."
+  (cond ((null file) (propertize "·" 'face 'roost-dim))
+        ((alist-get 'untracked file) (propertize "new" 'face 'roost-diff-added))
+        ((alist-get 'added file)
+         (roost--fontify-changes (format "+%d −%d" (alist-get 'added file) (or (alist-get 'deleted file) 0))))
+        (t (propertize "binary" 'face 'roost-dim))))
+
+(defun roost--insert-attempt-rows (attempts)
+  "Insert a line for each of ATTEMPTS: its number, name, status and changes.
+And its agent, where they are by more than one.  The name opens the
+attempt, and the line is its task's, as a dashboard row is."
+  (let* ((names (apply #'max (mapcar (lambda (task) (string-width (roost--field task 'name))) attempts)))
+         (words (apply #'max (mapcar (lambda (task) (string-width (roost--row-word task))) attempts)))
+         (agents (delete-dups (mapcar (lambda (task) (or (roost--field task 'agent) "claude")) attempts)))
+         (agent-width (apply #'max (mapcar #'string-width agents))))
+    (dolist (task attempts)
+      (let ((start (point))
+            (key (roost--key task))
+            (name (roost--field task 'name))
+            (word (roost--row-word task))
+            (changes (roost--changes task)))
+        (insert (format "  %d  " (alist-get 'n (roost--attempt task))))
+        (insert-text-button name 'follow-link t 'face 'roost-field
+                            'help-echo "mouse-1 or RET: open it"
+                            'action (lambda (_) (roost--attempts-open key)))
+        (insert (make-string (- names (string-width name)) ?\s) "  "
+                ;; Whose attempt it is, where they are by more than one agent.
+                (if (cdr agents)
+                    (concat (propertize (truncate-string-to-width (or (roost--field task 'agent) "claude")
+                                                                  agent-width nil ?\s)
+                                        'face 'roost-dim)
+                            "  ")
+                  "")
+                (propertize word 'face (roost--status-word-face (roost--attention-status task)))
+                (make-string (- words (string-width word)) ?\s) "  "
+                (cond ((not (assq 'diff task)) (propertize "Refreshing…" 'face 'roost-dim))
+                      ((string-empty-p changes) (propertize "No changes yet" 'face 'roost-dim))
+                      (t (roost--fontify-changes changes)))
+                "\n")
+        (put-text-property start (point) 'roost-task key)))))
+
+(defconst roost--attempt-path-width 48
+  "The most columns a file's path takes where attempts are compared.")
+
+(defun roost--insert-attempt-files (attempts shown)
+  "Insert a line for each file any of ATTEMPTS changed, with a column for each.
+A column says what its attempt did to the file, or that it left it
+alone.  The path compares the file between the attempts SHOWN, as
+`roost--attempts-shown' has them."
+  (let* ((paths (sort (seq-uniq (seq-mapcat (lambda (task)
+                                              (mapcar (lambda (file) (alist-get 'path file))
+                                                      (roost--field task 'files)))
+                                            attempts))
+                      #'string<))
+         (rows (mapcar (lambda (path)
+                         (cons path (mapcar (lambda (task) (roost--attempt-cell (roost--attempt-file task path)))
+                                            attempts)))
+                       paths))
+         (path-width (min roost--attempt-path-width
+                          (apply #'max 4 (mapcar #'string-width paths))))
+         (widths (seq-map-indexed
+                  (lambda (_ index)
+                    (apply #'max 6 (mapcar (lambda (row) (string-width (nth index (cdr row)))) rows)))
+                  attempts)))
+    (if (null paths)
+        (insert "\n" (propertize "None of them has changed a file yet.\n" 'face 'roost-dim))
+      ;; Each column under its attempt's number.
+      (insert "\n")
+      (let ((start (point)))
+        (insert (make-string (+ 2 path-width) ?\s))
+        (cl-mapc (lambda (task width)
+                   (insert "  " (propertize (string-pad (number-to-string (alist-get 'n (roost--attempt task)))
+                                                        width nil t)
+                                            'face 'roost-dim)))
+                 attempts widths)
+        (insert "\n")
+        ;; Ruled off from the files under it, as a table's heading is.
+        (when-let* ((colour (roost--hairline)))
+          (add-face-text-property start (point)
+                                  (list :underline (list :color colour :position t) :extend t) t)))
+      (pcase-dolist (`(,path . ,cells) rows)
+        (let ((start (point))
+              (label (if (> (string-width path) path-width)
+                         ;; A long path keeps its end, which names the file.
+                         (concat "…" (truncate-string-to-width
+                                      path (string-width path) (- (string-width path) (1- path-width))))
+                       path)))
+          (insert "  ")
+          (insert-text-button label 'follow-link t 'face 'roost-field
+                              'help-echo (concat path "\nmouse-1 or RET: compare the attempts that changed it")
+                              'action (lambda (_)
+                                        ;; As for a command you give: a question
+                                        ;; you left open would hold it back.
+                                        (roost--quit-questions-left-open
+                                         (lambda () (roost--attempts-compare shown path)))
+                                        (roost--attempts-compare shown path)))
+          (insert (make-string (- path-width (string-width label)) ?\s))
+          (cl-mapc (lambda (cell width)
+                     (insert "  " (make-string (- width (string-width cell)) ?\s) cell))
+                   cells widths)
+          (insert "\n")
+          (put-text-property start (point) 'roost-attempts-file path))))))
+
+(defun roost--render-attempts ()
+  "Redraw the attempts the current buffer compares, as Roost has them now.
+Windows showing them keep their place."
+  (let* ((inhibit-read-only t)
+         (shown roost--attempts-shown)
+         (attempts (roost--attempts-of shown))
+         (line (line-number-at-pos))
+         (column (current-column))
+         (places (roost--window-places)))
+    (erase-buffer)
+    (insert (propertize "Attempts at one prompt" 'face 'roost-title) "\n")
+    (if (null attempts)
+        (insert "\nNone of these attempts is left.\n")
+      (let* ((task (car attempts))
+             (prompt (roost--prompt-text task)))
+        (insert (roost--ruled
+                 (concat (propertize (concat (roost--host-label (roost--field task 'host)) " · "
+                                             (roost--project-name task)
+                                             (when prompt
+                                               (concat " · " (truncate-string-to-width (roost--one-line prompt)
+                                                                                       60 nil nil "…"))))
+                                     'face 'roost-dim)
+                         "\n"))
+                "\n"))
+      (roost--insert-attempt-rows attempts)
+      (roost--insert-attempt-files attempts shown)
+      (insert "\n"
+              (roost--quiet-but-keys
+               (substitute-command-keys
+                (concat "\\<roost-attempts-mode-map>\\[roost-attempts-visit] on a file compares it between two attempts in Ediff,"
+                        " or opens it in the one that changed it.\n"
+                        "\\[roost-attempts-merge] merges an attempt and retires it; the others stay until you finish them."
+                        "  \\[roost-attempts-refresh] refreshes.")))
+              "\n"))
+    (goto-char (point-min))
+    (forward-line (1- line))
+    (move-to-column column)
+    (roost--restore-window-places places)))
+
+(defun roost--attempts-open (key)
+  "Open the attempt with KEY, as `roost-open-task' does, if Roost has it still."
+  (roost-open-task (or (gethash key roost--tasks)
+                       (user-error "This attempt has been retired or is unavailable"))))
+
+(defun roost--attempts-compare (shown path)
+  "Compare the file at PATH between the attempts SHOWN that changed it.
+SHOWN is as `roost--attempts-shown' has them.  Two that changed it are
+compared in Ediff, each worktree's copy beside the other's; of more,
+the two you choose.  A file only one changed is visited there."
+  (let* ((changed (seq-filter (lambda (task) (roost--attempt-file task path))
+                              (roost--attempts-of shown)))
+         (copy (lambda (task) (roost--worktree-file path (roost--remote-directory task))))
+         (pair (if (not (cddr changed))
+                   changed
+                 (let* ((choices (mapcar (lambda (task) (cons (roost--attempt-label task) task)) changed))
+                        (one (roost--choose-from (format "Compare %s in attempt: " path) choices))
+                        (other (and one (roost--choose-from
+                                         (format "Compare it in %s with attempt: " (roost--field one 'name))
+                                         (rassq-delete-all one (copy-sequence choices))))))
+                   (and other (list one other))))))
+    (cond ((null changed)
+           (user-error "No attempt changes %s now" path))
+          ((cdr pair)
+           (ediff-files (funcall copy (car pair)) (funcall copy (cadr pair))))
+          ;; Not when you chose none of several.
+          (pair
+           (find-file (funcall copy (car pair)))))))
+
+(defun roost-attempts-visit ()
+  "Compare the file at point between the attempts that changed it.
+Two attempts' copies of it open in Ediff: the two that changed it, or of
+more, the two you choose.  A file only one attempt changed is visited in
+that attempt's worktree.  On an attempt's line, open the attempt, as
+\\<roost-dashboard-mode-map>\\[roost-open-task] does in the dashboard."
+  (interactive)
+  (let ((path (get-text-property (line-beginning-position) 'roost-attempts-file))
+        (key (get-text-property (line-beginning-position) 'roost-task))
+        (shown roost--attempts-shown))
+    (unless (or path key)
+      (user-error "Move to a file to compare it, or to an attempt to open it"))
+    ;; A question you left open would take the one this asks.
+    (roost--quit-questions-here #'roost-attempts-visit)
+    (if path
+        (roost--attempts-compare shown path)
+      (roost--attempts-open key))))
+
+(defun roost-attempts-merge ()
+  "Merge the attempt at point into its branch and retire it.
+As `roost-merge-retire' does, which asks first.  Off an attempt's line,
+ask which attempt.  The others stay as they are: Roost deletes work only
+when you discard a task, so finish each yourself, as with
+\\<roost-dashboard-mode-map>\\[roost-retire] on it."
+  (interactive)
+  (let ((attempts (roost--attempts-of roost--attempts-shown)))
+    (unless attempts
+      (user-error "None of these attempts is left"))
+    (when-let* ((task (or (roost--dashboard-task)
+                          (roost--choose-from "Merge attempt: "
+                                              (mapcar (lambda (task) (cons (roost--attempt-label task) task))
+                                                      attempts)))))
+      (roost-merge-retire task))))
+
+(defun roost-attempts-refresh ()
+  "Redraw the attempts, and ask their host for each one's changes as they are now."
+  (interactive)
+  (roost--render-attempts)
+  (when (roost--attempts-of roost--attempts-shown)
+    (roost--refresh-host (car roost--attempts-shown) nil)))
+
+;;;###autoload
+(defun roost-compare-attempts (&optional task)
+  "Compare TASK with the other attempts at its prompt, file by file.
+A draft makes several attempts when you ask it to, with
+\\<roost-compose-mode-map>\\[roost-compose-set-attempts] there: tasks from one prompt, by one agent or several.  This
+lists each attempt with its status and changes, then every file any of
+them changed, with a column for each attempt that says what it did to
+the file.  \\<roost-attempts-mode-map>\\[roost-attempts-visit] on a file compares two attempts' copies of it in Ediff,
+and \\[roost-attempts-merge] merges an attempt and retires it.  The others stay until you
+finish them."
+  (interactive)
+  (setq task (roost--choose task))
+  (let ((name (roost--field task 'name)))
+    (cond ((not (roost--attempt task))
+           (user-error "%s is the only attempt at its prompt; %s in the draft of a new task makes several"
+                       name (substitute-command-keys
+                             "\\<roost-compose-mode-map>\\[roost-compose-set-attempts]")))
+          ((not (roost--attempts task))
+           (user-error "%s is the only attempt left" name))))
+  (let ((buffer (roost--attempts-buffer (roost--field task 'host)
+                                        (alist-get 'group (roost--attempt task))))
+        (key (roost--key task)))
+    (with-current-buffer buffer
+      (roost--render-attempts))
+    ;; In the window you are in, like the dashboard; q gives it back.
+    (roost--leave-side-window)
+    (roost--pop-to-buffer-in-place buffer)
+    ;; On the attempt you came from.
+    (when-let* ((row (roost--task-row key)))
+      (goto-char row))))
 
 ;;;; Searching conversations
 
@@ -10937,15 +12565,17 @@ than WIDTH, such as a URL, is broken within, as in `roost--reply-preview'."
                                 (string> (or (alist-get 'at (car (last (alist-get 'hits (cdr a))))) "")
                                          (or (alist-get 'at (car (last (alist-get 'hits (cdr b))))) "")))))
     (erase-buffer)
-    (insert (propertize "Messages containing " 'face 'roost-dim)
-            (propertize roost--search-query 'face 'roost-heading) "\n")
+    (insert (roost--ruled (concat (propertize "Messages containing " 'face 'roost-dim)
+                                  (propertize roost--search-query 'face 'roost-heading) "\n")))
     (when pending
       (insert (propertize (format "Searching %s…\n" (mapconcat #'roost--host-label pending ", "))
                           'face 'roost-dim)))
     (pcase-dolist (`(,host . ,reply) (reverse roost--search-replies))
       (cond ((eq (car-safe reply) :error)
-             (insert (propertize (format "Could not search %s: %s\n" (roost--host-label host) (cadr reply))
-                                 'face 'roost-status-failed)))
+             (insert (roost--banded (propertize (format "Could not search %s: %s\n" (roost--host-label host)
+                                                        (cadr reply))
+                                                'face 'roost-status-failed)
+                                    'roost-status-failed)))
             ;; A host searches its newest conversations first, for so long.
             ((alist-get 'incomplete reply)
              (insert (propertize (format "%s ran out of time; it searched its newest conversations only\n"
@@ -11175,15 +12805,17 @@ are in one."
 
 (defun roost--sidebar-entered (&rest _)
   "Start on a task when you enter the sidebar, then highlight it.
-Entering it anywhere but on a task starts on the task you are working
-on, or else the first.  Once in, point may also rest on a project's
-heading, where `c' starts a task in that project; so may a click."
+Entering it anywhere but on a task or an offer starts on the task you
+are working on, or else the first.  Once in, point may also rest on a
+project's heading, where `c' starts a task in that project; so may a
+click."
   (when-let* ((buffer (get-buffer roost--sidebar-buffer))
               (window (selected-window))
               ((eq (window-buffer window) buffer)))
     (with-current-buffer buffer
       (unless (or (mouse-event-p last-input-event)
-                  (get-text-property (window-point window) 'roost-task))
+                  (get-text-property (window-point window) 'roost-task)
+                  (get-text-property (window-point window) 'roost-offer))
         (when-let* ((row (or (when-let* ((task (roost--frame-task)))
                                (roost--task-row (roost--key task)))
                              (text-property-not-all (point-min) (point-max) 'roost-task nil))))
@@ -11205,7 +12837,8 @@ heading, where `c' starts a task in that project; so may a click."
   "Short count of TASKS waiting for you, or nil."
   (let ((waiting (seq-count #'roost--waiting-p tasks)))
     (when (> waiting 0)
-      (propertize (format "%d waiting" waiting) 'face (roost--waiting-face tasks)))))
+      (propertize (format "%d waiting" waiting) 'face (roost--waiting-face tasks)
+                  'roost-tint (roost--waiting-face tasks)))))
 
 (defun roost--waiting-face (tasks)
   "Face for a count of TASKS waiting: as for the most urgent of them.
@@ -11242,8 +12875,15 @@ under a dozen columns, `roost--status-mark' stands for it."
          (face (if waiting
                    (roost--status-face attention)
                  (roost--status-word-face attention)))
+         ;; The fewest columns the name takes: one, and the ID that tells
+         ;; it from a task of the same name.
+         (least (string-width (roost--row-name task 1)))
+         ;; Under the task it was started from, as far as leaves room for
+         ;; those, a space and the column of a status's mark.
+         (indent (let ((nested (roost--nesting-indent task)))
+                   (substring nested 0 (min (length nested) (max 0 (- width 1 least 2))))))
          ;; After an indent.
-         (room (1- width))
+         (room (- width 1 (length indent)))
          (idle (equal attention "idle"))
          ;; For an agent you have seen that waits for nothing, what changed
          ;; since you last looked, if anything.
@@ -11258,21 +12898,42 @@ under a dozen columns, `roost--status-mark' stands for it."
                                  (string-width (roost--row-name task))
                                (min (string-width (roost--row-name task)) 12))
                              1 (string-width label)))))
-         (label (cond ((not status) nil)
+         ;; A worktree on another branch, which the panel says first: here
+         ;; too, for every task at once, while its agent isn't at work and
+         ;; no louder word is there.  Merging and retiring act on the
+         ;; task's branch, so until it is back they are refused.
+         (astray (and (or idle (member status '("stopped" "exited" "merged")))
+                      (not (roost--field task 'worktreeMissing))
+                      (when-let* ((branch (roost--other-branch task)))
+                        (propertize (if (equal branch "HEAD") "detached"
+                                      (concat "on " (truncate-string-to-width branch 14 nil nil "…")))
+                                    'face 'roost-status-permission))))
+         (label (cond (astray (if (funcall fits astray) astray
+                                (propertize "!" 'face 'roost-status-permission)))
+                      ((not status) nil)
                       (idle (seq-find (lambda (text) (funcall fits text t))
                                       (list status (roost--since-looked-text task t))))
                       ((funcall fits status) status)
                       (t (roost--status-mark attention waiting))))
          (name (roost--row-name task (if label (max 1 (- room (string-width label) 1)) room)
                                 (if current 'roost-heading 'default))))
-    (let ((row (concat " " name
+    (let ((row (concat " " indent name
                        (when label
                          (concat (make-string (max 1 (- room (string-width name) (string-width label))) ?\s)
-                                 ;; With a mark's own weight.
+                                 ;; With a mark's own weight.  As in the
+                                 ;; dashboard, the word of an agent that
+                                 ;; can't go on without you, or failed, is
+                                 ;; on a tint of its colour.
                                  (propertize label 'face
                                              (if-let* ((own (get-text-property 0 'face label)))
                                                  (delq nil (list own face))
-                                               face)))))))
+                                               face)
+                                             'roost-tint
+                                             (and (equal label status) (not idle)
+                                                  (car (memq (roost--status-word-face attention)
+                                                             '(roost-status-permission
+                                                               roost-status-failed))))))))))
+      (setq row (roost--tint-marked row))
       ;; Behind the row's own faces, so its status keeps its colour.
       (when current
         (add-face-text-property 0 (length row) 'roost-current t row))
@@ -11311,8 +12972,10 @@ for any other directory, which asks for a host and a folder first."
          (width (max 12 (roost--narrowest-width roost-sidebar-width)))
          (position (if window (window-point window) (point)))
          (key (get-text-property position 'roost-task))
-         (heading (unless key (get-text-property position 'roost-directory)))
+         (offer (get-text-property position 'roost-offer))
+         (heading (unless (or key offer) (get-text-property position 'roost-directory)))
          (other (eq (get-text-property position 'roost-project) 'other))
+         (conversation (get-text-property position 'roost-new-conversation))
          (tasks (roost-tasks))
          (roost--marked-key (if (roost--workspace-backend)
                                 (when-let* ((task (roost--frame-task))) (roost--key task))
@@ -11328,11 +12991,20 @@ for any other directory, which asks for a host and a folder first."
           (list (string-replace
                  "%" "%%"
                  ;; From where the text starts, past a margin for lights.
-                 (concat (propertize " " 'display '(space :align-to 0))
-                         (propertize "Roost" 'face 'roost-title)
-                         (if-let* ((summary (roost--sidebar-summary tasks))) (concat "  " summary) "")
-                         ;; Nothing here changes until it watches again.
-                         (if roost-watch-mode "" (propertize "  paused" 'face 'roost-dim))))))
+                 (roost--tint-marked
+                  (concat (propertize " " 'display '(space :align-to 0))
+                          (propertize "Roost" 'face 'roost-title)
+                          (if-let* ((summary (roost--sidebar-summary tasks))) (concat "  " summary) "")
+                          ;; A space after, which pads the count's tint.
+                          (if roost-watch-mode " " (propertize "  paused" 'face 'roost-dim)))))))
+    ;; Ruled off from the tasks under it, to the window's edge.
+    (when-let* ((colour (roost--hairline)))
+      (let ((rule (list :underline (list :color colour :position t))))
+        (setq header-line-format
+              (list (let ((title (copy-sequence (car header-line-format))))
+                      (add-face-text-property 0 (length title) rule t title)
+                      title)
+                    (propertize " " 'display '(space :align-to right) 'face rule)))))
     (roost--insert-unreachable-hosts tasks width t)
     (if (null tasks)
         (insert "\n" (propertize (substitute-command-keys
@@ -11343,19 +13015,26 @@ for any other directory, which asks for a host and a folder first."
         (let* ((host (caar group)) (repo (cadar group)) (start (1+ (point)))
                (label (truncate-string-to-width
                        (format "%s · %s" (roost--host-label host)
-                               (file-name-nondirectory (directory-file-name (or repo "?"))))
+                               (if (roost--conversation-p (cadr group))
+                                   "Conversations"
+                                 (file-name-nondirectory (directory-file-name (or repo "?")))))
                        (- width 2) nil nil "…")))
           (insert roost--gap (propertize label 'face (if (gethash host roost--errors)
                                                    'roost-status-failed 'roost-dim))
                   (make-string (max 1 (- width (string-width label) 1)) ?\s))
-          (insert-text-button "+" 'face 'roost-dim 'follow-link t
-                              'help-echo (format "New task in %s" (or repo "this project"))
-                              'action (lambda (button)
-                                        (goto-char (button-start button))
-                                        (call-interactively #'roost-new-task)))
+          (if (roost--conversation-p (cadr group))
+              (insert-text-button "+" 'face 'roost-dim 'follow-link t
+                                  'help-echo "New conversation"
+                                  'action (lambda (_) (roost-new-conversation host)))
+            (insert-text-button "+" 'face 'roost-dim 'follow-link t
+                                'help-echo (format "New task in %s" (or repo "this project"))
+                                'action (lambda (button)
+                                          (goto-char (button-start button))
+                                          (call-interactively #'roost-new-task))))
           (insert "\n")
-          ;; `c' on the heading starts a task in this project.
-          (when repo
+          ;; `c' on the heading starts a task in this project; a
+          ;; conversation's is none of yours.
+          (when (and repo (not (roost--conversation-p (cadr group))))
             (put-text-property start (point) 'roost-directory
                                (roost--project-directory (cadr group))))
           (dolist (task (cdr group))
@@ -11374,7 +13053,30 @@ for any other directory, which asks for a host and a folder first."
                       ;; and the current task's band reaches the window's edge.
                       (apply #'propertize "\n" (if (roost--current-task-p task)
                                                    (append '(face roost-current) row)
-                                                 row))))))))
+                                                 row)))
+              ;; Under one that asks, what it asks: whether to go there now
+              ;; turns on that, and its row has room for a word.
+              (when-let* (((roost--blocked-p task))
+                          (request (roost--permission-request task)))
+                (insert (apply #'propertize
+                               (concat "   " (truncate-string-to-width (roost--one-line request)
+                                                                       (max 4 (- width 4)) nil nil "…"))
+                               'face 'roost-dim 'mouse-face 'highlight
+                               'help-echo (concat request "\nmouse-1: open · mouse-3: actions")
+                               row)
+                        (apply #'propertize "\n" row)))
+              (dolist (offer (roost--offers task))
+                (roost--insert-offer-row task offer (roost--sidebar-offer-row task offer width))))))))
+    ;; A conversation needs no project, so it comes before them.
+    (insert roost--gap)
+    ;; Cut where a narrow sidebar would cut it, with a sign that it was.
+    (insert-text-button (truncate-string-to-width " New conversation" (max 4 (1- width)) nil nil "…")
+                        'face 'roost-dim 'follow-link t 'mouse-face 'highlight
+                        'roost-new-conversation t
+                        'help-echo "Talk to an agent in no project: mouse-1 opens its terminal"
+                        'action (lambda (_) (roost-new-conversation)))
+    ;; Its end of line too, where point is after a click or C-e.
+    (insert (propertize "\n" 'roost-new-conversation t))
     (when (> (or roost-sidebar-recent-projects 0) 0)
       (insert roost--gap (propertize "Start a task in" 'face 'roost-dim) "\n")
       (dolist (directory (roost--recent-projects tasks))
@@ -11384,8 +13086,11 @@ for any other directory, which asks for a host and a folder first."
     ;; has none of a row's, for a click on the space below the rows.
     (insert "\n")
     (goto-char (or (and key (roost--task-row key))
+                   ;; One no longer waiting leaves you on its task.
+                   (and offer (or (roost--offer-row offer) (roost--task-row (car offer))))
                    (and heading (roost--heading-row heading))
                    (and other (text-property-any (point-min) (point-max) 'roost-project 'other))
+                   (and conversation (text-property-any (point-min) (point-max) 'roost-new-conversation t))
                    (point-min)))
     (when window (set-window-point window (point)))
     (pcase-dolist (`(,shown . ,line) starts)
@@ -11970,9 +13675,10 @@ longest any waited on you at a time while you were here."
          ((seq-some (lambda (entry) (eq (cdr entry) 'pending)) replies)
           (insert (propertize "Asking each host…\n" 'face 'roost-dim)))
          (t
-          (insert (propertize (format "%-12s%7s%10s%15s%10s%17s\n" "" "At once" "Worked" "Waited on you"
-                                      "Longest" "Per hour worked")
-                              'face 'roost-dim))
+          ;; Ruled off from the days under it, as a table's heading is.
+          (insert (roost--ruled (propertize (format "%-12s%7s%10s%15s%10s%17s\n" "" "At once" "Worked"
+                                                    "Waited on you" "Longest" "Per hour worked")
+                                            'face 'roost-dim)))
           (pcase-dolist (`(,start . ,tally) (plist-get roost--workload :days))
             (insert (roost--workload-row
                      (cond ((= start (roost--day-start today)) "Today")
@@ -12189,9 +13895,15 @@ In a narrow window, a long detail or hint goes on below its own start."
                         'help-echo path 'wrap-prefix (make-string (min 20 (- (point) start)) ?\s))
             "\n"))
   (when (and hint (memq ok '(nil optional)))
-    (insert (propertize (concat "      " hint "\n")
-                        'face (if ok 'roost-dim 'roost-status-permission)
-                        'wrap-prefix "      "))))
+    (let ((line (propertize (concat "      " hint "\n")
+                            'face (if ok 'roost-dim 'roost-status-permission))))
+      ;; What to do about a check that failed, on a band: it is what
+      ;; you came to this buffer for.
+      (if-let* (((not ok))
+                (tint (roost--tint 'roost-status-permission)))
+          (insert (propertize (roost--banded line 'roost-status-permission)
+                              'wrap-prefix (propertize "      " 'face (list :background tint))))
+        (insert (propertize line 'wrap-prefix "      "))))))
 
 (defun roost--render-doctor ()
   "Redraw the setup check from `roost--doctor-results'."
@@ -12201,12 +13913,13 @@ In a narrow window, a long detail or hint goes on below its own start."
             (default (roost--agent-name roost-default-agent)))
         (erase-buffer)
         (insert (propertize "Roost setup check" 'face 'roost-title) "\n\n"
-                (propertize "Emacs" 'face 'roost-heading) "\n")
+                (roost--ruled (concat (propertize "Emacs" 'face 'roost-heading) "\n")))
         (dolist (check (roost--doctor-local-checks))
           (apply #'roost--doctor-line check))
         (dolist (entry roost--doctor-results)
           (let ((result (cdr entry)))
-            (insert "\n" (propertize (roost--host-label (car entry)) 'face 'roost-heading) "\n")
+            (insert "\n" (roost--ruled (concat (propertize (roost--host-label (car entry)) 'face 'roost-heading)
+                                                "\n")))
             (cond
              ((eq result 'pending) (insert (propertize "  Checking…\n" 'face 'roost-dim)))
              ((eq (car-safe result) 'error)
@@ -12249,9 +13962,9 @@ In a narrow window, a long detail or hint goes on below its own start."
                                              (format "Optional: needed only for %s tasks" name))
                                             (t (format "For %s tasks: %s" name hint)))
                                       (alist-get 'path check))))))))
-        (insert "\n" (propertize (substitute-command-keys
-                                   "\\<roost-doctor-mode-map>\\[roost-doctor] checks again · C-u \\[roost-doctor] checks another host")
-                                  'face 'roost-dim)
+        (insert "\n" (roost--quiet-but-keys
+                       (substitute-command-keys
+                        "\\<roost-doctor-mode-map>\\[roost-doctor] checks again · C-u \\[roost-doctor] checks another host"))
                 "\n")
         (goto-char (point-min))))))
 
@@ -12319,9 +14032,29 @@ leaves out the status light, for a count no mode line shows."
                                  (propertize "●" 'face face 'display
                                              (roost--light 'mode-line 'waiting (and (> blocked 0) 'pulse)
                                                            face 'mode-line-active))
-                               (propertize "●" 'face face))
-                             (format " Roost:%d" (+ blocked waiting)))
-                            'help-echo "Agents waiting for you; mouse-1 opens the next"
+                               ;; In the shape the lists give it, where
+                               ;; the display draws one.
+                               (let ((dot (propertize "●" 'face face)))
+                                 (if-let* (((not plain))
+                                           (shape (roost--status-shape-image
+                                                   (pcase face
+                                                     ('roost-status-permission 'asks)
+                                                     ('roost-status-failed 'wrong)
+                                                     (_ 'turn))
+                                                   face)))
+                                     (propertize dot 'display shape)
+                                   dot)))
+                             ;; With a mark while one asks and holds its agent
+                             ;; up: colour alone tells that from one that
+                             ;; finished only to those who see the colours apart.
+                             (format " Roost:%d%s" (+ blocked waiting) (if (> blocked 0) "!" "")))
+                            'help-echo (concat (if (> blocked 0)
+                                                   (format "%d of %d agents waiting for you %s, which holds %s up"
+                                                           blocked (+ blocked waiting)
+                                                           (if (= blocked 1) "asks" "ask")
+                                                           (if (= blocked 1) "it" "them"))
+                                                 "Agents waiting for you")
+                                               "; mouse-1 opens the next")
                             'mouse-face 'mode-line-highlight
                             'local-map (make-mode-line-mouse-map 'mouse-1 #'roost-next-waiting))
                 " ")))))

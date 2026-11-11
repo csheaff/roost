@@ -17,7 +17,7 @@ import time
 import unittest
 
 import crash_harness as harness
-from crash_harness import Box
+from crash_harness import Box, FAKE
 import crash_scenarios as scenarios
 
 # Set by `make crash`: "commands" or "lines", which sweeps every line too.
@@ -45,6 +45,18 @@ class Crashes(unittest.TestCase):
                 self.assertEqual(reply["result"]["retiringCommit"], commit)
                 self.assertEqual(box.helper("list", socket=box.socket)["result"], [])
                 self.assertEqual(len(box.git("log", "--format=%H", "--no-merges", "main", "--", "work").split()), 1)
+
+    def test_a_first_conversation_cut_short_in_git_init_makes_one_when_asked_again(self):
+        box = self.box()
+        asked = dict(directory="/nowhere", name="Conversation 09:15", socket=box.socket,
+                     command=[sys.executable, str(FAKE)], createId="ab" * 8, conversation=True)
+        # Inside `git init`, which leaves a .git Git takes for no repository.
+        box.arm("inside", at=1)
+        self.assertIsNone(box.helper("create", **asked))
+        box.disarm()
+        reply = box.helper("create", **asked)
+        self.assertTrue(reply["ok"], reply)
+        self.assertIs(reply["result"]["conversation"], True)
 
     def test_a_removal_of_an_agents_worktree_cut_short_costs_the_primary_checkout_nothing(self):
         for action in ("retire", "merge", "discard"):

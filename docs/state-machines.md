@@ -151,6 +151,29 @@ branch rules block reading `to merge` is fixed under [#227](https://github.com/c
 `roost-a-pull-request-github-holds-up-isnt-to-merge`. The rest are under
 [Known and not fixed](#known-and-not-fixed).
 
+### Found by the models, 2026-11-11
+
+The models of each section, brought in line with offers, conversations, forks,
+several attempts and `B`, found these. Each was replayed on the real code before
+it was fixed. A fixed finding's config is gone, and a variant that undoes the fix
+fails in its place.
+
+| Finding | Sev | What goes wrong | Machine | Status |
+| --- | --- | --- | --- | --- |
+| LC-7 | S1 | `x` takes the branch Claude made for an agent's own worktree as the one keeping the task's commits, and deletes both: after `B` names it, or for a fork that never committed once its source is gone | [Finishing a task](#finishing-a-task) | Fixed, `test_a_branch_that_goes_with_the_task_keeps_none_of_its_commits` |
+| LC-8 | S1 | A fork and the task it was made from, finished at once, each count on the other's branch, and the commit only they have goes with both | [Finishing a task](#finishing-a-task) | Fixed, `test_two_tasks_that_share_a_commit_never_both_go_on_the_others_word` |
+| FORGE-13 | S1 | `B` naming what has all the task's commits, as a tag at its tip, makes it read as a task that never committed: `x` retires it with its commit merged nowhere, and one merged there reads as not merged | [Landed](#landed) | Fixed, `test_retargeting_onto_a_branch_that_has_the_tasks_commits_leaves_them_merged` |
+| REQUESTS-9 | S3 | A reply read before `B` and arriving after brings back the old branch: `m` asks about one branch, and the host merges into the other | [Cached task](#cached-task) | Fixed, `roost-a-reply-read-before-the-branch-changed-keeps-the-new-one`, `test_retargeting_is_no_event_of_the_agents_and_says_when_it_was` |
+| STATUS-10 | S3 | Codex at "Implement this plan?" reads `ready`: a prompt sent is dropped, and the Enter after it implements the plan | [Agent status](#agent-status) | Fixed, [#239](https://github.com/csheaff/roost/issues/239), `test_codex_asks_about_its_plan_once_a_plan_mode_turn_ends` |
+| STATUS-11 | S3 | A subagent's request, with the main agent's beside it, is hidden once the main agent's is answered and its turn ends | [A task's request](#a-tasks-request) | Fixed, `test_a_subagents_request_among_several_outlasts_the_main_agents_turn` |
+| LC-9 | S3 | A fork made as its source is retired or discarded starts from a worktree half removed | [Worktree lock](#worktree-lock) | Fixed, `test_a_task_stays_while_a_fork_reads_where_its_work_stands` |
+| VIEWS-14 | S3 | A fork's draft closes for a fork made the other way, with its task's conversation or without, when `C-c C-f` is pressed as it is created | [The new task draft](#the-new-task-draft) | Fixed, `roost-a-fork-given-a-new-conversation-stays-for-a-task-that-goes-on-with-the-old` |
+| FORGE-14 | S4 | A branch named in another Emacs, or by a `B` whose reply was lost, goes unmeasured while Git's stamp stays, and the row keeps saying "merged" | [Task measurement](#task-measurement) | Fixed, `roost-a-branch-to-merge-into-named-elsewhere-is-measured-against` |
+| FORGE-15 | S3 | After `B` makes a commit of the task's own its start, by naming what has some of its commits, a reset of its branch reads wrong: `x` retires a task that is ahead, or one merged reads as not | [Landed](#landed) | Fixed: `test_a_task_reset_to_a_commit_of_its_own_after_retargeting_still_has_unmerged_commits`, `test_a_task_reset_to_a_merged_commit_of_its_own_after_retargeting_reads_as_merged`, `test_a_task_reset_to_where_it_started_after_retargeting_reads_as_never_committed` |
+| VIEWS-15 | S3 | Several attempts at one prompt are made from two, when the draft's own request is lost or refused, you change the prompt, and ask again | [The creation ID](#the-creation-id) | Fixed: `roost-a-draft-changed-between-asks-makes-its-attempts-from-one-wording`, `test_the_attempts_of_one_draft_are_made_from_one_wording`, `test_attempts_asked_for_at_once_in_other_words_make_one_wording` |
+| LC-10 | S4 | An offer its agent makes after you were asked goes with a task you finish, unnamed | [Finishing a task](#finishing-a-task) | Fixed: `test_an_offer_made_since_you_were_asked_keeps_its_task`, `test_an_offer_made_while_git_merges_keeps_its_task`, `roost-finishing-a-task-tells-its-host-which-offers-its-question-named` |
+| STATUS-12 | S4 | Closing Codex's plan menu says nothing, so its task reads `permission` until your next prompt | [Agent status](#agent-status) | Accepted: `AgentStatus.PlanMenuClosed.cfg` |
+
 ## A task on its host
 
 The helper's records and what it does to Git, from a task being asked for to its
@@ -211,12 +234,75 @@ Invariants:
 | Removing | refused | | Ended | marker cleared; agent stays stopped | `remove_worktrees` |
 | Removing | helper dies | | Removal cut short | marker stays | |
 | Removal cut short | retire, merge, discard | | Removing | `put_back_removed` first | `retire`, `discard` |
-| any but Removing | forget | no live pane | Gone | window closed; Git left | `forget` |
+| any but Removing | forget | no live pane, and no offer its question didn't name | Gone | window closed; Git left | `forget` |
 | Ended | retire, merge | a step after the checkpoint fails | Finishing, still stopped | `retiringCommit` stays | `retire` |
+| Live, Ended | retarget | not Merging, Removing or Removal cut short; a branch other than its own | as it was | `integrationBranch`, `baseCommit` and `retargetedAt` saved, whole under the lock; `startCommit` kept, or written for a record without one | `retarget` |
+
+A conversation is a task too, in a repository Roost keeps for them
+(`conversation_repository`), with a worktree and a branch there: it stops, resumes,
+retires, is discarded and forgotten as any task, and what it loses is counted the
+same way. It is in no project, so `retarget` refuses it.
 
 Illegal or refused: see [Action by state](#action-by-state).
 Assumed, not stated: a record's `worktree` and `repo` never change; `Store.read`
 takes older records' fields as they come.
+Open: none.
+
+#### Offers
+
+Kind: implicit, a field of the record and not a machine of its own. Lives in:
+`offers` (a list of `{id, title, brief, at}`), `offersAt`, and `parent` on a task
+started from one. With `roost-agent-offers` on, a Claude task's record has `mayOffer`,
+and its agent runs the helper as an MCP server (`McpServer`), whose one tool,
+`propose_task`, writes `offers`.
+
+| State | Meaning | How you can tell |
+| --- | --- | --- |
+| None | nothing offered, or all taken | no `offers` |
+| Waiting | one to three offers wait for you | `offers` lists them |
+
+Invariants:
+- I1. At most `OFFER_LIMIT` (3) wait, each title once. (`propose_task`.)
+- I2. An offer is no event of the agent's: `status`, `updatedAt`, `seen` and the
+  request stay as they were; `offersAt` orders replies instead
+  (`roost--newer-offers` in Emacs). (`set_offers`.)
+- I3. Taking one changes nothing else, and taking one already taken changes nothing.
+  (`take_offer`.)
+- I4. What you read is what an agent gets: a title or brief that holds a control
+  character, or one that doesn't show as itself, is refused before it is recorded.
+  (`hidden_character`.)
+- I5. A task made from an offer leaves none of it waiting, though opening's take
+  failed and its creation was cut short once the task was saved: the task records the
+  offer it came from, and every listing takes such an offer. (`make_task`,
+  `taken_offers`; `make crash`'s `CreateFromOffer`.)
+- I6. An offer goes with its task only if the question before named it: the request
+  says which offers that question named, and its host refuses while the record holds
+  another. ([Finishing a task](#finishing-a-task), I6.)
+
+| From | Event | Guard | To | Effect | Code |
+| --- | --- | --- | --- | --- | --- |
+| None, Waiting | agent offers | fewer than 3, or the title waits already | Waiting | added, or its brief replaced under its ID | `propose_task` |
+| Waiting | agent offers | 3 wait, a new title | Waiting | refused; the agent is told to mention it | `propose_task` |
+| any | agent offers | task `stopped` or `retired` | as it was | refused | `propose_task` |
+| Waiting | you open it, do it here, or dismiss it | | Waiting or None | dropped | `take_offer` |
+| Waiting | a task is made from it | its take failed | Waiting or None | dropped | `make_task`, `take_offer` |
+| Waiting | a listing | a task records it as the offer it came from | Waiting or None | dropped | `taken_offers` |
+| Waiting | task finished or forgotten | every offer it holds is one the question named | gone with the record | the question before names them, and the request says which, as `offers` | `roost--offers-sentence`, `roost--offers-named` |
+| Waiting | task finished or forgotten | it holds an offer the question didn't name, as one made while you read | Waiting | refused, naming it, and nothing changes; Emacs lists the task again, so asking again names it | `require_offers_named`, `roost--finish-refused` |
+
+`test/formal/emacs_and_hosts` checks I2 in Emacs as `NoOfferRollback`: no reply brings
+back an offer you took, or hides one made since. `test/formal/task_on_host` checks
+what finishing a task takes as `OffersTold`: a request is refused for an offer its
+question didn't name, and a stopped task takes no offer, so none arrives after that,
+as while its worktree goes, to go with it unseen.
+
+In Emacs, opening an offer takes it at once and opens an ordinary
+[new task draft](#the-new-task-draft): nothing ties the offer to the draft, so the
+draft's states are its own, though what it says includes the task it shows under, so
+a late reply leaves a draft moved elsewhere and back. Do it here is an ordinary
+[send](#the-send-id) of a fixed line, with a send ID of the task's and the offer's IDs,
+so that asking again pastes it once, then a take. A take is asked only for a task still listed: one that went while
+Do it here's prompt went, as its host was forgotten, stays gone.
 Open: none.
 
 ### Creation
@@ -251,6 +337,10 @@ Invariants:
   Git writes that text through gettext, so a translated Git may write
   another; unverified here, as this Mac's Git has no translations. The
   fall-back is a failed row, which `x` clears.
+- I5. A fork starts from its source's worktree whole, as it stood: the source is
+  asked for under the registry lock, refused while its worktree goes, Git merges it
+  or a removal was cut short, and its worktree lock is held, shared, while `snapshot`
+  reads it. (`conversation_to_fork`, `make_task`.)
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
@@ -258,8 +348,11 @@ Invariants:
 | Asked | | a note has this ID | waits | `settle_creation(wait=True)` | `made_for` |
 | Asked | | a record has this ID | Made | returns that task | `made_for` |
 | Asked | | neither | Preparing | | `make_task` |
+| Preparing | an attempt, saying its wording | another of its group was made from other words | Made, of that other | nothing made; that task returned, as one made before | `made_from_other_words`, `make_task` |
+| Preparing | a fork | its source is not Merging, Removing or Removal cut short | Preparing | the source's work read, its worktree lock shared meanwhile | `conversation_to_fork`, `snapshot` |
 | Preparing | | | Noted | note locked before it is in place | `noting_creation` |
 | Noted | Git and spawn done | | Made | note unlinked under its lock | `noting_creation` |
+| Noted | an attempt, as its record is saved | another of its group was recorded meanwhile from other words | Made, of that other | undone as a failed creation is; that task returned | `made_from_other_words`, `abandon` |
 | Noted | Git refused | nothing there | Failed | branch deleted | `make_task` |
 | Noted | helper and Git die | | Cut short | | |
 | Cut short | list, or same ID | Git stopped it | gone | force-remove, unregister, delete branch | `undo_creation` |
@@ -306,13 +399,15 @@ Invariants:
 | `rpc` `pr` | push, forge | worktree lock shared | re-reads, then saves |
 | `prepare_look` | snapshot | worktree lock shared | `record_look` re-reads, compares `looked` |
 | `attach` | decoding, writing | worktree lock shared | saves nothing |
+| `make_task`, for a fork | snapshot of its source | the source's worktree lock shared | saves nothing of the source |
 | `remove_worktrees` | teardown, removal | worktree lock exclusive, `removing` marker, status `stopped` | re-reads, clears only its own marker |
-| `integrating` | Git's merge and its hooks | worktree lock exclusive, `integrating` marker, for a merge the repository's lock | re-reads, clears only its own marker; `retire` asks again whether the agent is at work |
+| `integrating` | Git's merge and its hooks | worktree lock exclusive, `integrating` marker, for a merge the repository's lock | re-reads, clears only its own marker; `retire` asks again whether the agent is at work, or has offered a task its question didn't name |
 
 Steps outside any lock, by design: `merged_pull_request_head` (only its answer
 is kept, and `retire` compares it to the branch's tip read under the lock);
 `settle_creations` before `list`; `check_pull_requests` and `add_git_stats`
-after it; everything in `make_task` up to its one `locked` block.
+after it; everything in `make_task` up to its `locked` block, but a fork's look at
+its source, above.
 
 Illegal or refused: nothing refuses; everything queues. No holder waits on Git's
 hooks or a stopped tmux server any more: a server under SIGSTOP costs each `list`
@@ -333,12 +428,13 @@ Says what holds a task's worktree while the registry lock is released.
 | State | Meaning | How you can tell |
 | --- | --- | --- |
 | Free | | both probes of `worktree_holder` succeed |
-| Work | shared: `pr`, a look, an attachment | SH free, EX refused: `worktree_holder` says "work" |
+| Work | shared: `pr`, a look, an attachment, a fork reading where its work stands | SH free, EX refused: `worktree_holder` says "work" |
 | Removal | exclusive: `remove_worktrees`, or Git's merge (`integrating`) | SH refused: "removal"; the record says which |
 
 Invariants:
 - I1. Taken and probed only under the registry lock, so `worktree_holder`'s own
-  brief hold never collides with a taker. Holds at every call.
+  brief hold never collides with a taker. Holds at every call, a fork's of its
+  source among them (`conversation_to_fork`).
 - I2. Held by the request alone, and nothing it starts (`holding_worktree`), so what
   Git or a hook leaves running keeps no hold. A request that takes it for long
   outlives Emacs's wait ([Request lifetime](#request-lifetime)), which is why it
@@ -351,7 +447,7 @@ Invariants:
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
-| Free | `pr`, look, attach | | Work | shared | `holding_worktree` |
+| Free | `pr`, look, attach, a fork of it | | Work | shared | `holding_worktree` |
 | Work | same | | Work | shared again | `holding_worktree` |
 | Free | removal | | Removal | exclusive | `remove_worktrees` |
 | Free | merge, update | | Removal | exclusive | `integrating` |
@@ -422,11 +518,11 @@ What each step leaves if it stops there, and what asking again does.
 | --- | --- | --- | --- |
 | 1 | read record, ask forge | none, then none | nothing changed |
 | 2 | `require_not_removing` | registry | refused, nothing changed |
-| 3 | `require_finished`, pane ownership | registry | refused |
+| 3 | `require_finished`, pane ownership; `permission` at Codex's plan menu counts as finished. Then `require_offers_named`: the record holds no offer but those the request says its question named (`offers`) | registry | refused, nothing changed |
 | 4 | `put_back_removed` if `removing` | registry | restores tracked files, its link |
 | 5 | `check_worktree`, clean, submodules, Git lock, agent work | registry | refused, nothing changed |
-| 6 | branch moved from `expect`, then merge | registry | see next machine; a second merge finds it there |
-| 7 | `safe_to_delete`, save `retiringCommit` | registry | |
+| 6 | branch moved from `expect`, then merge, into `integrationBranch` as the record has it then; the record read again after, with `require_finished`, `require_clean` and `require_offers_named` again | registry, released while Git merges | see next machine; a second merge finds it there. Refused after: merged, and not retired |
+| 7 | `safe_to_delete`, by `integrationBranch` and `startCommit` as the record has them now; save `retiringCommit` | registry | |
 | 8 | `stop` | registry | task stopped; agent's window gone |
 | 9 | `remove_worktrees` | released | worktree partly gone; `put_back_removed` restores it |
 | 10 | staging folder, `unregister_gone`, `delete_branch` | registry | branch still there, `check_worktree` finds no folder and goes on |
@@ -435,14 +531,33 @@ What each step leaves if it stops there, and what asking again does.
 
 `discard`: steps 2, 4, then `check_worktree(branch=False)`; the dry run stops
 there. Then `expect` against the branch, `told` against `discard_losses` counted
-again, `stop`, removal with force, branch, record. No checkpoint: `expect` and
-`told` are the guards, and a retry asks Emacs for a new dry run.
+again, `offers` against the offers the record holds (`require_offers_named`),
+`stop`, removal with force, branch, record. No checkpoint: `expect`, `told` and
+`offers` are the guards, and a retry asks Emacs for a new dry run.
+
+`forget`: step 2, then no live pane, `require_offers_named`, the window closed and
+`Store.remove`, in one hold of the registry lock.
 
 Invariants:
 - I1. No uncommitted work and no unmerged commit is lost by retire: checked
   before the agent stops (`require_clean`), again after (`remove_worktrees`), and
   the branch is deleted only at the commit verified. Holds, fuzzed against
-  commits landing throughout.
+  commits landing throughout. What keeps that commit is a branch that stays: the
+  branch it merges into, wherever `retarget` has put that, or, for a task that never
+  committed, any other. Not one that is going: the branch of a worktree its agent
+  made, which goes with the task, nor that of another task whose worktree is going
+  (`safe_to_delete`, `branches_going`). No `retarget` comes between a merge and that
+  check: it is refused while Git merges, and the registry lock is held from the
+  merge's end to the check, so the branch checked is the one merged into.
+- I5. Two tasks never go on each other's word. A fork that never committed and the
+  task it was made from may have a commit only their two branches have: each loses
+  nothing while the other's branch stays. A task finds its commits kept, or counts
+  what a discard loses, under the registry lock, and marks its record `removing`
+  before it lets the lock go; until its branch is deleted, under the lock again, its
+  branch keeps nothing for any other (`branches_going`, in `safe_to_delete` and
+  `discard_losses`). So the second to ask is refused, or told of the commit. A
+  removal cut short leaves the mark, so the same holds for the other task until
+  the first is finished.
 - I2. A second request finds its own partial work and finishes it, for the
   task's worktree (`put_back_removed`). What a removal left of an agent's isn't
   a worktree any more, so it stays, and the reply says so.
@@ -452,20 +567,41 @@ Invariants:
   `landed` shows. With its worktree still there, `resume` works. Once removal has
   gone through, as when `delete_branch` then fails, `resume` refuses for want of a
   worktree: the way on is to clear what refused it and finish the task again.
+- I6. No offer goes with a task but those the question before named. Emacs reads the
+  task's offers once, names them in the question, and sends their IDs with the
+  request (`offers`); `require_offers_named` refuses while the record holds another,
+  as one its agent made while you read, and one named that has gone since is no
+  matter. No offer arrives between that check and the record going: the registry
+  lock is held from the check until `stop` has saved `stopped`, which `propose_task`
+  refuses, and which nothing but `resume` leaves, itself refused while the worktree
+  goes and once a removal was cut short ([Task record](#task-record), I3 and I4).
+  `forget` checks and removes the record in one hold. A merge lets the lock go while
+  Git merges, so `retire` checks again on the record read after. A request with no
+  `offers`, as an older Emacs's, is checked for nothing, and each request, a retry
+  beside the original too, is checked by what its own question named. Holds;
+  `OffersTold` in `test/formal/task_on_host`.
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
+| asked | its agent offers a task while you read the question | | as it was | refused at step 3, naming the offer; asked again, the question names it | `require_offers_named` |
+| step 6 under way | its agent offers a task while Git merges | | merged, not retired, its agent running | says so; `x` retires it, its question naming the offer | `retire` |
 | step 6 done | removal refused by teardown's files | | stopped, merged, `retiringCommit` | says so; clearing them and `m` finishes | `remove_worktrees` |
 | step 8 done | agent committed in the last moment | | worktree gone, branch moved | `delete_branch` refuses; `m` merges the rest | `delete_branch` |
 | step 10 done, branch gone, `merge` asked | `retiringCommit` set | | only the record is left | merge skipped | `retire` |
 | step 10 done, branch gone, `merge` asked | no `retiringCommit` | | refused | "nothing to merge"; retire finishes | `retire` |
+| a step failed, no removal cut short | `retarget` | | as it was, merging into another branch | asked again, step 7 checks that branch: "unmerged commits" unless it has them | `retarget`, `safe_to_delete` |
+| step 9 under way, or cut short | another task with the same commits is retired | only this task's branch has them besides | that one refused | "unmerged commits" | `branches_going`, `safe_to_delete` |
+| step 9 under way, or cut short | another task with the same commits is discarded | only this task's branch has them besides | that one told of them, or refused | "holds more than you were told" | `branches_going`, `discard_losses` |
 
-Illegal or refused: an agent at work, a task another pane took, a dirty worktree,
+Illegal or refused: an agent at work, a task another pane took, an offer the
+question didn't name, a dirty worktree,
 unmerged commits, work in its agent's worktree or submodules, a locked worktree,
-and for `merge` a branch moved from `expect`; each before anything changes. `discard`
+a fork reading its worktree, and for `merge` a branch moved from `expect`; each
+before anything changes. `discard`
 refuses what `check_worktree` refuses with `branch=False`, a link, a path outside
 Roost's folder, a moved worktree, and a missing one whose branch the primary checkout
-holds; then a branch moved since its dry run, more to lose than it told you, and what
+holds; then a branch moved since its dry run, more to lose than it told you, an offer
+its question didn't name, and what
 `require_nothing_kept` finds. With the repository gone, nothing keeps a worktree, and
 `unregister_gone` has nothing to do.
 Open: none.
@@ -498,6 +634,9 @@ Invariants:
   (`git_with_hooks`). Holds.
 - I4. One merge at a time in a repository. A second is refused at once, saying which
   runs: it could only wait. An `update` reads integration and takes no such lock.
+  A merge goes into `integrationBranch` as the record has it when it starts, and
+  `retarget` is refused while Git merges, so what retiring checks after is that
+  branch.
 - I5. A merge cut short is named, and never read as your changes. The mark stays
   until a poll, or `merge`, `retire`, `update`, `pr`, `resume` or `send`, finds with
   `merge_left` that nothing is left: HEAD moved, or nothing differs. A checkout it
@@ -615,6 +754,11 @@ Invariants:
   through `delete_branch`, which refuses one checked out anywhere.
 - I4. What stays is said: `agent_left` fills `leftBehind` in the reply, and Emacs
   shows it.
+- I5. The branch Claude made for a worktree its agent made keeps none of the task's
+  commits, as retire sees it: it goes with the task, whatever the worktree is on at
+  that moment. So not as the branch the task merges into, should `retarget` have
+  named it, nor as the other branch that has the start of a task that never
+  committed (`safe_to_delete`).
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
@@ -622,6 +766,7 @@ Invariants:
 | Unknown, Been there | hook | says the agent made it | Made | saved | `update_hook`, `ClaudeAgent.made_worktree` |
 | Made | retire | holds work | refused | names it, says what to do | `require_agent_work_kept` |
 | Made | retire | idle | Gone | `git worktree remove --force --force`, then the branch | `remove_agent_worktrees` |
+| Made | retire | idle, and only its branch has the task's commits | refused | "unmerged commits", before anything changes | `safe_to_delete` |
 | Made | discard | | Gone | the same, whatever it held when counted | `remove_agent_worktrees` |
 | Made | retire, discard | anyone worked there since it was listed, or it isn't the one made | stays | so does its branch; the reply names both | `remove_agent_worktrees`, `agent_left` |
 | Made | Git can't remove it | | stays | so does its branch; the reply says both | `remove_agent_worktrees`, `agent_left` |
@@ -657,7 +802,7 @@ reads `interrupted`.
 | `starting` | Runner made, agent has reported nothing yet | `ACTIVE`; set by `make_task` and `spawn` |
 | `ready` | Agent waits for a prompt | `lastEvent` says why: `SessionStart`/`session_start` (counts as seen), `Stop`, `Interrupt`, `Idle`, `Notification` |
 | `running` | Agent works on a prompt | `ACTIVE` |
-| `permission` | Agent asks something | `ACTIVE`; `lastEvent` `Dialog` means it holds up no turn |
+| `permission` | Agent asks something | `ACTIVE`; `lastEvent` `Dialog` means it holds up no turn, and `Plan` that its turn is over and Codex's menu asks whether to implement its plan |
 | `background` | Turn ended with work left: Claude's tasks or crons, Pi's queue | `ACTIVE`; never reported by Codex or OpenCode |
 | `stopped` | Stopped with `K` | `ENDED`; `paneId`, `windowId` None |
 | `exited` | Agent's process ended 0, or Claude said you left it | `ENDED` |
@@ -671,7 +816,9 @@ Invariants:
 - I1. `ACTIVE` means work may be under way; `ENDED` means the process has ended
   (comment at `ENDED`). Assumed by `list_tasks` and `require_finished`. **Not
   true of `failed` from `StopFailure`, or a report's `error`:** the agent lives,
-  which is why Emacs reads `live`.
+  which is why Emacs reads `live`. **Nor of `permission` with `lastEvent`
+  `Plan`:** the turn is over, so `require_finished` lets it go
+  (`asks_about_plan`).
 - I2. A status comes only from the current run: a hook, report or runner of an
   earlier run changes nothing (manual, How it works).
 - I3. `stopped` is final until `spawn`: no source but `spawn` leaves it.
@@ -683,7 +830,9 @@ Invariants:
 - I6. `permission` shows while the agent waits on you, and only then, as far as
   its hooks can say. `send` depends on it: it refuses `permission` because a
   paste and Enter could answer a menu. Unsure, it stands, as the manual allows.
-  Open: STATUS-3.
+  Open: STATUS-3. **Known to outlast the wait at Codex's plan menu:** closing
+  it, with Esc or "No, stay in Plan mode", sends nothing, so `permission`
+  stands until your next prompt; `send` goes through when forced.
 - I7. Every status change moves `updatedAt`; nothing else does (`turn`, `rename`,
   `seen`, `inspect` keep it).
 - I8. A live agent's status can only be wrong until its next event. **Not
@@ -764,10 +913,21 @@ agent. No `Notification`; no `background`; `error` isn't reset by hooks.
 | any | `PreToolUse`, `PostToolUse` | `running` | same | from `permission`, as Claude's above |
 | any | `PermissionRequest` | `permission` | same | |
 | any | `Stop` | `ready` | `Stop` | `lastReply` |
+| any | `Stop`, its turn's rollout holding a `<proposed_plan>` block that `last_assistant_message` leaves out | `permission` | `Plan` | `request` "Asks whether to implement its plan"; `lastReply` is the reply and the plan (`plan_asked_about`) |
 | any | `Interrupt` | `ready` | `Interrupt` | Esc, or a declined request |
 
 Codex waits for each hook, and kills one after 3 s (`timeout = 3`), losing its
 event: STATUS-3.
+
+In Plan mode Codex shows a reply's `<proposed_plan>` block as the plan, leaves
+it out of the reply its Stop hook reports, and once the turn is over opens a
+menu, "Implement this plan?". A paste there is dropped, and the Enter after it
+takes the first choice, which implements the plan. Codex says nothing of the
+menu: no hook, and to its terminal `done` as after any turn. So the Stop hook
+reads the turn's rollout, from the last message of yours on: a plan there that
+the reported reply lacks means the menu follows. Outside Plan mode the reply
+keeps the block, and no menu opens. "Yes, implement this plan" is a
+`UserPromptSubmit`; Esc, and "No, stay in Plan mode", are nothing at all.
 
 #### Pi, unrelayed (`PiAgent.observe`)
 
@@ -819,6 +979,7 @@ and OpenCode may send a hook late, so theirs set none. Conditions are tried in t
 | --- | --- | --- | --- | --- |
 | not `running` | `working` | `T`, or from `permission` | `running` | `Approved` from `permission`, else `Working` |
 | not `permission` | `blocked` | | `permission` | `Blocked` from `running`, else `Dialog` |
+| `permission`, `lastEvent` `Plan` | `done`, `idle` | | unchanged | unchanged: Codex reports nothing of its plan's menu |
 | `permission`, `lastEvent` `Dialog` | `done`, `idle` | | `ready` | `Idle` |
 | `starting`, `running`, `permission` | `done` | | `ready` | `Stop` |
 | `running`, `permission` | `idle` | | `ready` | `Interrupt` if `T`, else `Idle` |
@@ -916,12 +1077,17 @@ the agent's own report; which tool call will say it's over; what it says it's do
 | Named by a hook | From the tool's payload, or a notification's message | `request`, no `requestFrom` |
 | Watching a command | As above, for the main agent's Bash, as the poll can't tell whose process it sees | `requestCommand`, at most 200 characters |
 | Knowing its tool | Named by a hook that names a tool | `requestCall`: who asked, the tool, a digest of each argument |
-| Overlapping | Another agent asks, by `worker_permission_prompt` or `agent_needs_input`, or anything new asks beside a request, unrelayed | `requestCall` names no agent that reports; no `requestCommand` or `requestQuestion` |
+| Overlapping | Another agent asks, by `worker_permission_prompt` or `agent_needs_input`, or anything new asks beside a request, unrelayed | `requestCall` names no agent that reports; no `requestCommand` or `requestQuestion`. Its `beside` says one of them is not the main agent: a subagent, a teammate, an agent in the background |
 | An MCP question alone | The first thing to ask since the agent last didn't | `requestQuestion` |
 | Named by a report | The agent's words | `requestFrom` = `report` |
 
 Emacs shows `request` only while `status` is `permission`
-(`roost--permission-request`). No Emacs code reads `activity`.
+(`roost--permission-request`), and `activity` only while it is `running` or
+`background` and its window lives (`roost--activity`): in the dashboard where a
+waiting agent's reply goes, and under the task's name in its panel. `activity`
+is the agent's own word in a `working` report, or, from a hook, the tool it
+starts, as "Running make test" (`note_activity`, `tool_activity`); it goes when
+the task stops working, at your next prompt, and with a new run.
 
 Invariants:
 
@@ -937,6 +1103,13 @@ Invariants:
   the poll's Esc, a new prompt, or the run's end does. A `permission_prompt`
   beside a request is taken for the notification that follows it, as it can't be
   told from one, but for a question's, which has none.
+- I6. For Claude Code, a request that is not the main agent's outlasts the main
+  agent's turn (`claude_answers`): a subagent's own, and overlapping ones with
+  `beside`. Its `Stop` ends them only if it says nothing is left in the
+  background (`background_tasks` is `[]`), and a prompt only if it is yours, as
+  a prompt on screen lets you send none; a subagent's own ends too with that
+  subagent's next event or end. An older Claude Code's `Stop` doesn't say what
+  is left: unsure, they stand. Checked by `SubagentAsks.tla`.
 
 | From | Event | Guard | To | Code |
 | --- | --- | --- | --- | --- |
@@ -946,8 +1119,10 @@ Invariants:
 | any | hook that doesn't ask | unrelayed, Codex, or a new conversation; not `permission` to `permission` | None | `update_hook` |
 | any | a tool's event that isn't an answer | unrelayed | unchanged | `tool_answers`, `update_hook` |
 | An MCP question alone | `elicitation_response`, `elicitation_complete` | | None | `update_hook` |
-| any but Overlapping | `PermissionRequest`, or a notification of an MCP question, while `permission`; a `permission_prompt` beside a question | unrelayed | Overlapping | `update_hook` |
-| any | notification of another agent's request | unrelayed | Overlapping | `update_hook` |
+| any but Overlapping | `PermissionRequest`, or a notification of an MCP question, while `permission`; a `permission_prompt` beside a question | unrelayed | Overlapping; `beside` if this one or the one before is a subagent's | `update_hook` |
+| Overlapping | the same | unrelayed | Overlapping; `beside` kept, or set by a subagent's | `update_hook` |
+| any | notification of another agent's request | unrelayed | Overlapping, `beside` | `update_hook` |
+| a subagent's, or Overlapping with `beside` | the main agent's `Stop` with work left, or not saying; a prompt Claude sent itself | Claude, unrelayed | unchanged | `claude_answers` |
 | None, report-named | report `blocked` | `permission` now | report-named; words from `msg`, or `kind` | `apply_program_status` |
 | hook-named | report `blocked` | | unchanged | `apply_program_status` |
 | any | report leaves `permission`, or anything but `running` | | None | `apply_program_status` |
@@ -1353,7 +1528,7 @@ requests and by agents' hooks.
 | Broken | File cut short, by an older Roost's install | A request says `Not whole`, naming it |
 
 Invariants:
-- I1. A file named `remote-HASH.py` holds what HASH says. Hooks of running agents call this path. An install replaces it only with every byte sent, and leaves what was there otherwise (`roost--install-code`).
+- I1. A file named `remote-HASH.py` holds what HASH says. Hooks of running agents call this path, and an agent that can offer tasks runs it as its MCP server (`mcp_arguments`). An install replaces it only with every byte sent, and leaves what was there otherwise (`roost--install-code`).
 - I5. A file of the right size stays, as newly used: no start of an Emacs touches what hooks call, and `prune_helpers` goes by its mtime.
 - I2. A helper a task's agent was launched with is never pruned (`prune_helpers`).
 - I3. Retrying can't run an action twice: only for what `roost--helper-unusable-p` accepts, `FileNotFoundError` naming the file or `Not whole`, each said before the helper runs. A request compares the file's size first, which catches a cut anywhere, and `rpc` turns what it catches into words of its own.
@@ -1429,6 +1604,10 @@ Illegal or refused: none.
 Open: none.
 
 Notes:
+- A reply's callback can ask for a refresh, in the reply's own sentinel: `B`'s for its
+  task, measured against its new branch, and `m`'s for the rest. It is a refresh as any
+  other, owed if a list is in flight, and it reads the revision its reply just bumped,
+  so its list is not dropped for that reply.
 - `roost--pull-requests-asked` is stamped before the request, and put back as it was
   if the list fails or is dropped, so a poll after an outage asks GitHub.
 - A full list that takes over a minute reads as Offline until the next quiet poll.
@@ -1455,16 +1634,20 @@ What Emacs believes of each task, and how a reply merges into it.
 
 Invariants:
 - I1. A reply read before a task went doesn't bring it back (`roost--cache-reply`, `roost--went-p`; lists by I3 of Host refresh). Checked for `inspect`, `roost--act`, the turn reply, `roost--compose-listed`, and create's reply, of a task a list showed and that went before it came (`roost--went`).
-- I2. No reply rolls a task back: older `updatedAt` keeps the old record with the reply's measurements (`roost--newer-events`); name and look have clocks of their own (`roost--newer-name`, `roost--newer-look`).
+- I2. No reply rolls a task back: older `updatedAt` keeps the old record with the reply's measurements (`roost--newer-events`). What changes with no event of the agent's has a clock of its own, and a reply with an older one keeps what Emacs has of it: the name (`renamedAt`, `roost--newer-name`), the look (`roost--newer-look`), the offers (`offersAt`, `roost--newer-offers`) and the branch it starts from and merges into (`retargetedAt`, `roost--newer-branch`).
 - I3. A reply saying the task went always counts. It would not if its `updatedAt` were older, but `retire`, `discard` and `forget` all stamp `now()` last.
-- I4. String order of `updatedAt` is time order. `now()` is UTC isoformat; `+` sorts before `.`, so a whole second sorts first. True while the host's clock doesn't step back.
+- I4. String order of `updatedAt` is time order, and of the other clocks. `now()` is UTC isoformat; `+` sorts before `.`, so a whole second sorts first. True while the host's clock doesn't step back.
+
+`test/formal/emacs_and_hosts` checks I1 and I2 as `NoRollback`, and I2 of the offers
+and the branch as `NoOfferRollback` and `NoBranchRollback`, with replies in every order.
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
 | Absent | List names it | | Cached | No news: `previous` nil, verdict `unknown` | `roost--cache-task` |
-| Absent | Create replies | | Cached | Revision bumped | `roost--task-made` |
+| Absent | Create replies | | Cached | Revision bumped; each of a draft's several attempts replies for itself | `roost--task-made` |
 | Went | Create replies | a list showed it, and it went | Went | Revision bumped; the reply goes only to the command, and nothing opens | `roost--task-made`, `roost--cache-reply` |
 | Cached | List names it | | Cached | Merged by I2; absent measurements carried over | `roost--cache-task` |
+| Cached | Reply or list names it | read before a rename, a look, an offer made or taken, or `B` that Emacs has news of already | Cached | Emacs keeps its own of that; the rest merged by I2 | `roost--cache-task` |
 | Cached | List lacks it | | Went | All keyed state and its notes go; its key noted in `roost--went` | `roost--apply-snapshot` |
 | Cached | Reply says retired, forgotten or discarded | | Went | Its notes go; its key noted in `roost--went` | `roost--cache-task` |
 | Cached | Host forgotten | | Absent | | `roost-forget-host` |
@@ -1473,7 +1656,13 @@ Invariants:
 
 Illegal or refused: none.
 
-Open: none. Mentioned, not findings: an `inspect` read before `P` with the same
+Open: none. Found by the model and fixed: a reply its host read before `B`, as one
+to stopping the task, that came after `B`'s own had the same `updatedAt`, and brought
+back the branch the task merged into before, until the next poll: `m` asked about
+that branch, and the host merged into the new one. `retarget` now stamps
+`retargetedAt` (`roost-a-reply-read-before-the-branch-changed-keeps-the-new-one`,
+`test_retargeting_is_no_event_of_the_agents_and_says_when_it_was`). Mentioned, not
+findings: an `inspect` read before `P` with the same
 `updatedAt` drops `pr` until the next list; a host clock stepping back holds a task
 at its old status until time catches up (I4). `roost--apply-snapshot` deletes a
 task's review notes when a list lacks it, so a host that answers from an empty
@@ -1649,11 +1838,14 @@ Invariants:
 - I1. A pull request is the task's only if it is the recorded one, or its head
   is a commit of the task's own, made since it started and still on its branch
   (`task_pull_requests`). Someone else's fork, an earlier task's branch of the
-  same name and commits brought in by an update don't count.
+  same name and commits brought in by an update don't count. `B` moves where its
+  commits count from (`baseCommit`): one not yet recorded, whose head is no later
+  than where the task's branch and the branch named part, counts no more.
 - I2. A merge stays a merge while the tip stands: a later listing that no longer
   has it doesn't undo it (`record["mergedHead"]`, `mergedBases`).
 - I3. A lookup never overwrites a record newer than the one it read
-  (`check_pull_requests`: `stale`, a compare-and-swap under the lock).
+  (`check_pull_requests`: `stale`, a compare-and-swap under the lock). Only `pr`
+  is compared and written, so a branch `B` named meanwhile stays.
 - I4. Only a record says `merged at tip`, and retiring believes only that or an
   answer got for this request (`merged_pull_request_head`, `safe_to_delete`).
 - I5. A commit on the branch is the task's own when its reflog says so, by a
@@ -1672,6 +1864,12 @@ Invariants:
 - I7. Commits on the branch after what merged never count as merged: `has_tip`
   asks whether the tip is in the head, not the other way, and `record_push` leaves
   a closed or merged one's `head` alone. Retiring deletes on this word.
+- I8. A pull request merges into the base it names, which need not be the branch
+  the task merges into: an agent's own may name another, and `B` (`retarget`)
+  changes the record's branch and nothing of `pr`. Its reply's `note` names an
+  open one's base once, when that isn't the new branch. A merge of it counts as
+  the task's whichever base it went to (`mergedBases` has them, for
+  `roost-task-merged-functions`).
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
@@ -1693,6 +1891,7 @@ Invariants:
 | merged, commits since | Agent opens another | | open | | `shown_pull_request` |
 | merged, commits since | `P` with a title | | fresh | Another opened, in its place | `rpc`, `pull_request` |
 | merged at tip | Second pull request opened at the tip | | open beside a merge | `mergedHead` kept, the open one shown | `check_pull_requests` |
+| any | `B` names another branch to merge into | | same | `pr` as it was; the `note` names an open one's base | `retarget` |
 | any | `retire`, `merge`, `discard`, `forget` | | gone | Record removed; a lookup in flight fails to read it and shows, not records | `check_pull_requests`' `except` |
 
 `worktreePr` follows the same listing for the branch the worktree is on, is null
@@ -1710,9 +1909,20 @@ or removing task is refused (`require_not_removing`).
 
 Branch reuse: Roost's branch names end in six hex digits of the task's ID, so a
 task's own branch can't really be reused. Reuse is possible only for a branch the
-agent made (`worktreePr`), and I1 covers that: `own_commits(task, branch)`.
+agent made (`worktreePr`), and I1 covers that: `own_commits(task, branch)`. Several
+attempts at one prompt, and a fork of a task, are tasks with branches of their own:
+the forge lists each one's pull requests by its branch's name, so none is taken
+for another's.
 
-Open: none.
+A conversation, a task in no project, is a task in a repository of Roost's own
+with no remote: nothing is pushed, so no poll asks a forge and none is recorded.
+
+Open: the `note` goes by what the record has. Of a pull request `P` just opened,
+which has no `base` until the forge is next asked, it takes the branch before for
+its base: after `B` twice in that time it names the branch between. And `B` while
+`P` opens one sees none to name, so that one targets the branch before with
+nothing said. By reading; the first replayed on the helper. Neither changes what
+merges, or what reads as merged.
 
 ### What the forge last said
 
@@ -1741,6 +1951,9 @@ Invariants:
   request, head and base, the last status stands, whole, as when the forge doesn't
   answer (`roost--kept-reviews`): a word doesn't go for a poll and come back as news,
   and old reviews beside new checks make no word nobody said.
+- I5. What the forge says is of the pull request and the base it names, not of the
+  branch the task merges into. `B` changes neither, so it asks the forge nothing,
+  and the status stands: `mergeable` and `to merge` are of the pull request's base.
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
@@ -1751,6 +1964,7 @@ Invariants:
 | whole | Forge list fails: `gh` missing, signed out, slow | | frozen | Emacs keeps it | `task_pull_requests` -> None; `roost--cache-task` |
 | any | Agent event | | stale | Verdict nil until next asked, 30 s on | `roost--pr-status` |
 | any | `pr` changes in a reply without a status, as after `P` pushes | | dropped | | `roost--cache-task` |
+| any | `B` names another branch to merge into | | same | Nothing asked: the list that follows measures Git alone | `roost-retarget` |
 
 `unpushed` goes with this: with the forge's head fetched, it compares a commit made
 there with the branch, so such a commit no longer holds back the word (FORGE-5).
@@ -1824,7 +2038,9 @@ Open: none.
 
 ### Landed
 
-Kind: derived. Lives in: `landed` from `landed()`; `roost--landed`.
+Kind: derived. Lives in: `landed` from `landed()`, of the record's
+`integrationBranch`, which `retarget` changes, and `startCommit`, which nothing
+does; `roost--landed`.
 
 | State | Meaning | How you can tell |
 | --- | --- | --- |
@@ -1835,18 +2051,69 @@ Kind: derived. Lives in: `landed` from `landed()`; `roost--landed`.
 Invariants:
 
 - I1. Landed implies retiring loses no commit. Holds: `safe_to_delete` accepts
-  every tip `landed` does, and also a task that never committed.
-- I2. A task that never committed hasn't landed.
+  every tip `landed` does, and also a task that never committed, whose start some
+  other ref has.
+- I2. A task that never committed hasn't landed, and only such a task reads as
+  one: its tip is where its branch was made, the record's `startCommit`
+  (`started_at`). `make_task` sets that and nothing moves it. An older helper's
+  record has none and goes by its `baseCommit`, which nothing moved then, and
+  `retarget` writes it down from that before moving it
+  (`test_retargeting_a_task_from_an_older_helper_keeps_where_its_branch_was_made`).
+  `baseCommit` is where the task's commits count from, and `B` moves it to where
+  its branch and the branch named part. That can be a commit of the task's own,
+  when what `B` names has some of its commits: a tag at an earlier one, a fork's
+  branch, or a branch its first commits were merged into. `landed` and
+  `safe_to_delete` went by `baseCommit`. Fixed: named what had all of its
+  commits, a task read as one without any, and `x` retired one whose commits a
+  tag had, or its own pushed branch, and no branch it merges into (the test I3
+  names; `retarget` still keeps `baseCommit` off the tip, so that the task's
+  files and its pull request stay its own). Fixed too, FORGE-15: reset to where
+  its branch was made, after `B` made a commit of its own where they count from,
+  a task read as merged, with no commit of its own
+  (`test_a_task_reset_to_where_it_started_after_retargeting_reads_as_never_committed`).
 - I3 (manual, "Work that is merged"). Only commits after the merge keep it from
   saying so. Fixed: FORGE-1, where the branch was behind what merged, and FORGE-2,
   where the merge was never found. A head that can't be fetched still reads as
-  commits since.
+  commits since. Fixed too: `B` onto a branch that had the task's commits, as after
+  a merge by hand, moved where they count from onto its tip, and it read as never
+  committed, its pull request as merged but not the commits since
+  (`test_retargeting_onto_a_branch_that_has_the_tasks_commits_leaves_them_merged`).
+  And FORGE-15: reset to a commit of its own that `B` counts from, where that
+  commit is merged, it read as never committed
+  (`test_a_task_reset_to_a_merged_commit_of_its_own_after_retargeting_reads_as_merged`).
+- I4. Landed is of the branch the record names now, or of a merge on the forge,
+  into whichever base that pull request named ([A task's pull request](#a-tasks-pull-request),
+  I8). So after `B`, a merge by hand into the branch before counts no more, and
+  `x` is refused; a pull request merged into the branch before still counts, as
+  the manual has it, and `x` retires the task though the new branch lacks its
+  commits. They are on the forge.
+- I5. `x` deletes a branch only when its tip is in the branch the task merges
+  into, or in what the forge merged, or the task never committed
+  (`safe_to_delete`). It goes by the record as it is when it deletes: `rpc` reads
+  the task again under the lock, after `merged_pull_request_head` asked the
+  forge, so a `B` meanwhile counts. Never committed is by `startCommit`, as I2
+  has it. Fixed, FORGE-15: reset to a commit of its own that `B` counts from, a
+  task read as one that never committed, and the host retired it, its commits in
+  that tag or branch, or on its own pushed one, and merged nowhere
+  (`test_a_task_reset_to_a_commit_of_its_own_after_retargeting_still_has_unmerged_commits`).
+  A task that never committed still retires after a `B` that counts its commits
+  from an earlier commit, while another branch has where it started
+  (`test_a_task_that_never_committed_stays_one_wherever_retargeting_counts_its_commits_from`).
+- I6. A reply's `landed` is of the branch that reply names: `list_tasks` reads the
+  record once, and the measurement goes by it. One read before a `B` says what
+  was so of the branch before; Emacs then measures again, as
+  [Task measurement](#task-measurement) I7 has it.
 
 | From | Event | Guard | To | Code |
 | --- | --- | --- | --- | --- |
 | not landed | Poll records a merge at the tip, or after it | | landed | `recorded_merge_at`, `has_tip` |
 | not landed | Tip reaches the integration branch | `committed_on` | landed | `landed` |
 | landed | New commit, tip moves | | not landed | `landed`, at the next measurement |
+| landed | `B` names a branch that lacks the tip | no merge recorded at the tip | not landed | `retarget`, `landed` |
+| landed | `B` names a branch | a merge recorded at the tip | landed | `recorded_merge_at` |
+| not landed | `B` names a branch that has the tip | `committed_on` | landed | `retarget`, `landed` |
+| any | Branch reset to where it was made | | not landed | `started_at`, whatever `B` named |
+| any | Branch reset to an earlier commit of its own | | as that commit reads: landed if it is merged | `landed`, whatever `B` named |
 | any | Reflog gone or empty | | not landed unless recorded | `own_commits` -> True |
 
 `rpc`'s `list` measures a task whole when a merge arrives, so `landed` never comes
@@ -1856,7 +2123,19 @@ Retiring fetches a merged head no poll has, as `merged_pull_request_head` asks f
 itself, and tries one a poll gave up on. Its remote branch goes under a lease on the
 head that merged, so commits pushed there since stay.
 
-Open: none.
+Other tasks of the same start, as several attempts at one prompt, or a fork: each
+one's `landed` reads its own branch's tip, its own record and its own reflog. What
+another merges into the branch they share counts for this one only when it has
+this one's tip, as a fork merged does, and then its commits are there.
+
+A conversation has a branch in Roost's own repository and no forge: it reads as
+not landed, or as a task merged by hand would if its agent committed and you
+merged that there. Emacs offers it no `m`, `P` or `B`, and `retarget` refuses it.
+
+Open: none in the models. By reading, and with or without `B`: a branch reset to
+before where it was made, in a task that committed, reads as landed, with no
+commit of its own. Its tip is in the branch it merges into and is not its start,
+and its reflog has the commits. `x` loses nothing.
 
 ### Task measurement
 
@@ -1869,7 +2148,7 @@ say what is no longer so.
 | State | Meaning | How you can tell |
 |---|---|---|
 | Unmeasured | Never measured here | No `conflicts` field. `landed` isn't enough: a poll that asks GitHub says it of what it asked about, unmeasured |
-| Measured | Fields are as new as its last change | `gitStamp` and `updatedAt` as when measured |
+| Measured | Fields are as new as its last change | `gitStamp`, `updatedAt` and `integrationBranch` as when measured |
 | Owed | Changed since, measurement asked | Its ID is in pending, in a list in flight, or in `roost--measures-owed` |
 
 Invariants:
@@ -1880,11 +2159,21 @@ Invariants:
 - I4. An open pull request's conflict is the forge's word, otherwise Git's.
 - I5. `conflicts` is left to Git only where it means something: null with the
   worktree on another branch or a pull request open, `[]` once landed.
+- I7. What is measured against the branch a task merges into (`landed`, `ahead`,
+  `behind`, `conflicts`) is measured again once `B` names another. `roost-retarget`
+  asks for a list of the task as its host replies, and that reply, an action's,
+  makes a list in flight stale. Where the reply is lost, or `B` was pressed in
+  another Emacs, the next poll brings the branch, which is one of
+  `roost--task-states`: the Git stamp may not move, as the two branches' reflogs
+  can have one time, or Git keep none. Fixed:
+  `roost-a-branch-to-merge-into-named-elsewhere-is-measured-against`.
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
 | Unmeasured | Quiet poll first sees it | | Owed | Every task of a first poll is `changed` | success lambda |
 | Measured | Quiet poll sees its state move | | Owed | ID pended | success lambda |
+| Measured | `B`'s reply | | Owed | A list of its ID, at once or after the one in flight, which is dropped as stale | `roost-retarget`, `roost--act` |
+| Measured | Quiet poll brings another `integrationBranch` | | Owed | ID pended | `roost--task-states`, success lambda |
 | Owed | List with its ID replies | revision same | Measured | | `roost--apply-snapshot` |
 | Owed | That list dropped as stale | | Owed | Into `roost--measures-owed`, for the next poll | success lambda |
 | Owed | That list fails, or can't start | not owed before | Owed | Same | `failed`, `roost--refresh-host` |
@@ -1911,7 +2200,8 @@ Stamp: index, `logs/HEAD` of the worktree, and the integration branch's reflog. 
 moves for commits, staging, resets, `m` and a pull in the primary checkout. Edits
 not staged leave it, which is why a merge or open pull request found by a poll is
 measured whole. With `core.logAllRefUpdates` false the integration branch's part
-never moves.
+never moves. After `B` that part is the other branch's reflog, whose time may be
+the same: I7 doesn't rest on it.
 
 `update` is a field of one reply: `{conflicts, changed, resolved}`, never saved
 (`TRANSIENT`), read by `roost-update`, which then asks for a full refresh.
@@ -2124,26 +2414,37 @@ Kind: implicit. Lives in: the buffer `*roost new task*`; `roost--compose-submitt
 `roost--draft-note`, `roost--compose-fields`, `roost--compose-timer`,
 `roost--compose-changing-shown`, `roost--compose-body`.
 One draft at a time, found by name. Its fields are read-only text above a marker.
+A fork's say whether it goes on with its task's conversation, an offer's the task
+whose agent offered it, and `:attempts` how many tasks it makes from its prompt.
 
 | State | Meaning | How you can tell |
 |---|---|---|
 | Absent | No draft | no buffer |
 | Editing | Yours to change | submitting nil, note nil |
 | Asking | `C-c C-c` pressed; a question about the setup command is open | submitting t, no request |
-| Creating | Request in flight | submitting t, note "Creating…" |
+| Creating | Its own request in flight, and one for each other attempt | submitting t, note "Creating…" |
 | Refused | The host said no, or the connection dropped | submitting nil, note "Could not create…" |
 | NoReply | Timed out; the task may be made | submitting nil, note "No reply…" |
 | Closing | Task made, held for the minibuffer | submitting as it was, task cached |
 
 Invariants:
 - I1. A flag says Creating only while a request is in flight or a question is open.
-  (`left-behind` rule of `test/roost-sweep-late.el`.)
-- I2. A draft is kept if creation fails. (Docstring of `roost-compose-submit`.)
+  (`left-behind` rule of `test/roost-sweep-late.el`.) The request is the one for the
+  draft's own task, the first attempt: the others' replies leave the flag as it is.
+- I2. A draft is kept if creation fails. (Docstring of `roost-compose-submit`.) That is
+  the creation of its own task. Another attempt that fails says so in a message, and
+  the draft goes on: it closes for its own task, and nothing asks for the other
+  again. (`NewTaskAttempts.known-attempt-not-made.cfg`.)
 - I3. A draft closes only for what it says now: what the request that made the task
-  said, as `roost--compose-what` has it. That is this request, or, when its host says
+  said, as `roost--compose-what` has it, which holds every field a request is made
+  from: whether a fork goes on with its task's conversation, and the task an offer's
+  draft shows under, too. That is this request, or, when its host says
   an earlier one made it (`alreadyMade`) or a poll finds it, what it asked with that
   ID, if it asked for the same each time; asked for different things, which made the
-  task isn't known, and the draft stays. Anything else is yours. A draft that was refused, changed, then lost a
+  task isn't known, and the draft stays. So it does when the task its host answers
+  with is another attempt's, made from what the draft said at an earlier ask
+  ([The creation ID](#the-creation-id)'s I5): only an ID that asked for different
+  things gets one. Anything else is yours. A draft that was refused, changed, then lost a
   reply, can stay though it says what was made: it says so, and costs a `C-c C-k`.
 - I4. The prompt is what you wrote: Roost's redraws of the fields leave it alone, and
   undo goes on working, as they shift each position it holds by what they moved
@@ -2153,6 +2454,9 @@ Invariants:
   it forks, an issue it starts from (`roost--compose-tied`). (Comment in `roost--compose`.)
 - I6. "Roost created NAME" names the task as made, by its own name. A draft that says
   otherwise says what was made from what.
+- I7. A draft you wrote in gives way to no offer. An agent's offer opens as a draft of
+  its own, a new buffer, only where the draft holds no prompt, says nothing of a
+  request and waits on none; otherwise the offer waits. (`roost--compose-offer`.)
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
@@ -2160,17 +2464,26 @@ Invariants:
 | Editing | `roost--compose` | prompt empty, or fork | Editing | fields replaced | `roost--compose` |
 | Editing | `roost--compose` | prompt written | Editing | fields kept; a seed is dropped, and a DIRECTORY with it | `roost--compose` |
 | Editing | `roost--compose`, a DIRECTORY and no seed, as a click on a project | prompt written | Editing | moves there, or says why it stays | `roost--compose`, `roost--compose-tied` |
+| Absent, Editing | `RET` on an offer | no prompt, no note, not submitting | Editing | a new buffer, with the offer's title, brief and task; then the offer is taken | `roost--compose-offer`, `roost--take-offer` |
+| any but Absent | `RET` on an offer | a prompt, a note, or submitting | same | user-error; the offer waits | `roost--compose-offer` |
 | Editing | edit | | Editing | idle timer redraws fields | `roost--compose-changed` |
+| Editing | `C-c C-x` | | Editing | how many tasks it makes, and by which agents | `roost-compose-set-attempts` |
+| Editing | `C-c C-f` | a fork | Editing | goes on with its task's conversation, or starts a new one | `roost-compose-set-conversation` |
+| Editing | moved to another project | an offer's draft | Editing | a task of its own, under none | `roost--compose-move` |
 | Editing | a poll changes who touches a quoted file | | Editing | redraw | `roost--compose-redraw-changing` |
 | Editing | `C-c C-c` | no project or name | Editing | user-error | `roost-compose-submit` |
 | Editing | `C-c C-c` | question left open | Editing | quit it, submit from a timer | `roost--quit-questions-here` |
-| Editing | `C-c C-c` | setup command risky | Asking | asks | `roost--project-value` |
+| Editing | `C-c C-c` | setup command risky | Asking | asks, once for all its attempts | `roost--project-value` |
 | Editing | `C-c C-c` | | Creating | ID kept or made, request | `roost-compose-submit` |
+| Editing | `C-c C-c` | several attempts | Creating | a request for each, the draft's own last, each other with the ID and its number | `roost-compose-submit` |
 | Asking | answered | | Creating | request | `roost--create-task` |
-| Asking | `C-g` or error | | Editing | flag and note cleared | `condition-case` in `roost-compose-submit` |
+| Asking | `C-g` or error | | Editing | flag and note cleared; the ID as it was | `condition-case` in `roost-compose-submit` |
+| Creating | `C-g` or error between its requests | an attempt went | Editing | flag and note cleared; the ID as it asked | `condition-case` in `roost-compose-submit` |
+| Creating | another attempt's reply | | Creating | says it was made, or why not; nothing opens, and the draft is as it was | `roost--task-made`, `roost--create-task` |
 | Creating | `C-c C-c` | | Creating | user-error "Already creating" | `roost-compose-submit` |
 | Creating | good reply | no minibuffer, says what the task does | Absent | Org link, close, redraw, open if you stayed | `roost--task-made`, `roost--compose-made` |
 | Creating | good reply | no minibuffer, says otherwise now | Editing | Org link, note says what was made; ID forgotten, nothing opens | `roost--compose-made` |
+| Creating | good reply, with another attempt's task | no minibuffer; several attempts, changed between asks with one ID | Editing | as above: the note names the attempt made from what it said before | `roost--compose-made` |
 | Creating | a poll's news of an earlier ID, held for a question you quit with `C-c C-c` | says otherwise now | Creating | Org link; flag, ID and note kept for the request out | `roost--compose-made` |
 | Creating | good reply | minibuffer open | Closing | task cached | `roost--when-out-of-minibuffer` |
 | Closing | minibuffer ends | | Absent or Editing | as above | `roost--task-made` |
@@ -2184,17 +2497,25 @@ Invariants:
 | Refused, NoReply | poll lists the ID | says otherwise now, its project too | Editing | note says what was made; ID forgotten | `roost--compose-listed`, `roost--compose-made` |
 | any | `C-c C-k` | prompt empty or yes | Absent | `quit-window t` | `roost-compose-cancel` |
 
-Illegal or refused: `C-c C-c` in Creating. While busy the header has no buttons, so a
+Illegal or refused: `C-c C-c` in Creating, and an offer opened over a draft that holds
+anything. While busy the header has no buttons, so a
 hand on the mouse has no Cancel; `C-c C-k` works. Fields can still be changed in
 Creating and text typed there; neither is refused.
 
-Open: none.
+A conversation (`roost-new-conversation`) has no draft and no creation ID: each `C`
+asks for one, so `C` again after no reply can start a second.
+
+Open: none here. [The creation ID](#the-creation-id) has one, of a draft that named
+another attempt.
 
 ### The creation ID
 
-Kind: implicit. Lives in: `roost--compose-asked` (DIRECTORY ID), the host's
+Kind: implicit. Lives in: `roost--compose-asked` (DIRECTORY ID WHAT), the host's
 `createId` field, `creating/ID.lock` and creation notes under its state directory.
-It lets a draft ask again without making a second task.
+It lets a draft ask again without making a second task. Each attempt after a draft's
+first has an ID of its own, the draft's with the attempt's number after it, and each
+attempt's record says which it is (`attempt`: the draft's ID as `group`, its number,
+how many, and `words`, a name for what the draft said as it asked).
 
 | State | Meaning | How you can tell |
 |---|---|---|
@@ -2215,26 +2536,60 @@ Invariants:
   time, with what it says now, and an ID that found something else is forgotten:
   asked again, it is another task. Not while a request of the draft's own is out,
   which says in its own time.
+- I5. The tasks one draft's ID makes are attempts at one prompt: each made from what
+  the draft said at one ask. Each attempt's request names those words (`words`, from
+  `roost--compose-words`: one name for what `roost--compose-what` tells the same), its
+  record keeps them, and its host makes no attempt beside one of its group made from
+  other words: it answers with that one, as already made (`made_from_other_words`). It
+  looks before it makes anything, and again as it saves the record, under the registry
+  lock, so of two requests in flight at once the first recorded stands, and the other
+  undoes the worktree it made. A draft that says the same each time has each attempt
+  made once, however often it asks (`test_an_attempt_asked_for_again_is_made_once` in
+  the helper's tests). A draft you changed, whose own request failed or got no reply,
+  asks again with the same IDs, and gets the attempt made from what it said before in
+  answer to each: it stays, naming that task (I4), and asks next under a new ID, for
+  every attempt at what it says now. A request or a record without `words`, as an
+  older Emacs's, refuses nothing, nor does a task whose creation failed, which keeps
+  no ID. (`test_the_attempts_of_one_draft_are_made_from_one_wording` and
+  `test_attempts_asked_for_at_once_in_other_words_make_one_wording` in the helper's
+  tests; `roost-a-draft-changed-between-asks-makes-its-attempts-from-one-wording`;
+  `NewTaskAttempts.attempt-whatever-its-group.cfg` undoes it.)
+- I6. A `C-c C-c` cut short once an attempt went, as by `C-g` while the next request
+  starts, keeps the ID it asked with, so that asking again names that attempt as it
+  was. Cut short before any went, as at the question about the setup command, it
+  leaves the ID as it was.
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
 | None | submit | | Asked | new ID | `roost-compose-submit` |
+| None, Asked | submit | several attempts | Asked | each after the first asked for with the ID and its number | `roost-compose-submit` |
+| None, Asked | submit cut short | an attempt went | Asked | ID as it asked | `roost-compose-submit` |
+| None, Asked | submit cut short | none went | as it was | ID put back | `roost-compose-submit` |
 | Asked | submit | project same | Asked | same ID, whatever else changed; the draft then compares what comes | `roost-compose-submit` |
 | Asked | task comes, draft says otherwise | | None | | `roost--compose-made` |
+| Asked | another attempt's task comes to the draft's own request | | None | the draft names it | `roost--compose-made` |
 | Asked | a poll's task comes, draft says otherwise | a request of its own out | Asked | | `roost--compose-made` |
-| Asked | submit | project same, draft says otherwise than at the ID's last ask | Asked | same ID; what it asked for unknown from then on | `roost-compose-submit` |
+| Asked | submit | project same, draft says otherwise than at the ID's last ask | Asked | same ID; what it asked for unknown from then on; each attempt names other words | `roost-compose-submit` |
 | Asked | submit | project differs | Asked | new ID; a task from the old one stays | `roost-compose-submit` |
 | Asked | host: not seen | | Being made | `make_task` | `create` in the helper |
 | Asked | host: seen | | Made | answers with the old task, ignoring the request | `made_for` |
+| Asked | host: not seen, an attempt | another of its group made from other words | Asked | makes nothing; answers with that other task, as already made | `made_from_other_words`, `make_task` in the helper |
 | Being made | second request | | waits | | `asking_for` |
+| Being made | its record is to be saved | another of its group was recorded meanwhile, from other words | Undone | its worktree and branch go; answers with that other task | `make_task`, `abandon` |
 | Being made | failure | | Undone | | `abandon` |
 | Made | task retired | | none on host | a retry makes it anew | `store.remove` |
 | any | draft closes | | None | buffer-local goes with it | |
 
 Checked: `random` is seeded differently at each start, so IDs don't repeat across
 restarts. A refused create records nothing, so retrying with a fixed base works.
+An attempt's ID is two hex digits longer than a draft's, so it is no other draft's.
 
-Open: none.
+A draft that has named another attempt forgets its ID (I4), and what it asks for
+next is another task, as its note says. Changed back to what it said before, that
+makes the same attempt at the same words a second time, and its own task twice if the
+request it gave up on is made after all. Roost named a task of the earlier `C-c C-c`
+first, as it does for a draft of one task, so that is a second ask of yours, not a
+retry: the model's `AtMostOnce` counts as said any task of that `C-c C-c`.
 
 ### The send ID
 
@@ -2798,12 +3153,12 @@ Invariants:
 
 | Question | From | Pins | The host checks again | Changes it misses |
 |---|---|---|---|---|
-| Discard, name typed | dry run | branch commit (`expect`), counts (`told`) | branch moved, any count higher | a change that adds to no count: a file edited, one swapped for another, a commit amended off the branch |
+| Discard, name typed | dry run | branch commit (`expect`), counts (`told`), the offers it named (`offers`) | branch moved, any count higher, an offer it didn't name | a change that adds to no count: a file edited, one swapped for another, a commit amended off the branch; an offer made again under its title with another brief |
 | Discard, y-or-n-p | dry run | the same, all counts 0 | the same: asked again, it wants the name | none: any new file or commit counts |
-| Retire | cache | nothing | agent, dirty, unmerged | none: it refuses |
-| Merge | cache | branch commit (`branchTip`, as `expect`), once measured | branch moved, just before merging; agent, dirty, conflicts | a commit before it was measured, which is refused too: the question spoke of what was measured |
+| Retire | cache | the offers it named | agent, dirty, unmerged, an offer it didn't name | none: it refuses |
+| Merge | cache | branch commit (`branchTip`, as `expect`), once measured; the offers it named | branch moved, just before merging; agent, dirty, conflicts; an offer it didn't name, before merging and again after | a commit before it was measured, which is refused too: the question spoke of what was measured |
 | Stop | cache | nothing | | none that matter |
-| Forget | cache | nothing | agent running | none: it refuses |
+| Forget | cache | the offers it named | agent running, an offer it didn't name | none: it refuses |
 | Send anyway | status | nothing | status without `force` | a stale copy: VIEWS-4 |
 | Resume? | a refusal | nothing | agent running | none |
 | Update: ask its agent? | a reply | nothing | | none |
@@ -2819,10 +3174,10 @@ Commands against what Emacs offers (`roost--action-applies-p`) and what the host
 | resume | worktree, not running | | running |
 | update | worktree | | active, dirty, merge under way |
 | pull request | worktree, and commits or a pull request | | dirty |
-| merge | work unmerged, not active, none left by the agent | another branch; dirty offers Magit | branch moved, active, dirty, conflicts |
-| retire | not active, none left by the agent | active; else offers discard | active, unmerged, dirty |
-| forget | always | | running: stops it first |
-| discard | always | | branch moved; holds more than you were told |
+| merge | work unmerged, not active, none left by the agent | another branch; dirty offers Magit | branch moved, active, dirty, conflicts; an offer made since you were asked, which after the merge leaves it merged and not retired |
+| retire | not active, none left by the agent | active; else offers discard | active, unmerged, dirty; an offer made since you were asked |
+| forget | always | | running: stops it first; an offer made since you were asked |
+| discard | always | | branch moved; holds more than you were told; an offer made since you were asked |
 
 No state has no way out, and nothing offered is always refused: a task on another
 branch has `x`, and a task gone has `X`.
@@ -2866,8 +3221,10 @@ nothing to propose.
 | merge | ok | active | ok | busy | removing | ok | ok | Git can't read; nothing to merge if the folder went too (by reading) |
 | discard | ok | ok | ok | busy | removing | ok | ok | ok |
 | forget | running | running | ok | busy | removing | ok | ok | ok |
+| take-offer | ok | ok | ok | ok | removing | was removing | ok | ok |
 
-No state lacks a way out. While Git merges or updates a task, each row reads as
+No state lacks a way out. The `take-offer` row came later, and is read from
+`require_not_removing` rather than run. While Git merges or updates a task, each row reads as
 Removing does, in words of its own. Two refusals have the wrong words, both cosmetic: `update` for an active
 agent says "before retiring", from `require_finished`; and `inspect` while a
 worktree is removed, or after that was cut short, says to resume the task, which
@@ -2915,8 +3272,16 @@ registry lock.
 | `shellPaneId` | `shell`, `spawn`, `stop` | yes |
 | `name`, `task`, `renamedAt` | `rename` | yes |
 | `setupComplete`, `copyComplete`, `submodulesComplete`, `allSubmodules` | `runner` | yes, fresh read each |
+| `offers`, `offersAt` | `propose_task`, `take_offer`, `make_task` and `list_tasks` (the parent's, through `take_offer`) | yes |
+| `mayOffer`, `parent`, `offer` | `make_task` | yes; never changed |
+| `conversation`, `remoteControl`, `forkSession`, `forkedFrom`, `attempt` | `make_task` | yes; never changed |
+| `baseRef`, `baseCommit`, `integrationBranch`, `integrationRef`, `retargetedAt` | `make_task`, `retarget` | yes |
+| `startCommit` | `make_task`; `retarget`, for a record without one | yes |
+| `activity` | `update_hook` (`note_activity`), `apply_program_status`, `spawn` | yes |
 
-No lost update found in any of them.
+No lost update found in any of them. The last three rows came after the audit:
+the first two are model-checked, in "Git and the forge" and "Emacs and its hosts",
+and `activity` was read, not model-checked.
 
 ### Checked and found sound
 
