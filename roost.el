@@ -6813,8 +6813,8 @@ rested there; while it rests, the looks slow down."
       (propertize "+ " 'face '(:inherit roost-note-button :inverse-video t))
     (let* ((width (* 2 (frame-char-width)))
            (height (default-line-height))
-           (fill (or (face-foreground 'roost-note-button nil t) "RoyalBlue"))
-           (plus (or (face-background 'default nil t) "white"))
+           (fill (roost--svg-colour (or (face-foreground 'roost-note-button nil t) "RoyalBlue")))
+           (plus (roost--svg-colour (or (face-background 'default nil t) "white")))
            (key (list width height fill plus)))
       (or (cdr (assoc key roost--note-button-images))
           (let* ((size (min width (- height 2)))
@@ -9395,6 +9395,14 @@ finished, `working', `starting', `stopped', `merged', `offline', and
     ("exited" (if waiting 'wrong 'idle))
     (_ 'idle)))
 
+(defun roost--svg-colour (colour)
+  "COLOUR, a name as Emacs knows it, as #RRGGBB, which an SVG image knows.
+Emacs's own names, such as the grey70 of `shadow' where no theme sets
+it, are not all ones SVG has.  Mid-grey for one that can't be read."
+  (if-let* ((rgb (and (stringp colour) (ignore-errors (color-name-to-rgb colour)))))
+      (apply #'color-rgb-to-hex (append rgb '(2)))
+    "#808080"))
+
 (defvar roost--status-shapes (make-hash-table :test 'equal)
   "The images of `roost--status-shape-image', by (SHAPE COLOUR WIDTH HEIGHT).")
 
@@ -9405,7 +9413,7 @@ where a status's dot does and moves nothing.  Nil where `roost-decorate'
 is off or the display draws no such image; then the dot stands."
   (when (and (roost--decorated-p) (display-images-p) (image-type-available-p 'svg)
              (require 'svg nil t))
-    (let* ((colour (or (face-foreground face nil 'default) "gray50"))
+    (let* ((colour (roost--svg-colour (face-foreground face nil 'default)))
            (width (default-font-width))
            (height (default-font-height))
            (key (list shape colour width height)))

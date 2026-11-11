@@ -9,7 +9,9 @@
 ;;   Xvfb :99 -screen 0 1760x1000x24 & DISPLAY=:99 make gallery
 ;;
 ;; GALLERY_THEME names a theme to load first, as modus-vivendi, and
-;; GALLERY_OUT the folder the sheets go in.
+;; GALLERY_OUT the folder the sheets go in.  For a theme that isn't one
+;; of Emacs's own, GALLERY_THEME_PATH lists the folders it and its
+;; libraries are in, with colons between.
 
 (require 'roost)
 (require 'roost-sweep)
@@ -83,6 +85,9 @@ in a window just as wide as it was drawn for."
         (theme (getenv "GALLERY_THEME"))
         (n 0))
     (make-directory out t)
+    (dolist (directory (split-string (or (getenv "GALLERY_THEME_PATH") "") ":" t))
+      (add-to-list 'load-path directory)
+      (add-to-list 'custom-theme-load-path directory))
     (when (and theme (not (string-empty-p theme)))
       (load-theme (intern theme) t))
     ;; As a plain Emacs has them off in most setups, and they aren't Roost's.

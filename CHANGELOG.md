@@ -33,7 +33,8 @@ What each release changes, and what to do when upgrading. Newest first.
   doesn't. In the sidebar the word of an agent that asks or failed is on a
   tint, as in the dashboard, and the setup check rules off each host and
   puts what to do about a failed check on a band. With `roost-decorate`
-  off, or in a terminal, the lights are the dots they were.
+  off, or in a terminal, the lights are the dots they were. `make gallery`
+  takes `GALLERY_THEME_PATH` for a theme that isn't one of Emacs's own.
 
 - Several attempts at one prompt. `C-c C-x` in the new task draft sets how
   many tasks it makes from the prompt: a number up to 5, each by the

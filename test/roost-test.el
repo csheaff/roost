@@ -5263,6 +5263,13 @@ Read from the layout transient keeps, whose form varies by version."
                     '(asks asks turn turn turn turn wrong wrong wrong working working starting
                       stopped merged offline idle idle)))
      (should (eq (roost--status-shape "exited" t) 'wrong))
+     ;; An image is given colours as SVG knows them: Emacs's own name
+     ;; for `shadow' where no theme sets it is one it doesn't.
+     ;; Which hex depends on the colours the display has, a terminal's
+     ;; being few.
+     (should (string-match-p "\\`#[0-9a-f]\\{6\\}\\'" (roost--svg-colour "grey70")))
+     (should (equal (roost--svg-colour "no such colour") "#808080"))
+     (should (equal (roost--svg-colour nil) "#808080"))
      ;; Where no image can be drawn, as here, the dot stands as it was.
      (should-not (roost--status-shape-image 'asks 'roost-status-permission))
      (let ((light (roost--status-light asking 'dashboard)))
