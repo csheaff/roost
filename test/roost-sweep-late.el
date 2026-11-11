@@ -1551,7 +1551,10 @@ COMMAND, INTERRUPTER and FORM keeps RULE until FUNCTION is REPLACEMENT.")
                (should-not (seq-filter (lambda (process) (string-prefix-p "roost-rpc" (process-name process)))
                                        (process-list)))
                (should-not (seq-difference timer-list timers))
-               (should-not (seq-difference (buffer-list) buffers))
+               ;; Not Emacs's own for decoding text, made at its first
+               ;; use, which is here when this test runs before the rest.
+               (should-not (seq-remove (lambda (buffer) (equal (buffer-name buffer) " *code-conversion-work*"))
+                                       (seq-difference (buffer-list) buffers)))
                (should-not (directory-files temporary-file-directory nil "\\`roost-input-")))))
        (delete-directory temporary-file-directory t))))))
 

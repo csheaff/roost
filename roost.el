@@ -12096,6 +12096,17 @@ for any other directory, which asks for a host and a folder first."
                       (apply #'propertize "\n" (if (roost--current-task-p task)
                                                    (append '(face roost-current) row)
                                                  row)))
+              ;; Under one that asks, what it asks: whether to go there now
+              ;; turns on that, and its row has room for a word.
+              (when-let* (((roost--blocked-p task))
+                          (request (roost--permission-request task)))
+                (insert (apply #'propertize
+                               (concat "   " (truncate-string-to-width (roost--one-line request)
+                                                                       (max 4 (- width 4)) nil nil "…"))
+                               'face 'roost-dim 'mouse-face 'highlight
+                               'help-echo (concat request "\nmouse-1: open · mouse-3: actions")
+                               row)
+                        (apply #'propertize "\n" row)))
               (dolist (offer (roost--offers task))
                 (roost--insert-offer-row task offer (roost--sidebar-offer-row task offer width))))))))
     ;; A conversation needs no project, so it comes before them.

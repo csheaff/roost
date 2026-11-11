@@ -14579,6 +14579,31 @@ it of the same ID's, or nil for the first."
      (should (string-match-p "1 of 2 agents waiting for you asks"
                              (get-text-property (1- (length (string-trim-right count))) 'help-echo count))))))
 
+(ert-deftest roost-the-sidebar-says-what-a-waiting-agent-asks ()
+  ;; Under its row, dim: whether to go there now turns on what it asks,
+  ;; and the row has room for a word.  The line is the task's too.
+  (roost-test--isolated
+   (let ((roost--current-task nil) (roost-watch-mode t))
+     (roost--cache-task "dev" (append '((name . "budget-alerts") (repo . "/srv/ledger") (live . t)
+                                        (request . "Asks to run python3 -m unittest discover -s test"))
+                                      (roost-test--task "1111111111111111" "permission")))
+     (roost--cache-task "dev" (append '((name . "parser") (repo . "/srv/ledger") (live . t))
+                                      (roost-test--task "2222222222222222" "ready")))
+     (with-temp-buffer
+       (roost-sidebar-list-mode)
+       (roost--render-sidebar)
+       (let ((lines (split-string (buffer-string) "\n")))
+         (should (member "   Asks to run python3 -m un…" lines))
+         ;; Right under the task that asks, and nowhere else.
+         (should (string-prefix-p " budget-alerts"
+                                  (nth (1- (seq-position lines "   Asks to run python3 -m un…")) lines)))
+         (should (= 1 (seq-count (lambda (line) (string-prefix-p "   " line)) lines))))
+       (goto-char (point-min))
+       (search-forward "Asks to run")
+       (should (equal (get-text-property (point) 'roost-task) '("dev" "1111111111111111")))
+       (should (string-prefix-p "Asks to run python3 -m unittest discover -s test"
+                                (get-text-property (point) 'help-echo)))))))
+
 (ert-deftest roost-the-sidebar-says-a-worktree-is-on-another-branch ()
   ;; As the panel says first: for every task at once, in the warning's
   ;; colour, while its agent isn't at work and no louder word is there.

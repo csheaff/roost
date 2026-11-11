@@ -4,6 +4,11 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- The sidebar says what a waiting agent asks, dim, under its row, as
+  `Asks to run make test`: whether to go there now turns on that, and it
+  was only under the mouse. A click on the line opens the task, as one on
+  its row does. Nothing to do when upgrading.
+
 - `M-x roost-copy-attach-command`, also on a task's right-click menu,
   copies the shell command that attaches another terminal to a task's
   agent, as `ssh -t dev 'tmux -L main attach -t =roost-…'`: for a phone's

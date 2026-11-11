@@ -49,9 +49,17 @@ and a task's panel its keys work alone.
    terminal. On the same menu, `u` brings a task up to date first, and `P`
    opens a pull request instead.
 
+**Or talk first.** `C-c r C` opens an agent in no project, with nothing to
+write beforehand. Ask it to look at a project and plan a piece of work: each
+task it would split it into waits under the conversation, and a click opens
+it as a draft in that project, to start as it is or change first. An agent
+at work in a task does the same with what it comes across outside its task,
+such as a bug in code it read.
+
 **Watch them all.** `M-x roost-dashboard` lists every agent on every host: what
-it's doing, what it changed, and its latest reply or what it asks. A
-notification says the same when one finishes or asks for something.
+it's doing right now (`Running make test`, `Editing ledger.py`), what it
+changed, and its latest reply or what it asks. A notification says the same
+when one finishes or asks for something.
 
 ![The dashboard, counting 1 permission, 4 ready and 1 running: two tasks on dev, one ready and one asking to run python3 -m unittest, and four local ones, three ready and one working, each with its changes and latest reply](docs/images/roost-dashboard.png)
 
@@ -118,6 +126,8 @@ For straight.el, Doom, Emacs 29, Evil and other modal setups, see the
 | `/` | Search agents' conversations | `?` | Every command |
 
 These work in the dashboard, the sidebar and a task's panel, and on the menu.
+`C` starts a conversation, `B` changes the branch a task merges into, and
+`=` compares several attempts at one prompt.
 
 ## Good to know
 
@@ -131,6 +141,10 @@ These work in the dashboard, the sidebar and a task's panel, and on the menu.
 - Claude Code 2.1.284 and later start in auto mode unless a permission mode
   is set, and rarely ask. To be asked before each command, add
   `"--permission-mode" "manual"` to its entry in `roost-agent-commands`.
+- A Claude task's agent has two tools of Roost's, to offer you tasks and to
+  name your projects; `(setq roost-agent-offers nil)` starts tasks without
+  them. `(setq roost-remote-control t)` shows each Claude task in the Claude
+  app, which notifies your phone when its agent needs a decision.
 
 ## More
 
