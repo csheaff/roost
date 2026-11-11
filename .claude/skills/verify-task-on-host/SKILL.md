@@ -106,9 +106,10 @@ refuses one, so the model's runs with no retarget are its runs.
 Last confirmed against the code at commit `8f651f3`, with
 `require_offers_named`, its calls in `retire`, `discard` and `forget`, and
 the `offers` that `TASK_ACTIONS` hands them, that came with this line.
-Since `e910487` that took in `retarget`, which leaves where the task's
-commits count from as it was when the branch named has them all,
-conversations, a fork's start and read, offers, `require_finished` at a
+Since `e910487` that took in `retarget`, which moves the branch it merges
+into and never where its branch was made (`startCommit`, which
+`safe_to_delete` tells a task that never committed by, merged beside this
+from "Git and the forge"), conversations, a fork's start and read, offers, `require_finished` at a
 plan menu, and a branch that is going keeping no commit (`safe_to_delete`,
 `discard_losses`, `branches_going`). If
 `git log 8f651f3..HEAD -- scripts/roost_remote.py` shows changes to

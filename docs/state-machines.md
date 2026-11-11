@@ -155,8 +155,8 @@ branch rules block reading `to merge` is fixed under [#227](https://github.com/c
 
 The models of each section, brought in line with offers, conversations, forks,
 several attempts and `B`, found these. Each was replayed on the real code before
-it was fixed or left. A finding left open has a config that fails on purpose
-until it is fixed, which its section's skill lists.
+it was fixed. A fixed finding's config is gone, and a variant that undoes the fix
+fails in its place.
 
 | Finding | Sev | What goes wrong | Machine | Status |
 | --- | --- | --- | --- | --- |
@@ -169,7 +169,7 @@ until it is fixed, which its section's skill lists.
 | LC-9 | S3 | A fork made as its source is retired or discarded starts from a worktree half removed | [Worktree lock](#worktree-lock) | Fixed, `test_a_task_stays_while_a_fork_reads_where_its_work_stands` |
 | VIEWS-14 | S3 | A fork's draft closes for a fork made the other way, with its task's conversation or without, when `C-c C-f` is pressed as it is created | [The new task draft](#the-new-task-draft) | Fixed, `roost-a-fork-given-a-new-conversation-stays-for-a-task-that-goes-on-with-the-old` |
 | FORGE-14 | S4 | A branch named in another Emacs, or by a `B` whose reply was lost, goes unmeasured while Git's stamp stays, and the row keeps saying "merged" | [Task measurement](#task-measurement) | Fixed, `roost-a-branch-to-merge-into-named-elsewhere-is-measured-against` |
-| FORGE-15 | S3 | After `B` makes a commit of the task's own its start, by naming what has some of its commits, a reset of its branch reads wrong: `x` retires a task that is ahead, or one merged reads as not | [Landed](#landed) | Open: `LandedRetarget.ResetToStart.cfg`, `ResetToStartMerged.cfg`, `ResetBeforeStart.cfg` |
+| FORGE-15 | S3 | After `B` makes a commit of the task's own its start, by naming what has some of its commits, a reset of its branch reads wrong: `x` retires a task that is ahead, or one merged reads as not | [Landed](#landed) | Fixed: `test_a_task_reset_to_a_commit_of_its_own_after_retargeting_still_has_unmerged_commits`, `test_a_task_reset_to_a_merged_commit_of_its_own_after_retargeting_reads_as_merged`, `test_a_task_reset_to_where_it_started_after_retargeting_reads_as_never_committed` |
 | VIEWS-15 | S3 | Several attempts at one prompt are made from two, when the draft's own request is lost or refused, you change the prompt, and ask again | [The creation ID](#the-creation-id) | Fixed: `roost-a-draft-changed-between-asks-makes-its-attempts-from-one-wording`, `test_the_attempts_of_one_draft_are_made_from_one_wording`, `test_attempts_asked_for_at_once_in_other_words_make_one_wording` |
 | LC-10 | S4 | An offer its agent makes after you were asked goes with a task you finish, unnamed | [Finishing a task](#finishing-a-task) | Fixed: `test_an_offer_made_since_you_were_asked_keeps_its_task`, `test_an_offer_made_while_git_merges_keeps_its_task`, `roost-finishing-a-task-tells-its-host-which-offers-its-question-named` |
 | STATUS-12 | S4 | Closing Codex's plan menu says nothing, so its task reads `permission` until your next prompt | [Agent status](#agent-status) | Accepted: `AgentStatus.PlanMenuClosed.cfg` |
@@ -236,7 +236,7 @@ Invariants:
 | Removal cut short | retire, merge, discard | | Removing | `put_back_removed` first | `retire`, `discard` |
 | any but Removing | forget | no live pane, and no offer its question didn't name | Gone | window closed; Git left | `forget` |
 | Ended | retire, merge | a step after the checkpoint fails | Finishing, still stopped | `retiringCommit` stays | `retire` |
-| Live, Ended | retarget | not Merging, Removing or Removal cut short; a branch other than its own | as it was | `integrationBranch` and `baseCommit` saved, whole under the lock | `retarget` |
+| Live, Ended | retarget | not Merging, Removing or Removal cut short; a branch other than its own | as it was | `integrationBranch`, `baseCommit` and `retargetedAt` saved, whole under the lock; `startCommit` kept, or written for a record without one | `retarget` |
 
 A conversation is a task too, in a repository Roost keeps for them
 (`conversation_repository`), with a worktree and a branch there: it stops, resumes,
@@ -348,9 +348,11 @@ Invariants:
 | Asked | | a note has this ID | waits | `settle_creation(wait=True)` | `made_for` |
 | Asked | | a record has this ID | Made | returns that task | `made_for` |
 | Asked | | neither | Preparing | | `make_task` |
+| Preparing | an attempt, saying its wording | another of its group was made from other words | Made, of that other | nothing made; that task returned, as one made before | `made_from_other_words`, `make_task` |
 | Preparing | a fork | its source is not Merging, Removing or Removal cut short | Preparing | the source's work read, its worktree lock shared meanwhile | `conversation_to_fork`, `snapshot` |
 | Preparing | | | Noted | note locked before it is in place | `noting_creation` |
 | Noted | Git and spawn done | | Made | note unlinked under its lock | `noting_creation` |
+| Noted | an attempt, as its record is saved | another of its group was recorded meanwhile from other words | Made, of that other | undone as a failed creation is; that task returned | `made_from_other_words`, `abandon` |
 | Noted | Git refused | nothing there | Failed | branch deleted | `make_task` |
 | Noted | helper and Git die | | Cut short | | |
 | Cut short | list, or same ID | Git stopped it | gone | force-remove, unregister, delete branch | `undo_creation` |
@@ -520,7 +522,7 @@ What each step leaves if it stops there, and what asking again does.
 | 4 | `put_back_removed` if `removing` | registry | restores tracked files, its link |
 | 5 | `check_worktree`, clean, submodules, Git lock, agent work | registry | refused, nothing changed |
 | 6 | branch moved from `expect`, then merge, into `integrationBranch` as the record has it then; the record read again after, with `require_finished`, `require_clean` and `require_offers_named` again | registry, released while Git merges | see next machine; a second merge finds it there. Refused after: merged, and not retired |
-| 7 | `safe_to_delete`, by `integrationBranch` and `baseCommit` as the record has them now; save `retiringCommit` | registry | |
+| 7 | `safe_to_delete`, by `integrationBranch` and `startCommit` as the record has them now; save `retiringCommit` | registry | |
 | 8 | `stop` | registry | task stopped; agent's window gone |
 | 9 | `remove_worktrees` | released | worktree partly gone; `put_back_removed` restores it |
 | 10 | staging folder, `unregister_gone`, `delete_branch` | registry | branch still there, `check_worktree` finds no folder and goes on |
@@ -3274,6 +3276,7 @@ registry lock.
 | `mayOffer`, `parent`, `offer` | `make_task` | yes; never changed |
 | `conversation`, `remoteControl`, `forkSession`, `forkedFrom`, `attempt` | `make_task` | yes; never changed |
 | `baseRef`, `baseCommit`, `integrationBranch`, `integrationRef`, `retargetedAt` | `make_task`, `retarget` | yes |
+| `startCommit` | `make_task`; `retarget`, for a record without one | yes |
 | `activity` | `update_hook` (`note_activity`), `apply_program_status`, `spawn` | yes |
 
 No lost update found in any of them. The last three rows were added on the

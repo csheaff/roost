@@ -85,7 +85,8 @@ VARIABLES
                   \* "made" (in agentMade, its stamp in agentMadeAt)
     integ,        \* integrationBranch, the branch it merges into: "main",
                   \* "mine" or "wt"; "tb", its own, only with a guard broken
-    base,         \* baseCommit, as the commits the task's branch began with
+    base,         \* startCommit, as the commits the task's branch was made
+                  \* with (`started_at`): `B` never moves it
     offers,       \* how many tasks its agent offers, in `offers`
     \* The agent's process, and the locks.
     agent,        \* "working", "idle", "stopped"
@@ -304,18 +305,16 @@ Aside(A, unchanged) ==
 \* it while the task's worktree goes or Git merges it, and once a removal
 \* was cut short.  It refuses the task's own branch, a task with no branch,
 \* and a conversation, which is in no project: the runs with no retarget
-\* are a conversation's.  The record's branch to merge into becomes b, and
-\* its start the commits the two share (`merge-base`).  Broken:
-\* `retarget_own` takes the task's own branch.
+\* are a conversation's.  The record's branch to merge into becomes b.
+\* Where its commits count from, `baseCommit`, follows, which nothing here
+\* reads: whether it ever committed goes by where its branch was made,
+\* which stays.  Broken: `retarget_own` takes the task's own branch.
 YouRetarget(b) == Aside(
     /\ "retarget" \in Also /\ ~retargeted
     /\ regLock = 0 /\ rec /\ wtLock = 0 /\ removing = 0
     /\ tb /\ There(b) /\ b # integ
-    \* Where its commits count from follows, but for a branch that has
-    \* them all: started at its own tip, it would read as never committed.
-    /\ integ' = b /\ retargeted' = TRUE
-    /\ base' = IF tbCommits \subseteq On(b) THEN base ELSE tbCommits \cap On(b),
-    <<src, offers, reading, readPartly, untold>>)
+    /\ integ' = b /\ retargeted' = TRUE,
+    <<src, base, offers, reading, readPartly, untold>>)
 
 Targets == {"main", "mine", "wt"} \cup (IF Break = "retarget_own" THEN {"tb"} ELSE {})
 
