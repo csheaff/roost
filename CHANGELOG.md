@@ -18,6 +18,10 @@ What each release changes, and what to do when upgrading. Newest first.
   differs, so a terminal with few colours shows the same words without
   them. `(setq roost-decorate nil)` turns it all off. If you set
   `roost-field` to inherit `link`, the draft's fields are underlined again.
+- Review works with Magit 3.3.0, as Debian and Ubuntu package it. A click
+  on a changed file in a task's panel failed there, and so did writing a
+  note on a diff's line and the commits to review in Magit's status: Roost
+  called three of Magit's functions by the names Magit 4 gave them.
 - A status light has a shape as well as a colour, in the dashboard, a task
   panel's title and the mode line, where Emacs can draw one: a disc in a
   ring for an agent that can't go on until you answer, a disc for one that

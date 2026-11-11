@@ -12,11 +12,11 @@ worktree, a branch and a terminal, here or on any SSH host. It tells you which
 agents need you, and you review and merge their work with Magit. If you've
 used Orca, it's that idea, inside Emacs.
 
-![Emacs with three columns: Roost's sidebar listing six agents on two machines, the one you are on marked with a band and asking permission, four ready and one working, and below them two more projects to start a task in; that agent's Claude Code terminal on the SSH host dev, asking to run python3 -m unittest; and the task's panel, which says to answer it in its terminal and shows the prompt it was given, your latest prompt and the files it has changed](docs/images/roost-hero.png)
+![Emacs with three columns: Roost's sidebar listing six agents on two hosts, the one you are on marked with a band, asking permission, with what it asks under it, three ready, one with changes not looked at and one working, and below them two more projects to start a task in; that agent's Claude Code terminal on the SSH host dev, asking to run python3 -m unittest; and the task's panel, which says to answer it in its terminal and lists the files it has changed](docs/images/roost-hero.png)
 
-*Six Claude Code agents on two machines. The one on `dev` wants to run its
+*Six Claude Code agents on two hosts. The one on `dev` wants to run its
 tests: its own terminal in the middle, every task at the left, and at the
-right what to do next, what you asked it and what it changed.*
+right what to do next and what it changed.*
 
 ## A task, start to finish
 
@@ -29,7 +29,7 @@ and a task's panel its keys work alone.
    GitHub issue or a Jira work item works the same way. `C-c C-c` makes the
    worktree and branch and starts the agent.
 
-   ![An Org file of plans beside the draft that C-c r c made from its heading, Export the notes as a Markdown checklist: Cancel and Create buttons at the top, the project notes on this machine, the agent claude, starting from main and merging into main, the task named export, and the heading and its notes as the prompt](docs/images/roost-new-task.png)
+   ![An Org file of plans beside the draft that C-c r c made from its heading, Export the notes as a Markdown checklist: Cancel and Create buttons at the top, the project notes on this machine, the agent claude, one attempt, starting from main and merging into main, the task named export, each with its key beside it, and the heading and its notes as the prompt](docs/images/roost-new-task.png)
 
 2. **Go where you're needed.** While it works, an agent on `dev` asks to run
    its tests. `C-c r n` takes you to the next agent waiting for you, and
@@ -42,7 +42,7 @@ and a task's panel its keys work alone.
    Magit, or `e`, sends your notes to the agent. `C-c r r` opens Magit on
    the whole worktree, over TRAMP for a remote task.
 
-   ![A task's terminal above the Magit diff of notes.py, with a review note under a changed line: list shows tags as #shop, so people will type --tag '#shop'; strip a leading # from TAG. Beside them, the task's panel lists the two files it changed, one review note for the agent, and the three other tasks that change the same files](docs/images/roost-review.png)
+   ![A task's terminal above the Magit diff of notes.py, with a review note under a changed line: a tag nobody used lists nothing, silently, so a typo looks like no notes; print "No notes tagged #NAME" when the filter matches none. Beside them, the task's panel lists the two files it changed, one review note for the agent, and the three other tasks that change the same files](docs/images/roost-review.png)
 
 4. **Finish.** The agent revises and commits. `C-c r m` squashes the task
    into the branch it started from and removes its worktree, branch and
@@ -61,7 +61,7 @@ it's doing right now (`Running make test`, `Editing ledger.py`), what it
 changed, and its latest reply or what it asks. A notification says the same
 when one finishes or asks for something.
 
-![The dashboard, counting 1 permission, 4 ready and 1 running: two tasks on dev, one ready and one asking to run python3 -m unittest, and four local ones, three ready and one working, each with its changes and latest reply](docs/images/roost-dashboard.png)
+![The dashboard, counting 1 permission, 3 ready, 1 running and 1 seen: two tasks on dev, one ready and one asking to run python3 -m unittest, and four local ones, two ready, one seen and one reading a file, each with a light in the shape of its status, its changes, and its latest reply or what it is doing](docs/images/roost-dashboard.png)
 
 ## How it differs
 

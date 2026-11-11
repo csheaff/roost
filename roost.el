@@ -74,6 +74,7 @@
 (declare-function magit-insert-heading "magit-section" (&rest args))
 (declare-function magit-add-section-hook "magit-section" (hook function &optional at append local))
 (declare-function magit--insert-log "magit-log" (keep-error revs &optional args files))
+(declare-function magit-insert-log "magit-log" (revs &optional args files))
 (declare-function magit-log-insert-child-count "magit-log" ())
 (declare-function magit-rev-verify "magit-git" (rev))
 (declare-function magit-diff-range "magit-diff" (rev-or-range &optional args files))
@@ -118,6 +119,8 @@
 (defvar magit-diff-buffer-file-locked)
 (defvar magit-buffer-diff-files)
 (defvar magit-buffer-diff-range)
+(defvar magit-buffer-range)
+(defvar magit-root-section)
 (defvar magit-status-headers-hook)
 (defvar magit-status-sections-hook)
 (defvar magit-refresh-buffer-hook)
@@ -5879,8 +5882,11 @@ their changes together.  See `roost-magit-status-sections'."
          (magit-insert-heading
            (format (propertize "Unmerged into %s." 'font-lock-face 'magit-section-heading)
                    integration))
-         ;; With no commits, Magit leaves the section out.
-         (magit--insert-log nil range magit-buffer-log-args)
+         ;; With no commits, Magit leaves the section out.  Magit 3
+         ;; has the function under its older name.
+         (if (fboundp 'magit--insert-log)
+             (magit--insert-log nil range magit-buffer-log-args)
+           (magit-insert-log range magit-buffer-log-args))
          (magit-log-insert-child-count))))))
 
 (defvar-keymap roost-since-looked-section-map
@@ -6171,12 +6177,23 @@ in place of the note it edits."
               (push (roost--note-room-overlay room (plist-get box :room) (plist-get box :window))
                     roost--note-overlays))))))))
 
+(defun roost--map-sections (function &optional section)
+  "Call FUNCTION with each section of this Magit buffer, or of SECTION.
+A section's children before it, as `magit-map-sections' has it, which
+Magit 3 is without."
+  (if (fboundp 'magit-map-sections)
+      (magit-map-sections function section)
+    (when-let* ((section (or section magit-root-section)))
+      (dolist (child (roost--slot section 'children))
+        (roost--map-sections function child))
+      (funcall function section))))
+
 (defun roost--magit-file-lines ()
   "For each file in this Magit buffer's diffs, (FILE HEADINGS LINES).
 HEADINGS are the ends of its headings, and LINES its lines, from
 `roost--hunk-lines'."
   (let (files)
-    (magit-map-sections
+    (roost--map-sections
      (lambda (section)
        (when (magit-section-match '(file hunk) section)
          (let* ((hunk (magit-section-match 'hunk section))
@@ -9826,12 +9843,22 @@ untracked file, with nothing to compare, is opened instead."
                                  ;; By where it is now: updating past a
                                  ;; move leaves it no old path.
                                  (equal (car (last magit-buffer-diff-files)) path)
-                                 (not (equal magit-buffer-diff-range rev))
+                                 ;; Magit 3 has the range under another name.
+                                 (not (equal (if (boundp 'magit-buffer-diff-range)
+                                                 magit-buffer-diff-range
+                                               (bound-and-true-p magit-buffer-range))
+                                             rev))
                                  (roost--task-in-directory default-directory (list task)))
                         (kill-buffer buffer))))
-                  ;; What `magit-diff-working-tree' does, locked.
-                  (with-current-buffer (magit-diff-setup-buffer rev nil nil paths 'committed
-                                                                magit-diff-buffer-file-locked)
+                  ;; What `magit-diff-working-tree' does, locked.  Magit 4
+                  ;; takes the diff's type before that; Magit 3, as Debian
+                  ;; and Ubuntu have it, doesn't.
+                  (with-current-buffer
+                      (let ((most (cdr (func-arity #'magit-diff-setup-buffer))))
+                        (if (and (integerp most) (< most 6))
+                            (magit-diff-setup-buffer rev nil nil paths magit-diff-buffer-file-locked)
+                          (magit-diff-setup-buffer rev nil nil paths 'committed
+                                                   magit-diff-buffer-file-locked)))
                     (setq roost--file-diff t)))
               (find-file (roost--worktree-file path)))))))
 

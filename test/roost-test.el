@@ -13988,8 +13988,9 @@ note after, for any task, so a restart lost them all."
         (should (= (length (eieio-oref section 'children)) 1))
         (should-not (string-match-p "Already on main"
                                     (buffer-substring (eieio-oref section 'start) (eieio-oref section 'end))))
-        ;; RET on the heading shows the task's changes since it left main.
-        (should (equal (magit-diff--dwim) "refs/heads/main...")))
+        ;; RET on the heading shows the task's changes since it left main;
+        ;; Magit 3 shows how it differs from main as it is now.
+        (should (member (magit-diff--dwim) '("refs/heads/main..." "refs/heads/main.."))))
       (should (string-match-p "Add a line" (buffer-string))))
     (let ((roost-magit-status-sections nil))
       (with-current-buffer (magit-get-mode-buffer 'magit-status-mode)
