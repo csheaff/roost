@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 # The commit at which the models were last confirmed to describe the code.
-SYNC = "e910487"
+SYNC = "089089e"
 
 ROOT = Path(__file__).resolve().parents[3]
 COVERED = {
@@ -22,8 +22,8 @@ COVERED = {
         "is_ancestor", "recorded_pull_request", "has_tip", "merged_tip", "recorded_merge_at",
         "head_to_fetch", "fetch_head", "fetch_heads", "pushed", "task_pull_requests",
         "shown_pull_request", "check_pull_requests", "landed", "merged_pull_request_head",
-        "safe_to_delete", "push_pull_request", "record_push", "pull_request",
-        # Both: rpc's `pr` and `list` branches, and the measurement.
+        "safe_to_delete", "push_pull_request", "record_push", "pull_request", "retarget",
+        # Both: rpc's `pr`, `list` and `retire` branches, and the measurement.
         "rpc", "add_git_stats",
         # MergedWord.tla: commits move the stamp, so a poll looks again.
         "git_stamp",
@@ -33,6 +33,8 @@ COVERED = {
         "roost--refresh-host", "roost--owe-measuring", "roost--task-states", "roost--cache-task",
         "roost--newer-events", "roost--apply-snapshot", "roost--measured-fields", "roost--landed",
         "roost--merged-p", "roost--display-status", "roost-refresh",
+        # B: its reply, and the measurement it asks for.
+        "roost--act", "roost-retarget",
     ],
 }
 

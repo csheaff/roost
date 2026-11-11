@@ -1632,20 +1632,25 @@ in `roost--list-requests'; without one, TASKS count as asked for now."
     (remhash host roost--errors)))
 
 (defun roost--task-states (host)
-  "HOST's tasks, cached, as ID to (STATUS UPDATED-AT GIT-STAMP PR LOOKED).
+  "HOST's tasks, cached, as ID to (STATUS UPDATED-AT GIT-STAMP PR LOOKED INTO).
 Each agent hook event, such as finishing a tool, moves UPDATED-AT; Git
 commands in the worktree, such as your commit, change GIT-STAMP.  PR is
 the state its host recorded of its pull request, which another Emacs
 may have changed: closed, it no longer says whether the task conflicts.
 LOOKED is when you last looked at it, from this Emacs or another, which
-what changed since is measured against."
+what changed since is measured against.  INTO is the branch it merges
+into, which `B' in another Emacs, or one whose reply was lost, may have
+changed: what it is ahead of, and whether it is merged, are measured
+against that, and its reflog may have the time the other's had, which
+leaves GIT-STAMP as it was."
   (let (states)
     (maphash (lambda (key task)
                (when (equal (car key) host)
                  (push (list (cadr key) (roost--field task 'status)
                              (roost--field task 'updatedAt) (roost--field task 'gitStamp)
                              (alist-get 'state (roost--field task 'pr))
-                             (alist-get 'at (roost--field task 'looked)))
+                             (alist-get 'at (roost--field task 'looked))
+                             (roost--field task 'integrationBranch))
                        states)))
              roost--tasks)
     states))

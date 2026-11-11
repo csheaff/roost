@@ -6830,6 +6830,34 @@ stopped."
        (should (= (length calls) 3))
        (should (equal (caar calls) ["0123456789abcdef"]))))))
 
+(ert-deftest roost-a-branch-to-merge-into-named-elsewhere-is-measured-against ()
+  ;; As in another Emacs, or with B when its reply was lost.  It is no
+  ;; event of the agent's, and moves no Git stamp where the two branches'
+  ;; reflogs have one time, or Git keeps none: the row went on saying
+  ;; "merged", as measured against the branch before.
+  (roost-test--isolated
+   (let* ((roost-hosts '("dev")) calls
+          (listed (lambda (branch &rest fields)
+                    (append fields `((integrationBranch . ,branch) (gitStamp . "1 2 3")
+                                     (seen . "2026-10-03T20:00:00+00:00") (live . t))
+                            (roost-test--task))))
+          (word (lambda () (roost--display-status (gethash '("dev" "0123456789abcdef") roost--tasks)))))
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (_host _action params success _failure)
+                  (push (cons (alist-get 'full params) success) calls))))
+       (roost--cache-task "dev" (funcall listed "main" '(landed . t) '(dirty) '(ahead . 1)))
+       (should (equal (funcall word) "merged"))
+       (roost-refresh t)
+       (funcall (cdar calls) (list (funcall listed "main")))
+       (should (= (length calls) 1))
+       (roost-refresh t)
+       (funcall (cdar calls) (list (funcall listed "release")))
+       (should (= (length calls) 3))
+       (should (equal (caar calls) ["0123456789abcdef"]))
+       ;; Measured, it isn't merged into release.
+       (funcall (cdar calls) (list (funcall listed "release" '(landed) '(dirty) '(ahead . 1))))
+       (should-not (equal (funcall word) "merged"))))))
+
 (ert-deftest roost-saving-a-file-in-a-worktree-measures-its-task ()
   (roost-test--isolated
    (let ((task (roost--cache-task "dev" (roost-test--task))) refreshes)

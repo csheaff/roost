@@ -120,6 +120,9 @@ What each release changes, and what to do when upgrading. Newest first.
   task, and Roost says so when the two are at different commits. No commit
   moves: rebase the task's branch yourself. A pull request already open
   keeps its base, and Roost names the `gh pr edit --base` that changes it.
+  Named a branch that already has its commits, as after you merged it
+  there by hand, the task says `merged`. A branch named from another
+  Emacs is measured against here too, at the next poll.
   The panel's Branch line names the key. Nothing to do when upgrading.
 - A conversation plans work in your projects. Ask the agent in one to plan
   a piece of work, and each task it would split it into waits, dim, under

@@ -1729,11 +1729,14 @@ Invariants:
 - I1. A pull request is the task's only if it is the recorded one, or its head
   is a commit of the task's own, made since it started and still on its branch
   (`task_pull_requests`). Someone else's fork, an earlier task's branch of the
-  same name and commits brought in by an update don't count.
+  same name and commits brought in by an update don't count. `B` moves where it
+  started: one not yet recorded, whose head is no later than where the task's
+  branch and the branch named part, counts no more.
 - I2. A merge stays a merge while the tip stands: a later listing that no longer
   has it doesn't undo it (`record["mergedHead"]`, `mergedBases`).
 - I3. A lookup never overwrites a record newer than the one it read
-  (`check_pull_requests`: `stale`, a compare-and-swap under the lock).
+  (`check_pull_requests`: `stale`, a compare-and-swap under the lock). Only `pr`
+  is compared and written, so a branch `B` named meanwhile stays.
 - I4. Only a record says `merged at tip`, and retiring believes only that or an
   answer got for this request (`merged_pull_request_head`, `safe_to_delete`).
 - I5. A commit on the branch is the task's own when its reflog says so, by a
@@ -1752,6 +1755,12 @@ Invariants:
 - I7. Commits on the branch after what merged never count as merged: `has_tip`
   asks whether the tip is in the head, not the other way, and `record_push` leaves
   a closed or merged one's `head` alone. Retiring deletes on this word.
+- I8. A pull request merges into the base it names, which need not be the branch
+  the task merges into: an agent's own may name another, and `B` (`retarget`)
+  changes the record's branch and nothing of `pr`. Its reply's `note` names an
+  open one's base once, when that isn't the new branch. A merge of it counts as
+  the task's whichever base it went to (`mergedBases` has them, for
+  `roost-task-merged-functions`).
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
@@ -1773,6 +1782,7 @@ Invariants:
 | merged, commits since | Agent opens another | | open | | `shown_pull_request` |
 | merged, commits since | `P` with a title | | fresh | Another opened, in its place | `rpc`, `pull_request` |
 | merged at tip | Second pull request opened at the tip | | open beside a merge | `mergedHead` kept, the open one shown | `check_pull_requests` |
+| any | `B` names another branch to merge into | | same | `pr` as it was; the `note` names an open one's base | `retarget` |
 | any | `retire`, `merge`, `discard`, `forget` | | gone | Record removed; a lookup in flight fails to read it and shows, not records | `check_pull_requests`' `except` |
 
 `worktreePr` follows the same listing for the branch the worktree is on, is null
@@ -1790,9 +1800,20 @@ or removing task is refused (`require_not_removing`).
 
 Branch reuse: Roost's branch names end in six hex digits of the task's ID, so a
 task's own branch can't really be reused. Reuse is possible only for a branch the
-agent made (`worktreePr`), and I1 covers that: `own_commits(task, branch)`.
+agent made (`worktreePr`), and I1 covers that: `own_commits(task, branch)`. Several
+attempts at one prompt, and a fork of a task, are tasks with branches of their own:
+the forge lists each one's pull requests by its branch's name, so none is taken
+for another's.
 
-Open: none.
+A conversation, a task in no project, is a task in a repository of Roost's own
+with no remote: nothing is pushed, so no poll asks a forge and none is recorded.
+
+Open: the `note` goes by what the record has. Of a pull request `P` just opened,
+which has no `base` until the forge is next asked, it takes the branch before for
+its base: after `B` twice in that time it names the branch between. And `B` while
+`P` opens one sees none to name, so that one targets the branch before with
+nothing said. By reading; the first replayed on the helper. Neither changes what
+merges, or what reads as merged.
 
 ### What the forge last said
 
@@ -1821,6 +1842,9 @@ Invariants:
   request, head and base, the last status stands, whole, as when the forge doesn't
   answer (`roost--kept-reviews`): a word doesn't go for a poll and come back as news,
   and old reviews beside new checks make no word nobody said.
+- I5. What the forge says is of the pull request and the base it names, not of the
+  branch the task merges into. `B` changes neither, so it asks the forge nothing,
+  and the status stands: `mergeable` and `to merge` are of the pull request's base.
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
@@ -1831,6 +1855,7 @@ Invariants:
 | whole | Forge list fails: `gh` missing, signed out, slow | | frozen | Emacs keeps it | `task_pull_requests` -> None; `roost--cache-task` |
 | any | Agent event | | stale | Verdict nil until next asked, 30 s on | `roost--pr-status` |
 | any | `pr` changes in a reply without a status, as after `P` pushes | | dropped | | `roost--cache-task` |
+| any | `B` names another branch to merge into | | same | Nothing asked: the list that follows measures Git alone | `roost-retarget` |
 
 `unpushed` goes with this: with the forge's head fetched, it compares a commit made
 there with the branch, so such a commit no longer holds back the word (FORGE-5).
@@ -1904,7 +1929,8 @@ Open: none.
 
 ### Landed
 
-Kind: derived. Lives in: `landed` from `landed()`; `roost--landed`.
+Kind: derived. Lives in: `landed` from `landed()`, of the record's
+`integrationBranch` and `baseCommit`, which `retarget` changes; `roost--landed`.
 
 | State | Meaning | How you can tell |
 | --- | --- | --- |
@@ -1915,18 +1941,48 @@ Kind: derived. Lives in: `landed` from `landed()`; `roost--landed`.
 Invariants:
 
 - I1. Landed implies retiring loses no commit. Holds: `safe_to_delete` accepts
-  every tip `landed` does, and also a task that never committed.
-- I2. A task that never committed hasn't landed.
+  every tip `landed` does, and also a task that never committed, whose start some
+  other ref has.
+- I2. A task that never committed hasn't landed: its tip is its `baseCommit`.
+  `B` moves `baseCommit` to where the task's branch and the branch named part, but
+  not onto the tip, when what it names has all of the task's commits: a task with
+  commits doesn't come to read as one without. It did, and `x` then retired one
+  whose commits a tag had, or its own pushed branch, and no branch it merges
+  into. Fixed, by the test I3 names. **Broken** where a branch is reset after
+  `B`: see Open, below.
 - I3 (manual, "Work that is merged"). Only commits after the merge keep it from
   saying so. Fixed: FORGE-1, where the branch was behind what merged, and FORGE-2,
   where the merge was never found. A head that can't be fetched still reads as
-  commits since.
+  commits since. Fixed too: `B` onto a branch that had the task's commits, as after
+  a merge by hand, moved its start onto its tip, and it read as never committed,
+  its pull request as merged but not the commits since
+  (`test_retargeting_onto_a_branch_that_has_the_tasks_commits_leaves_them_merged`).
+  **Broken** where a branch is reset after `B`: see Open, below.
+- I4. Landed is of the branch the record names now, or of a merge on the forge,
+  into whichever base that pull request named ([A task's pull request](#a-tasks-pull-request),
+  I8). So after `B`, a merge by hand into the branch before counts no more, and
+  `x` is refused; a pull request merged into the branch before still counts, as
+  the manual has it, and `x` retires the task though the new branch lacks its
+  commits. They are on the forge.
+- I5. `x` deletes a branch only when its tip is in the branch the task merges
+  into, or in what the forge merged, or the task never committed
+  (`safe_to_delete`). It goes by the record as it is when it deletes: `rpc` reads
+  the task again under the lock, after `merged_pull_request_head` asked the
+  forge, so a `B` meanwhile counts. **Broken** where a branch is reset after `B`:
+  see Open, below.
+- I6. A reply's `landed` is of the branch that reply names: `list_tasks` reads the
+  record once, and the measurement goes by it. One read before a `B` says what
+  was so of the branch before; Emacs then measures again, as
+  [Task measurement](#task-measurement) I7 has it.
 
 | From | Event | Guard | To | Code |
 | --- | --- | --- | --- | --- |
 | not landed | Poll records a merge at the tip, or after it | | landed | `recorded_merge_at`, `has_tip` |
 | not landed | Tip reaches the integration branch | `committed_on` | landed | `landed` |
 | landed | New commit, tip moves | | not landed | `landed`, at the next measurement |
+| landed | `B` names a branch that lacks the tip | no merge recorded at the tip | not landed | `retarget`, `landed` |
+| landed | `B` names a branch | a merge recorded at the tip | landed | `recorded_merge_at` |
+| not landed | `B` names a branch that has the tip | `committed_on` | landed | `retarget` keeps `baseCommit`; `landed` |
 | any | Reflog gone or empty | | not landed unless recorded | `own_commits` -> True |
 
 `rpc`'s `list` measures a task whole when a merge arrives, so `landed` never comes
@@ -1936,7 +1992,33 @@ Retiring fetches a merged head no poll has, as `merged_pull_request_head` asks f
 itself, and tries one a poll gave up on. Its remote branch goes under a lease on the
 head that merged, so commits pushed there since stay.
 
-Open: none.
+Other tasks of the same start, as several attempts at one prompt, or a fork: each
+one's `landed` reads its own branch's tip, its own record and its own reflog. What
+another merges into the branch they share counts for this one only when it has
+this one's tip, as a fork merged does, and then its commits are there.
+
+A conversation has a branch in Roost's own repository and no forge: it reads as
+not landed, or as a task merged by hand would if its agent committed and you
+merged that there. Emacs offers it no `m`, `P` or `B`, and `retarget` refuses it.
+
+Open: `B` can make a commit of the task's own its start, by naming what has
+some of its commits and not all: a tag at an earlier one, a fork's branch, or a
+branch its first commits were merged into. Then a reset of the task's branch
+goes wrong three ways, each replayed on the helper and a config that fails
+until it is fixed:
+
+- I5 **Broken**. Reset to that commit, the task reads as one that never
+  committed, and the host retires it, with its commits in that tag or branch, or
+  on its own pushed one, and merged nowhere (`LandedRetarget.ResetToStart.cfg`).
+  No commit is lost. Emacs asks to discard such a task, as it is ahead of the
+  branch it merges into; the host is the one that would not refuse.
+- I3 **Broken**. Reset to that commit where it is merged, the task doesn't say
+  so (`LandedRetarget.ResetToStartMerged.cfg`).
+- I2 **Broken**. Reset to where it first started, the task reads as merged, with
+  no commit of its own (`LandedRetarget.ResetBeforeStart.cfg`).
+
+A fix would have `retarget` leave `baseCommit` alone whenever where the two part
+is a commit the task made, or comes after one: `own_commits` knows them.
 
 ### Task measurement
 
@@ -1949,7 +2031,7 @@ say what is no longer so.
 | State | Meaning | How you can tell |
 |---|---|---|
 | Unmeasured | Never measured here | No `conflicts` field. `landed` isn't enough: a poll that asks GitHub says it of what it asked about, unmeasured |
-| Measured | Fields are as new as its last change | `gitStamp` and `updatedAt` as when measured |
+| Measured | Fields are as new as its last change | `gitStamp`, `updatedAt` and `integrationBranch` as when measured |
 | Owed | Changed since, measurement asked | Its ID is in pending, in a list in flight, or in `roost--measures-owed` |
 
 Invariants:
@@ -1960,11 +2042,21 @@ Invariants:
 - I4. An open pull request's conflict is the forge's word, otherwise Git's.
 - I5. `conflicts` is left to Git only where it means something: null with the
   worktree on another branch or a pull request open, `[]` once landed.
+- I7. What is measured against the branch a task merges into (`landed`, `ahead`,
+  `behind`, `conflicts`) is measured again once `B` names another. `roost-retarget`
+  asks for a list of the task as its host replies, and that reply, an action's,
+  makes a list in flight stale. Where the reply is lost, or `B` was pressed in
+  another Emacs, the next poll brings the branch, which is one of
+  `roost--task-states`: the Git stamp may not move, as the two branches' reflogs
+  can have one time, or Git keep none. Fixed:
+  `roost-a-branch-to-merge-into-named-elsewhere-is-measured-against`.
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
 | Unmeasured | Quiet poll first sees it | | Owed | Every task of a first poll is `changed` | success lambda |
 | Measured | Quiet poll sees its state move | | Owed | ID pended | success lambda |
+| Measured | `B`'s reply | | Owed | A list of its ID, at once or after the one in flight, which is dropped as stale | `roost-retarget`, `roost--act` |
+| Measured | Quiet poll brings another `integrationBranch` | | Owed | ID pended | `roost--task-states`, success lambda |
 | Owed | List with its ID replies | revision same | Measured | | `roost--apply-snapshot` |
 | Owed | That list dropped as stale | | Owed | Into `roost--measures-owed`, for the next poll | success lambda |
 | Owed | That list fails, or can't start | not owed before | Owed | Same | `failed`, `roost--refresh-host` |
@@ -1991,7 +2083,8 @@ Stamp: index, `logs/HEAD` of the worktree, and the integration branch's reflog. 
 moves for commits, staging, resets, `m` and a pull in the primary checkout. Edits
 not staged leave it, which is why a merge or open pull request found by a poll is
 measured whole. With `core.logAllRefUpdates` false the integration branch's part
-never moves.
+never moves. After `B` that part is the other branch's reflog, whose time may be
+the same: I7 doesn't rest on it.
 
 `update` is a field of one reply: `{conflicts, changed, resolved}`, never saved
 (`TRANSIENT`), read by `roost-update`, which then asks for a full refresh.

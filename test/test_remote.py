@@ -5142,6 +5142,51 @@ class Lifecycle(unittest.TestCase):
                 self.assertNotIn("note", store.read(task["id"]))
         self.assertEqual(self.git("rev-parse", task["branch"]), tip)
 
+    def test_retargeting_onto_a_branch_that_has_the_tasks_commits_leaves_them_merged(self):
+        # Merged by hand into release, where it belonged, a task still said
+        # it merged into main. Told so, it read as one that never committed.
+        self.git("branch", "release")
+        merge = lambda task: (self.git("switch", "-q", "release"),
+                              self.git("merge", "-q", "--no-ff", "--no-edit", task["branch"]),
+                              self.git("switch", "-q", "main"))
+        listed = lambda task: next(t for t in self.request("list", full=True)["result"] if t["id"] == task["id"])
+        retarget = lambda task: self.request("retarget", id=task["id"], base="release")
+        task = self.create(name="fix parser")
+        start = self.base_fields(task)[1]
+        self.commit_in(task)
+        merge(task)
+        self.assertIs(listed(task)["landed"], False)
+        self.assertTrue(retarget(task)["ok"])
+        # Its commits are all in release, and count from where they did.
+        self.assertEqual([listed(task)[field] for field in ("landed", "ahead", "files")], [True, 0, []])
+        self.assertEqual(self.base_fields(task), ("release", start, "release", "refs/heads/release"))
+        # So does a task whose pull request merged, named the branch that has the merge.
+        other = self.create(name="other")
+        head = self.commit_in(other, "other")
+        store = roost.Store(str(self.state))
+        record = store.read(other["id"])
+        record["pr"] = dict(number=7, url="u", state="MERGED", head=head, mergedHead=head, base="release")
+        store.save(record)
+        merge(other)
+        self.assertIs(listed(other)["landed"], True)
+        self.assertTrue(retarget(other)["ok"])
+        self.assertIs(listed(other)["landed"], True)
+        # A task with no commit of its own still has none to merge.
+        idle = self.create(name="idle")
+        self.assertTrue(retarget(idle)["ok"])
+        self.assertIs(listed(idle)["landed"], False)
+        # Nor does a tag at a task's commits make them none of its own: it
+        # merges into main, which lacks them, and x retires nothing unmerged.
+        unmerged = self.create(name="unmerged")
+        self.commit_in(unmerged, "more")
+        self.git("tag", "kept", unmerged["branch"])
+        self.assertTrue(self.request("retarget", id=unmerged["id"], base="kept")["ok"])
+        self.assertEqual([listed(unmerged)[field] for field in ("landed", "ahead")], [False, 1])
+        self.assertIn("unmerged commits", self.request("retire", id=unmerged["id"])["error"])
+        # And x retires what is merged.
+        self.assertTrue(self.request("retire", id=task["id"])["ok"])
+        self.assertEqual(self.git("show", "release:work"), "work")
+
     def test_retargeting_is_refused_with_no_branch_to_merge_into(self):
         task = self.create(name="fix parser")
         self.commit_in(task)

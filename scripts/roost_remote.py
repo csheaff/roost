@@ -5871,10 +5871,12 @@ def retarget(store, task, base):
     rebased onto the right one. BASE names a branch as a new task's start
     does (`integration_for`): a remote-tracking branch gives the local one
     of its name, and another task's branch that task's. What `m` merges
-    into, `u` merges in and its commits count from all follow. Only the
-    record changes: no commit moves, and a pull request open against the
-    old branch stays as it is, which the reply's `note` says, as it does
-    that the local branch is not where its remote one is."""
+    into, `u` merges in and its commits count from all follow. A branch
+    that has all of the task's commits already leaves where they count
+    from as it was, so the task reads as merged there. Only the record
+    changes: no commit moves, and a pull request open against the old
+    branch stays as it is, which the reply's `note` says, as it does that
+    the local branch is not where its remote one is."""
     if task.get("conversation") is True:
         raise RoostError("%s is a conversation, in no project, with no branch to merge into" % task["name"])
     base = text(base)
@@ -5911,7 +5913,12 @@ def retarget(store, task, base):
     if integration == branch:
         raise RoostError(own)
     before = task.get("integrationBranch")
-    task.update(baseRef=base[len("refs/heads/"):] if base.startswith("refs/heads/") else base, baseCommit=start,
+    # What has all of the task's commits, as a branch they are merged into
+    # or a tag at them, leaves where it started as it was: started at its
+    # own tip, it would read as a task that never committed, so not as
+    # merged, and as one `x` retires wherever else its start is kept.
+    task.update(baseRef=base[len("refs/heads/"):] if base.startswith("refs/heads/") else base,
+                baseCommit=task["baseCommit"] if start == tip else start,
                 integrationBranch=integration, integrationRef="refs/heads/" + integration)
     store.save(task)
     notes = []
