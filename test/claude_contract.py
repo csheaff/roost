@@ -55,13 +55,12 @@ IGNORED_EVENTS = {
     "PermissionDenied": "auto mode refused a tool; the turn goes on, and a prompt beside it may still wait",
     "PostCompact": "compaction ended; SessionStart covers it",
     "PostModelSwitch": "the model changed",
-    "PostToolBatch": "parallel tools ended; PostToolUse covers each",
-    "PostToolUseFailure": "a tool failed; the turn goes on",
+    "PostToolBatch": "each tool of a step ended, which PostToolUse and PostToolUseFailure say of each; it came "
+                     "in 2.1.118, so listening to it would raise CLAUDE_MIN_VERSION",
     "PreCompact": "compaction starts",
     "PreModelSwitch": "the model will change",
     "Setup": "repository setup",
     "SubagentStart": "a subagent started; the turn goes on",
-    "SubagentStop": "a subagent ended; the turn goes on",
     "TaskCompleted": "a task in the session's list was completed",
     "TaskCreated": "a task in the session's list was created",
     "TeammateIdle": "a teammate is idle; its permission prompts are notifications",
@@ -83,7 +82,8 @@ SESSION_SOURCES = ("startup", "resume", "clear", "compact", "fork")
 # Payload fields the helper reads.
 PAYLOAD_FIELDS = ("session_id", "transcript_path", "hook_event_name", "last_assistant_message",
                   "background_tasks", "session_crons", "notification_type", "message", "tool_name",
-                  "tool_input", "error", "error_details", "source", "reason", "cwd", "agent_id")
+                  "tool_input", "error", "error_details", "source", "reason", "cwd", "agent_id", "is_interrupt",
+                  "prompt")
 
 
 def notification_kinds(data):

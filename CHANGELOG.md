@@ -109,6 +109,16 @@ What each release changes, and what to do when upgrading. Newest first.
   press `e` or `x` on it, to have that agent do it there or to dismiss it.
   Only Claude Code takes the tool so far, from an MCP server of the
   helper's.
+- A Claude task goes on showing `permission` while a subagent in the
+  background asks, after the main agent's turn has ended beside it. The
+  turn's end made the task read `background`, with the subagent's prompt
+  still on screen and no notification, and let a prompt from Roost through
+  to its menu. Now it stands until that subagent goes on or ends, or you
+  send a prompt; a turn that leaves nothing in the background ends it too.
+  And a tool that fails once you approve it shows `running` at once, where
+  it showed `permission` until the agent's next step. With
+  `roost-program-status` on, such a turn's end still reads `background`.
+  Nothing to do when upgrading.
 - A narrow sidebar keeps each task's name and still says its status. Where
   the status word would leave the name under a dozen columns, a mark in
   the word's colour stands for it at the row's end: `?` asks you, `!` went

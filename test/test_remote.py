@@ -1157,6 +1157,134 @@ class Lifecycle(unittest.TestCase):
                 hook(**event)
             self.assertEqual(store.read(task["id"])["status"], "permission")
 
+    def test_a_subagents_request_outlasts_the_main_agents_turn(self):
+        # As Claude Code 2.1.319 sent them in manual mode: two subagents in
+        # the background, one asking before it writes a file as the other
+        # reads on, and the main agent's turn ending beside them.
+        store = roost.Store(str(self.state))
+        task = self.create()
+        hook = lambda **payload: roost.update_hook(store, task["id"], payload) or store.read(task["id"])
+        a = dict(agent_id="a3f1c0d2e4b5a697", agent_type="general-purpose")
+        b = dict(agent_id="ab7e61f09c2d4e58", agent_type="Explore")
+        write = dict(tool_name="Write", tool_input=dict(file_path=str(Path(task["worktree"]) / "a.txt"), content="a\n"))
+        read = dict(tool_name="Read", tool_input=dict(file_path=str(Path(task["worktree"]) / "hello")))
+        left = [dict(id=agent["agent_id"], type="local_agent", status="running", agent_type=agent["agent_type"])
+                for agent in (a, b)]
+        note = dict(hook_event_name="UserPromptSubmit",
+                    prompt="<task-notification>\n<task-id>%s</task-id>\n<status>completed</status>\n"
+                           "</task-notification>" % b["agent_id"])
+
+        def waits(record):
+            self.assertEqual((record["status"], record.get("request")), ("permission", "Asks to write a.txt"))
+
+        def asks():
+            hook(hook_event_name="UserPromptSubmit", prompt="go", source="user")
+            waits(hook(hook_event_name="PermissionRequest", **write, **a))
+            waits(hook(hook_event_name="PreToolUse", tool_use_id="toolu_b1", **read, **b))
+            waits(hook(hook_event_name="Notification", notification_type="permission_prompt",
+                       message="Claude needs your permission to use Write"))
+            waits(hook(hook_event_name="PreToolUse", tool_use_id="toolu_b2", **read, **b))
+            record = hook(hook_event_name="Stop", background_tasks=left, session_crons=[],
+                          last_assistant_message="Both are at work.")
+            waits(record)
+            # The turn's end still says what it replied.
+            self.assertEqual(record["lastReply"], "Both are at work.")
+
+        def over(record, status="running"):
+            self.assertEqual(record["status"], status)
+            self.assertFalse({"request", "requestCommand", "requestCall"} & set(record))
+
+        asks()
+        self.assertEqual(self.request("list")["result"][0]["status"], "permission")
+        self.assertIn("Open the task", self.request("send", id=task["id"], text="also the docs")["error"])
+        # Nothing of the other subagent's says it is over: its tools, its
+        # end, the turn Claude Code starts by itself on the notice of that
+        # end, whether or not it says who sent it, nor that turn's end while
+        # the one that asks is still at work. Nor does a tool you stopped.
+        waits(hook(hook_event_name="PostToolUse", tool_use_id="toolu_b2", **read, **b))
+        waits(hook(hook_event_name="SubagentStop", **b))
+        waits(hook(source="system", **note))
+        waits(hook(**note))
+        waits(hook(hook_event_name="PreToolUse", tool_use_id="toolu_1", **read))
+        waits(hook(hook_event_name="Stop", background_tasks=left[:1], session_crons=[]))
+        waits(hook(hook_event_name="PostToolUseFailure", tool_use_id="toolu_a1", error="Interrupted",
+                   is_interrupt=True, **write, **a))
+        # An older Claude Code doesn't say what its turn left: unsure, it stands.
+        waits(hook(hook_event_name="Stop"))
+        # What the subagent that asked does next says it is over: the end of
+        # what it asked for, done or failed, its next tool, or its own end.
+        over(hook(hook_event_name="PostToolUse", tool_use_id="toolu_a1", **write, **a))
+        for event in (dict(hook_event_name="PostToolUseFailure", tool_use_id="toolu_a1", error="EACCES", **write, **a),
+                      dict(hook_event_name="PreToolUse", tool_use_id="toolu_a2", **read, **a),
+                      dict(hook_event_name="SubagentStop", **a)):
+            with self.subTest(event=event["hook_event_name"]):
+                asks()
+                over(hook(**event))
+        # So does a prompt of yours, which its prompt on screen would not
+        # let you send, a turn that ends with nothing left in the
+        # background, and leaving Claude.
+        for event, status in ((dict(hook_event_name="UserPromptSubmit", prompt="never mind", source="user"), "running"),
+                              (dict(hook_event_name="UserPromptSubmit", prompt="never mind"), "running"),
+                              (dict(hook_event_name="Stop", background_tasks=[], session_crons=[]), "ready"),
+                              (dict(hook_event_name="SessionEnd", reason="prompt_input_exit"), "exited")):
+            with self.subTest(event=event):
+                asks()
+                over(hook(**event), status)
+        # A record from an older helper doesn't say who asked: the turn's
+        # end ends its request, as it did.
+        asks()
+        record = store.read(task["id"])
+        del record["requestCall"]
+        store.save(record)
+        over(hook(hook_event_name="Stop", background_tasks=left), "background")
+
+    def test_the_main_agents_request_ends_with_its_turn(self):
+        store = roost.Store(str(self.state))
+        task = self.create()
+        hook = lambda **payload: roost.update_hook(store, task["id"], payload) or store.read(task["id"])
+        asked = dict(tool_name="Bash", tool_input=dict(command="make deploy"))
+        left = [dict(id="a3f1c0d2e4b5a697", type="local_agent", status="running")]
+
+        def asks():
+            hook(hook_event_name="UserPromptSubmit", prompt="go")
+            record = hook(hook_event_name="PermissionRequest", **asked)
+            self.assertEqual((record["status"], record["request"]), ("permission", "Asks to run make deploy"))
+
+        def over(record, status):
+            self.assertEqual(record["status"], status)
+            self.assertFalse({"request", "requestCommand", "requestCall"} & set(record))
+
+        # Its turn's end ends what it asked, whatever it leaves in the
+        # background, as does a prompt, Claude Code's own included, and the
+        # failure of what it asked for.
+        for event, status in ((dict(hook_event_name="Stop"), "ready"),
+                              (dict(hook_event_name="Stop", background_tasks=left), "background"),
+                              (dict(hook_event_name="UserPromptSubmit", source="system",
+                                    prompt="<task-notification>\n<status>completed</status>\n</task-notification>"),
+                               "running"),
+                              (dict(hook_event_name="PostToolUseFailure", error="Exit code 2", **asked), "running")):
+            with self.subTest(event=event):
+                asks()
+                over(hook(**event), status)
+        # A subagent's end, another tool's failure and a tool you stopped
+        # say nothing of it.
+        asks()
+        for event in (dict(hook_event_name="SubagentStop", agent_id="a3f1c0d2e4b5a697", agent_type="Explore",
+                           last_assistant_message="Found it."),
+                      dict(hook_event_name="PostToolUseFailure", tool_name="Read", tool_input=dict(file_path="gone"),
+                           error="File does not exist."),
+                      dict(hook_event_name="PostToolUseFailure", error="Interrupted", is_interrupt=True, **asked)):
+            record = hook(**event)
+            self.assertEqual((record["status"], record["request"], record["lastEvent"]),
+                             ("permission", "Asks to run make deploy", "PermissionRequest"))
+        # With nothing asked, a subagent's end is no news, nor its reply the
+        # task's, nor is a tool's failure.
+        hook(hook_event_name="Stop", last_assistant_message="Done.")
+        before = store.read(task["id"])
+        self.assertEqual(hook(hook_event_name="SubagentStop", agent_id="a3f1c0d2e4b5a697", agent_type="Explore",
+                              last_assistant_message="Found it."), before)
+        self.assertEqual(hook(hook_event_name="PostToolUseFailure", error="Exit code 2", **asked), before)
+
     def test_codex_keeps_a_request_while_a_subagents_tool_runs(self):
         with tempfile.TemporaryDirectory() as root:
             store = roost.Store(root)
@@ -1171,6 +1299,11 @@ class Lifecycle(unittest.TestCase):
             self.assertEqual(store.read("0" * 16)["status"], "permission")
             hook(hook_event_name="PostToolUse", tool_name="Bash", tool_input=dict(command="touch approved.txt"))
             self.assertEqual(store.read("0" * 16)["status"], "running")
+            # Its turn's end ends a request whoever asked, as before.
+            hook(hook_event_name="PermissionRequest", tool_name="Bash", tool_input=dict(command="ls"), agent_id="t2",
+                 agent_type="worker")
+            hook(hook_event_name="Stop")
+            self.assertEqual(store.read("0" * 16)["status"], "ready")
 
     def test_dirty_tracked_and_untracked_work_blocks_cleanup(self):
         task = self.create()
