@@ -5904,7 +5904,9 @@ def retarget(store, task, base):
     from as it was, so the task reads as merged there. Only the record
     changes: no commit moves, and a pull request open against the old
     branch stays as it is, which the reply's `note` says, as it does that
-    the local branch is not where its remote one is."""
+    the local branch is not where its remote one is. Not an event of the
+    agent's, so its `updatedAt` stays as it was; `retargetedAt` tells
+    Emacs a reply read before this from one read since."""
     if task.get("conversation") is True:
         raise RoostError("%s is a conversation, in no project, with no branch to merge into" % task["name"])
     base = text(base)
@@ -5947,7 +5949,7 @@ def retarget(store, task, base):
     # merged, and as one `x` retires wherever else its start is kept.
     task.update(baseRef=base[len("refs/heads/"):] if base.startswith("refs/heads/") else base,
                 baseCommit=task["baseCommit"] if start == tip else start,
-                integrationBranch=integration, integrationRef="refs/heads/" + integration)
+                integrationBranch=integration, integrationRef="refs/heads/" + integration, retargetedAt=now())
     store.save(task)
     notes = []
     if full.startswith("refs/remotes/") and branch_tip(task, integration) != commit:

@@ -168,8 +168,11 @@ what its host said when it read it.")
       ("rename" (let ((name (cons 'name (alist-get 'name request))))
                   (cons name (cons '(renamedAt . "2026-11-01T10:05:00+00:00") (assq-delete-all 'name record)))))
       ("retarget" (let ((base (alist-get 'base request)))
-                    (append `((baseRef . ,base) (integrationBranch . ,base))
-                            (assq-delete-all 'baseRef (assq-delete-all 'integrationBranch record)))))
+                    (append `((baseRef . ,base) (integrationBranch . ,base)
+                              (retargetedAt . ,(roost-sweep-late--now)))
+                            (assq-delete-all 'retargetedAt
+                                             (assq-delete-all 'baseRef
+                                                              (assq-delete-all 'integrationBranch record))))))
       ("retire" (roost-sweep-late--became record "retired"))
       ("forget" (roost-sweep-late--became record "forgotten"))
       ("merge" (roost-sweep-late--became record "retired" '(retiringCommit . "c9")))

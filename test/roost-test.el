@@ -11543,6 +11543,50 @@ field (FIELD . :none) is left out."
          (should (eq (keymap-lookup map "B") #'roost-retarget)))
        (should (eq (cdr (assq 'roost-retarget (roost-test--task-menu-suffixes))) 'roost--retarget-inapt-p))))))
 
+(ert-deftest roost-a-reply-read-before-the-branch-changed-keeps-the-new-one ()
+  "You stop a task, then change the branch it merges into with B.  Its
+host does both in that order, and the reply to B comes first.  The reply
+to the stop, read before B, brings the old branch back no more: `m'
+would ask to merge into it, and the host merge into the new one.
+CachedTasks.tla found it; CachedTasks.NoNewerBranch.cfg is its trace."
+  (roost-test--isolated
+   (let* ((record (append '((repo . "/home/user/ledger") (baseRef . "main") (integrationBranch . "main"))
+                          (roost-test--task)))
+          (task (roost--cache-task "dev" (copy-tree record)))
+          (stopped (append '((status . "stopped") (updatedAt . "2026-10-03T20:05:00+00:00"))
+                           (assq-delete-all 'status (assq-delete-all 'updatedAt (copy-tree record)))))
+          (retargeted (lambda (branch at)
+                        (append `((baseRef . ,branch) (integrationBranch . ,branch) (retargetedAt . ,at))
+                                (assq-delete-all 'baseRef (assq-delete-all 'integrationBranch
+                                                                           (copy-tree stopped))))))
+          (now (lambda (field) (roost--field (gethash (roost--key task) roost--tasks) field)))
+          replies)
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (_host action _parameters success &rest _) (push (cons action success) replies)))
+               ((symbol-function 'roost--refresh-host) #'ignore)
+               ((symbol-function 'roost--redraw) #'ignore))
+       (roost--act task "stop")
+       (roost-retarget task "release")
+       ;; B's reply, which its host read after the stop.
+       (funcall (cdr (assoc "retarget" replies)) (funcall retargeted "release" "2026-10-03T20:05:01+00:00"))
+       (should (equal (funcall now 'integrationBranch) "release"))
+       ;; The stop's, which it read before B: no event of the agent's came
+       ;; between, so their updatedAt is the same.
+       (funcall (cdr (assoc "stop" replies)) (copy-tree stopped))
+       (should (equal (funcall now 'integrationBranch) "release"))
+       (should (equal (funcall now 'baseRef) "release"))
+       ;; The rest of that reply is as new as ever.
+       (should (equal (funcall now 'status) "stopped"))
+       ;; Changed again since, as from another Emacs, it takes that branch.
+       (roost--cache-task "dev" (funcall retargeted "main" "2026-10-03T20:09:00+00:00"))
+       (should (equal (funcall now 'integrationBranch) "main"))
+       ;; A record from before B stamped its changes, as an older helper
+       ;; left it, is taken as it is while Roost holds no stamp either.
+       (let ((older (roost--cache-task "dev" (append '((integrationBranch . "main"))
+                                                     (roost-test--task "1111111111111111")))))
+         (roost--cache-task "dev" (append '((integrationBranch . "release")) (roost-test--task "1111111111111111")))
+         (should (equal (roost--field (gethash (roost--key older) roost--tasks) 'integrationBranch) "release")))))))
+
 (ert-deftest roost-a-rename-from-another-emacs-renames-the-tab-and-panels ()
   (roost-test--isolated
    (let* ((roost-workspace 'tab-bar)

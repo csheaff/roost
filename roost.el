@@ -1265,6 +1265,22 @@ from hiding it."
         (when-let* ((cell (assq field old)))
           (setq task (cons cell task)))))))
 
+(defun roost--newer-branch (task old)
+  "TASK, with the branch OLD merges into when that changed since TASK was read.
+Changing it, as `roost-retarget' does, is no event of the agent's, which
+`roost--newer-events' goes by: this keeps a reply read before the
+change, such as one to stopping the task, from bringing back the branch
+it merged into before, which `m' would then ask about while its host
+merged it into the other."
+  (let ((changed (roost--field old 'retargetedAt)))
+    (if (not (and (stringp changed)
+                  (string< (or (roost--field task 'retargetedAt) "") changed)))
+        task
+      (dolist (field '(baseRef baseCommit integrationBranch integrationRef retargetedAt) task)
+        (setq task (assq-delete-all field task))
+        (when-let* ((cell (assq field old)))
+          (setq task (cons cell task)))))))
+
 (defun roost--newer-look (task old)
   "TASK, with OLD's record of where you last looked when that is newer.
 A reply its host read before you last looked at the task, such as a
@@ -1311,8 +1327,10 @@ A reply to create read before then can come after.")
     ;; Looks and the agent's events move apart: the newer of each counts.
     (let ((looked (roost--newer-look old task)))
       (setq task (roost--kept-reviews
-                  (roost--newer-look (roost--newer-offers (roost--newer-name (roost--newer-events task old) old)
-                                                          old)
+                  (roost--newer-look (roost--newer-branch
+                                      (roost--newer-offers (roost--newer-name (roost--newer-events task old) old)
+                                                           old)
+                                      old)
                                      looked)
                   old))))
   (let* ((key (roost--key task))

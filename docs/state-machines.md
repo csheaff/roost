@@ -1480,7 +1480,7 @@ requests and by agents' hooks.
 | Broken | File cut short, by an older Roost's install | A request says `Not whole`, naming it |
 
 Invariants:
-- I1. A file named `remote-HASH.py` holds what HASH says. Hooks of running agents call this path. An install replaces it only with every byte sent, and leaves what was there otherwise (`roost--install-code`).
+- I1. A file named `remote-HASH.py` holds what HASH says. Hooks of running agents call this path, and an agent that can offer tasks runs it as its MCP server (`mcp_arguments`). An install replaces it only with every byte sent, and leaves what was there otherwise (`roost--install-code`).
 - I5. A file of the right size stays, as newly used: no start of an Emacs touches what hooks call, and `prune_helpers` goes by its mtime.
 - I2. A helper a task's agent was launched with is never pruned (`prune_helpers`).
 - I3. Retrying can't run an action twice: only for what `roost--helper-unusable-p` accepts, `FileNotFoundError` naming the file or `Not whole`, each said before the helper runs. A request compares the file's size first, which catches a cut anywhere, and `rpc` turns what it catches into words of its own.
@@ -1556,6 +1556,10 @@ Illegal or refused: none.
 Open: none.
 
 Notes:
+- A reply's callback can ask for a refresh, in the reply's own sentinel: `B`'s for its
+  task, measured against its new branch, and `m`'s for the rest. It is a refresh as any
+  other, owed if a list is in flight, and it reads the revision its reply just bumped,
+  so its list is not dropped for that reply.
 - `roost--pull-requests-asked` is stamped before the request, and put back as it was
   if the list fails or is dropped, so a poll after an outage asks GitHub.
 - A full list that takes over a minute reads as Offline until the next quiet poll.
@@ -1582,16 +1586,20 @@ What Emacs believes of each task, and how a reply merges into it.
 
 Invariants:
 - I1. A reply read before a task went doesn't bring it back (`roost--cache-reply`, `roost--went-p`; lists by I3 of Host refresh). Checked for `inspect`, `roost--act`, the turn reply, `roost--compose-listed`, and create's reply, of a task a list showed and that went before it came (`roost--went`).
-- I2. No reply rolls a task back: older `updatedAt` keeps the old record with the reply's measurements (`roost--newer-events`); name and look have clocks of their own (`roost--newer-name`, `roost--newer-look`).
+- I2. No reply rolls a task back: older `updatedAt` keeps the old record with the reply's measurements (`roost--newer-events`). What changes with no event of the agent's has a clock of its own, and a reply with an older one keeps what Emacs has of it: the name (`renamedAt`, `roost--newer-name`), the look (`roost--newer-look`), the offers (`offersAt`, `roost--newer-offers`) and the branch it starts from and merges into (`retargetedAt`, `roost--newer-branch`).
 - I3. A reply saying the task went always counts. It would not if its `updatedAt` were older, but `retire`, `discard` and `forget` all stamp `now()` last.
-- I4. String order of `updatedAt` is time order. `now()` is UTC isoformat; `+` sorts before `.`, so a whole second sorts first. True while the host's clock doesn't step back.
+- I4. String order of `updatedAt` is time order, and of the other clocks. `now()` is UTC isoformat; `+` sorts before `.`, so a whole second sorts first. True while the host's clock doesn't step back.
+
+`test/formal/emacs_and_hosts` checks I1 and I2 as `NoRollback`, and I2 of the offers
+and the branch as `NoOfferRollback` and `NoBranchRollback`, with replies in every order.
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
 | Absent | List names it | | Cached | No news: `previous` nil, verdict `unknown` | `roost--cache-task` |
-| Absent | Create replies | | Cached | Revision bumped | `roost--task-made` |
+| Absent | Create replies | | Cached | Revision bumped; each of a draft's several attempts replies for itself | `roost--task-made` |
 | Went | Create replies | a list showed it, and it went | Went | Revision bumped; the reply goes only to the command, and nothing opens | `roost--task-made`, `roost--cache-reply` |
 | Cached | List names it | | Cached | Merged by I2; absent measurements carried over | `roost--cache-task` |
+| Cached | Reply or list names it | read before a rename, a look, an offer made or taken, or `B` that Emacs has news of already | Cached | Emacs keeps its own of that; the rest merged by I2 | `roost--cache-task` |
 | Cached | List lacks it | | Went | All keyed state and its notes go; its key noted in `roost--went` | `roost--apply-snapshot` |
 | Cached | Reply says retired, forgotten or discarded | | Went | Its notes go; its key noted in `roost--went` | `roost--cache-task` |
 | Cached | Host forgotten | | Absent | | `roost-forget-host` |
@@ -1600,7 +1608,13 @@ Invariants:
 
 Illegal or refused: none.
 
-Open: none. Mentioned, not findings: an `inspect` read before `P` with the same
+Open: none. Found by the model and fixed: a reply its host read before `B`, as one
+to stopping the task, that came after `B`'s own had the same `updatedAt`, and brought
+back the branch the task merged into before, until the next poll: `m` asked about
+that branch, and the host merged into the new one. `retarget` now stamps
+`retargetedAt` (`roost-a-reply-read-before-the-branch-changed-keeps-the-new-one`,
+`test_retargeting_is_no_event_of_the_agents_and_says_when_it_was`). Mentioned, not
+findings: an `inspect` read before `P` with the same
 `updatedAt` drops `pr` until the next list; a host clock stepping back holds a task
 at its old status until time catches up (I4). `roost--apply-snapshot` deletes a
 task's review notes when a list lacks it, so a host that answers from an empty

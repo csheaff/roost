@@ -5371,6 +5371,35 @@ class Lifecycle(unittest.TestCase):
         conversation = self.create(name="Conversation 09:15", directory="/nowhere", conversation=True)
         self.assertIn("is a conversation", self.request("retarget", id=conversation["id"], base="main")["error"])
 
+    def test_retargeting_is_no_event_of_the_agents_and_says_when_it_was(self):
+        # A reply read before it can reach Emacs after its own, with the
+        # same updatedAt: Emacs tells the two apart by retargetedAt.
+        self.git("branch", "release")
+        task = self.create(name="fix parser")
+        self.commit_in(task)
+        store = roost.Store(str(self.state))
+        record = self.wait(task, "ready")
+        self.assertNotIn("retargetedAt", record)
+        seen = self.request("seen", id=task["id"], updatedAt=record["updatedAt"])["result"]
+        before = self.request("inspect", id=task["id"])["result"]
+        reply = self.request("retarget", id=task["id"], base="release")
+        self.assertTrue(reply["ok"], reply)
+        first = reply["result"]["retargetedAt"]
+        self.assertGreater(first, record["updatedAt"])
+        self.assertEqual(store.read(task["id"])["retargetedAt"], first)
+        # Not an event: you have still seen it, and the reply read before
+        # has the same updatedAt, and no stamp.
+        listed = self.request("list")["result"][0]
+        self.assertEqual((listed["seen"], listed["updatedAt"]), (seen["seen"], seen["updatedAt"]))
+        self.assertEqual((before["updatedAt"], before.get("retargetedAt")), (listed["updatedAt"], None))
+        self.assertEqual(listed["retargetedAt"], first)
+        # Each change is later than the last, the same branch again too.
+        second = self.request("retarget", id=task["id"], base="release")["result"]["retargetedAt"]
+        self.assertGreater(second, first)
+        # One refused leaves it.
+        self.assertFalse(self.request("retarget", id=task["id"], base="nowhere")["ok"])
+        self.assertEqual(store.read(task["id"])["retargetedAt"], second)
+
     def test_seen_is_recorded_for_every_emacs_until_the_next_event(self):
         task = self.create()
         record = self.wait(task, "ready")
