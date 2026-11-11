@@ -214,6 +214,29 @@ class Rename(KeepsTask):
             problems.append("said renamed, and its name is %r" % record.get("name"))
 
 
+class Retarget(KeepsTask):
+    """The branch a task merges into, changed: whenever the helper stops,
+    the record names one branch, whole, the old or the new."""
+
+    action = "retarget"
+    args = dict(base="other")
+
+    def prepare(self, box):
+        super().prepare(box)
+        box.git("branch", "other")
+
+    def holds(self, box, problems):
+        super().holds(box, problems)
+        record = box.record(self.task["id"]) or {}
+        branch = record.get("integrationBranch")
+        if branch not in ("main", "other"):
+            problems.append("it merges into %r" % branch)
+        elif record.get("integrationRef") != "refs/heads/" + branch:
+            problems.append("it merges into %s by the name %r" % (branch, record.get("integrationRef")))
+        elif self.final and self.final.get("ok") and branch != "other":
+            problems.append("said to merge into other, and it merges into %s" % branch)
+
+
 class Stop(KeepsTask):
     action = "stop"
 
@@ -431,5 +454,6 @@ class CreateConversation(Create):
 
 ALL = [Merge, MergeSquash, MergeAway, SquashAway, MergeTeardown, MergeSubmodule, MergeAgentWorktree, Retire, RetireMerged,
        RetireDead, RetireSquashedOnGitHub, Update, UpdateConflict, Discard, DiscardDirty, DiscardTeardown, Forget, Rename,
+       Retarget,
        Stop, Resume, Seen, Turn, Send, Shell, Attach, Inspect, Look, PullRequest, PullRequestPush, Create, CreateFromRemote,
        Propose, TakeOffer, CreateFromOffer, CreateConversation]
