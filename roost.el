@@ -9414,7 +9414,7 @@ is off or the display draws no such image; then the dot stands."
                  (cx (/ width 2.0))
                  (cy (/ height 2.0))
                  ;; As wide as a column allows, with a little air each side.
-                 (r (* 0.39 width))
+                 (r (* 0.44 width))
                  (line (max 1.0 (* 0.15 width)))
                  (stroke (list :fill "none" :stroke colour :stroke-width line
                                :stroke-linecap "round" :stroke-linejoin "round")))

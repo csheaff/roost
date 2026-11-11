@@ -46,8 +46,7 @@ as used before, so the sidebar lists them under "Start a task in". To have
 one agent asking and one working at the moment of the hero and the
 dashboard, `budget-alerts` was asked to show amounts with a thousands
 separator and run its tests, and `export` was given a further prompt that
-needs no command, for docstrings and then for a line in the README, just
-before each capture. The review note was saved on its line of the diff of
+needs no command, about its docstrings, just before each capture. The review note was saved on its line of the diff of
 `notes.py`, which was opened from `tag-filter`'s panel.
 
 Each was taken at its own frame size, so that the text reads at the width
