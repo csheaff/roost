@@ -7,8 +7,9 @@ description: >
   holds. Use after changing roost.el's host requests (roost--run,
   roost--request, roost--expire-request), refreshes (roost--refresh-host,
   roost--apply-snapshot), how a reply is cached (roost--cache-task,
-  roost--cache-reply, roost--newer-events, roost--act, roost--create-task,
-  roost--task-made, the inspects in roost--open and roost--notify-attention),
+  roost--cache-reply, roost--newer-events, roost--newer-offers, roost--act,
+  roost--create-task, roost--task-made, roost--take-offer, the inspects in
+  roost--open and roost--notify-attention),
   or the helper's install, prune_helpers, rpc's locking or detach; when the
   "Emacs and its hosts" section of docs/state-machines.md changes; or for
   /verify-emacs-and-hosts.
@@ -30,6 +31,10 @@ with the shortest path to a broken rule.
   roll a record back to an older `updatedAt`. Harm: a retired task back in
   the sidebar, an agent asking again for what you answered, review notes
   deleted with a task a stale list lacked.
+- **NoOfferRollback.** Nor does a reply bring back an offer you took, or
+  hide one made since: a task Emacs lists has the newest `offersAt` it has
+  held. An offer moves no `updatedAt`, so `roost--newer-events` can't see
+  it. Harm: an offer you opened back under its task, to start twice.
 - **OneList.** At most one list per host is in flight, and
   `roost--refreshing` says whether one is; a full refresh owed has a refresh
   to run it. Harm: a host never asked again until Emacs restarts
@@ -65,7 +70,8 @@ model as a chart.
 ## Does your change touch it?
 
 Coverage, confirmed against the code at **e910487**, with the change to
-`roost--run`, `roost--task-made` and `roost--went` that came with this line.
+`roost--run`, `roost--task-made` and `roost--went` that came with this line,
+and the offers' merge and take, which came with `roost-agent-offers`.
 `git diff e910487 -- roost.el scripts/roost_remote.py` and look for these:
 
 | Code | Model step |
@@ -73,6 +79,8 @@ Coverage, confirmed against the code at **e910487**, with the change to
 | `roost--refresh-host`: the flag, `finish`, the `unwind-protect`, `revision` read at the start, the quiet poll calling itself | `CachedTasks`: `AskRefresh`, `Finish`, `Succeed` (list) |
 | `roost--apply-snapshot` | `ApplySnapshot` |
 | `roost--cache-task`'s merge, `roost--newer-events` | `CacheTask`, `NewerEvents` |
+| `roost--newer-offers` | `NewerOffers` |
+| `roost--take-offer` (asked only of a task listed), the helper's `take_offer` | `AskAct` (take), `HostRun` (take), `Succeed` (take) |
 | `roost--cache-reply`, `roost--went-p`, `roost--went` | `CacheReply` |
 | `roost--act`: `listed`, the revision bump at the reply | `AskAct`, `Succeed` (stop, retire) |
 | inspect in `roost--open` and `roost--notify-attention` | `AskAct` (inspect), `Succeed` |
@@ -118,6 +126,8 @@ are known to bite:
 - `NoWentCheck`: `roost--cache-reply` caches a reply for a task that went.
   NoRollback.
 - `NoNewerEvents`: an older `updatedAt` replaces a newer one. NoRollback.
+- `NoNewerOffers`: an older `offersAt` replaces a newer one, so opening a
+  task before you took its offer brings the offer back. NoOfferRollback.
 - `NoRevisionCheck`: a list read before your retire lands after its reply.
   NoRollback.
 - `NoRefreshingGuard`: two lists at once. OneList.
@@ -149,6 +159,10 @@ config allows both (`Allow`), and `QuitLeavesProcess` and
   there from the start and one you create. Two refresh asks (plus the full
   refreshes they owe), two of stop, retire or inspect, on the first task, one
   create, `updatedAt` moving twice. Agents' events on the first task only.
+  Taking the first task's offer, which moves `offersAt` once (`MaxOver`);
+  the agent's own offers move it as a take does, through the same merge,
+  and are left out for time. The variants run with `MaxOver` 0, as before
+  offers, but for `NoNewerOffers`.
   Three requests through the helper. The findings and variants run smaller.
 - Left out: forgetting a host, what is owed to measure
   (`roost--measures-owed`), back-off and Offline, GitHub's stamp,

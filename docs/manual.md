@@ -245,6 +245,37 @@ until it replies again; one that failed or stopped by itself stops counting
 once you've seen it. What you've seen is kept on the task's host, for your
 other machines and the next session.
 
+**Take the tasks an agent offers.** With `roost-agent-offers` on, an agent
+that comes across work outside its task, such as a bug in code it read,
+offers it as a task of its own and goes on with its own work. The offer
+waits, dim, under its task in the dashboard and sidebar
+(`Fix add in calc.py  offer`), with its brief when you hover over it, and the
+agent says in its reply what it offered. Nothing waits on you: the task's
+own status is as it would be without it.
+
+- Click it, or press `RET` on it, to open it as a new task draft, filled in:
+  in the same project, with the same agent, starting from the branch the
+  offering task merges into, named and prompted as the agent offered it.
+  Opening it takes it, so it no longer waits there; the draft is like any
+  other, and cancelling it asks before it drops the brief. The task you
+  create shows under the one that offered it, each task's panel names the
+  other, and you stay where you were.
+- `e` on it, or **Do it here** from its right-click menu, sends that agent
+  `Do this task here: “TITLE”`, as `e` sends a prompt, and the offer no
+  longer waits. The agent wrote the brief, so the title is enough.
+- `x` on it, or **Dismiss**, drops it.
+
+A task keeps at most three offers waiting, and one offered again by its
+title changes its brief. An offer goes with its task, and the question before
+you merge, retire, discard or forget the task names it. A new task starts
+without the offering task's changes, and the agent is told so.
+
+Roost gives the agent a tool, `propose_task`, from an MCP server of the
+helper's, with a few sentences on when to use it, which cost tokens on each
+of its requests. Only Claude Code takes it so far, and only tasks you start
+after turning the option on have it. How often an agent offers rests on the
+model. This is an experiment: it may change or go.
+
 **Keep them in view.** `b` in the dashboard, or `M-x roost-sidebar-mode`, keeps a
 compact task list at the left of the frame, through `C-x 1`; add
 `(roost-sidebar-mode 1)` to your configuration to have it from the start. With
@@ -584,6 +615,12 @@ counted once you stop and resume it (`K`, then `s`).
 | `w` | `roost-workload` | How long agents worked and waited on you, each day of the past week ([below](#how-many-agents-you-keep-up-with)) |
 | `g` | `roost-refresh` | Refresh status and Git statistics |
 
+On an offer an agent made, listed under its task in the dashboard and
+sidebar: `RET` (`roost-open-offer`) opens it as a new task draft, `e`
+(`roost-offer-here`) has that agent do it there, and `x`
+(`roost-offer-dismiss`) dismisses it; `mouse-3` offers all three. The other
+keys act on the task it sits under.
+
 `j`/`k` or `TAB` move between tasks; `mouse-1` opens one and `mouse-3` shows its actions.
 Outside the dashboard, commands act on the task of the current terminal,
 worktree file, Org entry or perspective, or ask. In an agent's terminal, where
@@ -766,6 +803,10 @@ header line. A failed creation keeps the draft.
   then shows at once, and for Claude Code a declined request and Esc too. A
   Codex task is `ready` once you have answered its startup questions, rather
   than at its first turn.
+- `roost-agent-offers` (nil, experimental): let a task's agent offer tasks
+  of their own, which wait under its task for you to take
+  ([Take the tasks an agent offers](#a-day-with-roost)). Claude Code only,
+  for tasks started after you turn it on.
 - `roost-large-change` (`(:lines 400 :files 10 :directories 3)`): when a
   task's row gets its `±`. Leave one out to mark by the others, as
   `(:lines 400)`; nil marks none.
@@ -1075,6 +1116,15 @@ What runs where:
   Python, Roost's files in the state directory and the task's IDs. The
   other shell commands are your `roost-setup-command` and
   `roost-teardown-command`.
+- With `roost-agent-offers` on, Claude Code starts the helper as an MCP
+  server of its own (`--mcp-config`), over its standard input and output,
+  and ends it with itself. Its one tool, `propose_task`, writes an offer
+  into the record of the task whose agent called it, and nothing else: it
+  runs no program and reaches no other task. The task's own Claude
+  settings allow that tool without asking. An offer's title and brief can
+  hold no control character, nor one that doesn't show as itself, and you
+  read both in the draft before anything starts from them; Do it here
+  sends only a fixed line with the title.
 - When the helper measures a task, keeps where you last looked at it, or
   checks it is clean, Git runs no program that config names for its file
   system monitor, diffs or signatures, which an agent may write for a

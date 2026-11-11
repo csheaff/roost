@@ -4,6 +4,16 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- An agent can offer a task of its own, for work it comes across outside
+  its task, with `roost-agent-offers` on. The offer waits, dim, under its
+  task in the dashboard and sidebar. A click or `RET` opens it as a new
+  task draft, filled in, and the task you create from it shows under the
+  one that offered it, while you stay where you were. Right-click it, or
+  press `e` or `x` on it, to have that agent do it there or to dismiss it.
+  Only Claude Code takes the tool so far, from an MCP server of the
+  helper's. It is off by default, and an experiment: it may change or go.
+  To try it, set `roost-agent-offers` to t; tasks you start from then on
+  can offer.
 - A narrow sidebar keeps each task's name and still says its status. Where
   the status word would leave the name under a dozen columns, a mark in
   the word's colour stands for it at the row's end: `?` asks you, `!` went

@@ -195,6 +195,11 @@ def static_check():
     add_dir = re.search(rb"--add-dir <", data)
     report(bool(add_dir), "--add-dir is an option" if add_dir
            else "--add-dir is gone; check ClaudeAgent.launch")
+    # Roost's MCP server, for offers, with its tool in the prompt from the start.
+    mcp = [what for what, pattern in (("--mcp-config", rb"--mcp-config <"), ("alwaysLoad", rb"alwaysLoad:"))
+           if not re.search(pattern, data)]
+    report(not mcp, "Roost's MCP server's config" + (": missing %s; check ClaudeAgent.launch" % ", ".join(mcp)
+                                                     if mcp else ""))
     # Transcripts are found by the path hooks report, else by Claude's folder naming.
     naming = re.search(rb'replace\(/\[\^a-zA-Z0-9\]/g,"-"\).{0,120}\.length<=', data, re.S)
     report(bool(naming), "transcript folders named as claude_project_folder expects" if naming

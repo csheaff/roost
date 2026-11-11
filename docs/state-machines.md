@@ -219,6 +219,56 @@ Assumed, not stated: a record's `worktree` and `repo` never change; `Store.read`
 takes older records' fields as they come.
 Open: none.
 
+#### Offers
+
+Kind: implicit, a field of the record and not a machine of its own. Lives in:
+`offers` (a list of `{id, title, brief, at}`), `offersAt`, and `parent` on a task
+started from one. With `roost-agent-offers` on, a Claude task's record has `mayOffer`,
+and its agent runs the helper as an MCP server (`McpServer`), whose one tool,
+`propose_task`, writes `offers`.
+
+| State | Meaning | How you can tell |
+| --- | --- | --- |
+| None | nothing offered, or all taken | no `offers` |
+| Waiting | one to three offers wait for you | `offers` lists them |
+
+Invariants:
+- I1. At most `OFFER_LIMIT` (3) wait, each title once. (`propose_task`.)
+- I2. An offer is no event of the agent's: `status`, `updatedAt`, `seen` and the
+  request stay as they were; `offersAt` orders replies instead
+  (`roost--newer-offers` in Emacs). (`set_offers`.)
+- I3. Taking one changes nothing else, and taking one already taken changes nothing.
+  (`take_offer`.)
+- I4. What you read is what an agent gets: a title or brief that holds a control
+  character, or one that doesn't show as itself, is refused before it is recorded.
+  (`hidden_character`.)
+- I5. A task made from an offer leaves none of it waiting, though opening's take
+  failed and its creation was cut short once the task was saved: the task records the
+  offer it came from, and every listing takes such an offer. (`make_task`,
+  `taken_offers`; `make crash`'s `CreateFromOffer`.)
+
+| From | Event | Guard | To | Effect | Code |
+| --- | --- | --- | --- | --- | --- |
+| None, Waiting | agent offers | fewer than 3, or the title waits already | Waiting | added, or its brief replaced under its ID | `propose_task` |
+| Waiting | agent offers | 3 wait, a new title | Waiting | refused; the agent is told to mention it | `propose_task` |
+| any | agent offers | task `stopped` or `retired` | as it was | refused | `propose_task` |
+| Waiting | you open it, do it here, or dismiss it | | Waiting or None | dropped | `take_offer` |
+| Waiting | a task is made from it | its take failed | Waiting or None | dropped | `make_task`, `take_offer` |
+| Waiting | a listing | a task records it as the offer it came from | Waiting or None | dropped | `taken_offers` |
+| Waiting | task finished or forgotten | | gone with the record | the question before names them | `roost--offers-sentence` |
+
+`test/formal/emacs_and_hosts` checks I2 in Emacs as `NoOfferRollback`: no reply brings
+back an offer you took, or hides one made since.
+
+In Emacs, opening an offer takes it at once and opens an ordinary
+[new task draft](#the-new-task-draft): nothing ties the offer to the draft, so the
+draft's states are its own, though what it says includes the task it shows under, so
+a late reply leaves a draft moved elsewhere and back. Do it here is an ordinary
+[send](#the-send-id) of a fixed line, with a send ID of the task's and the offer's IDs,
+so that asking again pastes it once, then a take. A take is asked only for a task still listed: one that went while
+Do it here's prompt went, as its host was forgotten, stays gone.
+Open: none.
+
 ### Creation
 
 Kind: implicit. Lives in: `creating/<id>.json` (the note), its flock,
@@ -2866,8 +2916,10 @@ nothing to propose.
 | merge | ok | active | ok | busy | removing | ok | ok | Git can't read; nothing to merge if the folder went too (by reading) |
 | discard | ok | ok | ok | busy | removing | ok | ok | ok |
 | forget | running | running | ok | busy | removing | ok | ok | ok |
+| take-offer | ok | ok | ok | ok | removing | was removing | ok | ok |
 
-No state lacks a way out. While Git merges or updates a task, each row reads as
+No state lacks a way out. The `take-offer` row came later, and is read from
+`require_not_removing` rather than run. While Git merges or updates a task, each row reads as
 Removing does, in words of its own. Two refusals have the wrong words, both cosmetic: `update` for an active
 agent says "before retiring", from `require_finished`; and `inspect` while a
 worktree is removed, or after that was cut short, says to resume the task, which
@@ -2915,6 +2967,8 @@ registry lock.
 | `shellPaneId` | `shell`, `spawn`, `stop` | yes |
 | `name`, `task`, `renamedAt` | `rename` | yes |
 | `setupComplete`, `copyComplete`, `submodulesComplete`, `allSubmodules` | `runner` | yes, fresh read each |
+| `offers`, `offersAt` | `propose_task`, `take_offer`, `make_task` and `list_tasks` (the parent's, through `take_offer`) | yes |
+| `mayOffer`, `parent`, `offer` | `make_task` | yes; never changed |
 
 No lost update found in any of them.
 
