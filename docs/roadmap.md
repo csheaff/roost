@@ -191,8 +191,9 @@ account, with no badge or verdict.
   plausible fixes, each worth trying with all the agent has learned. With
   Claude Code 2.1.312, a fork finds a conversation recorded in another
   folder, and its hooks report the fork's own session; a sentence Roost
-  puts before your prompt keeps the agent to its new worktree. Tried with
-  the fake agents only since it was merged. From agent-shell's
+  puts before your prompt keeps the agent to its new worktree; with
+  2.1.322 a fork named a word its task had been told
+  ([validation](validation.md), 2026-11-11). From agent-shell's
   `agent-shell-fork` and agent-deck's forking.
 - **Better task names.** Names come from a prompt's first words, and `R`
   renames a task. Claude Code titles its sessions itself, in an `ai-title`

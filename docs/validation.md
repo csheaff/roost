@@ -64,6 +64,12 @@ isolated tmux server, as `make contract-live` runs its sessions.
   `test/captures/claude-2.1.322.jsonl`. With no permission mode set,
   Claude started in manual mode here, so the auto-mode session was not
   run, nor the sandbox session.
+- **A fork goes on with the conversation.** A task told a word to
+  remember, then a fork of it (`forkFrom`, as `C-u c` asks) with a file
+  left uncommitted in the task's worktree: the fork's terminal showed the
+  task's conversation, then Roost's sentence about its new worktree, then
+  the fork's prompt, and its agent named the word. The fork had a session
+  of its own and the uncommitted file; the task kept its session.
 - **Remote Control.** Started with `--remote-control=NAME --name=NAME`,
   Claude 2.1.322 came up as ever, with no question before its prompt.
   Whether the task then shows in the Claude app was not checked: Claude
