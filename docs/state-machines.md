@@ -2204,23 +2204,31 @@ Kind: implicit. Lives in: the buffer `*roost new task*`; `roost--compose-submitt
 `roost--draft-note`, `roost--compose-fields`, `roost--compose-timer`,
 `roost--compose-changing-shown`, `roost--compose-body`.
 One draft at a time, found by name. Its fields are read-only text above a marker.
+A fork's say whether it goes on with its task's conversation, an offer's the task
+whose agent offered it, and `:attempts` how many tasks it makes from its prompt.
 
 | State | Meaning | How you can tell |
 |---|---|---|
 | Absent | No draft | no buffer |
 | Editing | Yours to change | submitting nil, note nil |
 | Asking | `C-c C-c` pressed; a question about the setup command is open | submitting t, no request |
-| Creating | Request in flight | submitting t, note "Creating…" |
+| Creating | Its own request in flight, and one for each other attempt | submitting t, note "Creating…" |
 | Refused | The host said no, or the connection dropped | submitting nil, note "Could not create…" |
 | NoReply | Timed out; the task may be made | submitting nil, note "No reply…" |
 | Closing | Task made, held for the minibuffer | submitting as it was, task cached |
 
 Invariants:
 - I1. A flag says Creating only while a request is in flight or a question is open.
-  (`left-behind` rule of `test/roost-sweep-late.el`.)
-- I2. A draft is kept if creation fails. (Docstring of `roost-compose-submit`.)
+  (`left-behind` rule of `test/roost-sweep-late.el`.) The request is the one for the
+  draft's own task, the first attempt: the others' replies leave the flag as it is.
+- I2. A draft is kept if creation fails. (Docstring of `roost-compose-submit`.) That is
+  the creation of its own task. Another attempt that fails says so in a message, and
+  the draft goes on: it closes for its own task, and nothing asks for the other
+  again. (`NewTaskAttempts.known-attempt-not-made.cfg`.)
 - I3. A draft closes only for what it says now: what the request that made the task
-  said, as `roost--compose-what` has it. That is this request, or, when its host says
+  said, as `roost--compose-what` has it, which holds every field a request is made
+  from: whether a fork goes on with its task's conversation, and the task an offer's
+  draft shows under, too. That is this request, or, when its host says
   an earlier one made it (`alreadyMade`) or a poll finds it, what it asked with that
   ID, if it asked for the same each time; asked for different things, which made the
   task isn't known, and the draft stays. Anything else is yours. A draft that was refused, changed, then lost a
@@ -2233,6 +2241,9 @@ Invariants:
   it forks, an issue it starts from (`roost--compose-tied`). (Comment in `roost--compose`.)
 - I6. "Roost created NAME" names the task as made, by its own name. A draft that says
   otherwise says what was made from what.
+- I7. A draft you wrote in gives way to no offer. An agent's offer opens as a draft of
+  its own, a new buffer, only where the draft holds no prompt, says nothing of a
+  request and waits on none; otherwise the offer waits. (`roost--compose-offer`.)
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
@@ -2240,14 +2251,22 @@ Invariants:
 | Editing | `roost--compose` | prompt empty, or fork | Editing | fields replaced | `roost--compose` |
 | Editing | `roost--compose` | prompt written | Editing | fields kept; a seed is dropped, and a DIRECTORY with it | `roost--compose` |
 | Editing | `roost--compose`, a DIRECTORY and no seed, as a click on a project | prompt written | Editing | moves there, or says why it stays | `roost--compose`, `roost--compose-tied` |
+| Absent, Editing | `RET` on an offer | no prompt, no note, not submitting | Editing | a new buffer, with the offer's title, brief and task; then the offer is taken | `roost--compose-offer`, `roost--take-offer` |
+| any but Absent | `RET` on an offer | a prompt, a note, or submitting | same | user-error; the offer waits | `roost--compose-offer` |
 | Editing | edit | | Editing | idle timer redraws fields | `roost--compose-changed` |
+| Editing | `C-c C-x` | | Editing | how many tasks it makes, and by which agents | `roost-compose-set-attempts` |
+| Editing | `C-c C-f` | a fork | Editing | goes on with its task's conversation, or starts a new one | `roost-compose-set-conversation` |
+| Editing | moved to another project | an offer's draft | Editing | a task of its own, under none | `roost--compose-move` |
 | Editing | a poll changes who touches a quoted file | | Editing | redraw | `roost--compose-redraw-changing` |
 | Editing | `C-c C-c` | no project or name | Editing | user-error | `roost-compose-submit` |
 | Editing | `C-c C-c` | question left open | Editing | quit it, submit from a timer | `roost--quit-questions-here` |
-| Editing | `C-c C-c` | setup command risky | Asking | asks | `roost--project-value` |
+| Editing | `C-c C-c` | setup command risky | Asking | asks, once for all its attempts | `roost--project-value` |
 | Editing | `C-c C-c` | | Creating | ID kept or made, request | `roost-compose-submit` |
+| Editing | `C-c C-c` | several attempts | Creating | a request for each, the draft's own last, each other with the ID and its number | `roost-compose-submit` |
 | Asking | answered | | Creating | request | `roost--create-task` |
-| Asking | `C-g` or error | | Editing | flag and note cleared | `condition-case` in `roost-compose-submit` |
+| Asking | `C-g` or error | | Editing | flag and note cleared; the ID as it was | `condition-case` in `roost-compose-submit` |
+| Creating | `C-g` or error between its requests | an attempt went | Editing | flag and note cleared; the ID as it asked | `condition-case` in `roost-compose-submit` |
+| Creating | another attempt's reply | | Creating | says it was made, or why not; nothing opens, and the draft is as it was | `roost--task-made`, `roost--create-task` |
 | Creating | `C-c C-c` | | Creating | user-error "Already creating" | `roost-compose-submit` |
 | Creating | good reply | no minibuffer, says what the task does | Absent | Org link, close, redraw, open if you stayed | `roost--task-made`, `roost--compose-made` |
 | Creating | good reply | no minibuffer, says otherwise now | Editing | Org link, note says what was made; ID forgotten, nothing opens | `roost--compose-made` |
@@ -2264,17 +2283,24 @@ Invariants:
 | Refused, NoReply | poll lists the ID | says otherwise now, its project too | Editing | note says what was made; ID forgotten | `roost--compose-listed`, `roost--compose-made` |
 | any | `C-c C-k` | prompt empty or yes | Absent | `quit-window t` | `roost-compose-cancel` |
 
-Illegal or refused: `C-c C-c` in Creating. While busy the header has no buttons, so a
+Illegal or refused: `C-c C-c` in Creating, and an offer opened over a draft that holds
+anything. While busy the header has no buttons, so a
 hand on the mouse has no Cancel; `C-c C-k` works. Fields can still be changed in
 Creating and text typed there; neither is refused.
 
-Open: none.
+A conversation (`roost-new-conversation`) has no draft and no creation ID: each `C`
+asks for one, so `C` again after no reply can start a second.
+
+Open: attempts at one prompt can be made from two, [The creation ID](#the-creation-id)'s I5.
 
 ### The creation ID
 
-Kind: implicit. Lives in: `roost--compose-asked` (DIRECTORY ID), the host's
+Kind: implicit. Lives in: `roost--compose-asked` (DIRECTORY ID WHAT), the host's
 `createId` field, `creating/ID.lock` and creation notes under its state directory.
-It lets a draft ask again without making a second task.
+It lets a draft ask again without making a second task. Each attempt after a draft's
+first has an ID of its own, the draft's with the attempt's number after it, and each
+attempt's record says which it is (`attempt`: the draft's ID as `group`, its number,
+how many).
 
 | State | Meaning | How you can tell |
 |---|---|---|
@@ -2295,10 +2321,27 @@ Invariants:
   time, with what it says now, and an ID that found something else is forgotten:
   asked again, it is another task. Not while a request of the draft's own is out,
   which says in its own time.
+- I5. **Broken.** The tasks one draft's ID makes are attempts at one prompt: each made
+  from what the draft said at one ask. It holds while the draft says the same each
+  time it asks with the ID, and each attempt is then made once, however often it asks
+  (`test_an_attempt_asked_for_again_is_made_once` in the helper's tests). A draft
+  you changed, whose own request failed or got no reply, asks again with the same IDs,
+  and its host answers each attempt apart: with the task it made from what the draft
+  said before, or by making it now. The draft compares only its own task (I4), so it
+  can close for that one, made from what it says, while another attempt is of what
+  it said before; `=` then compares the two as attempts at one prompt.
+  (`NewTaskAttempts.finding-mixed.cfg`.)
+- I6. A `C-c C-c` cut short once an attempt went, as by `C-g` while the next request
+  starts, keeps the ID it asked with, so that asking again names that attempt as it
+  was. Cut short before any went, as at the question about the setup command, it
+  leaves the ID as it was.
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
 | None | submit | | Asked | new ID | `roost-compose-submit` |
+| None, Asked | submit | several attempts | Asked | each after the first asked for with the ID and its number | `roost-compose-submit` |
+| None, Asked | submit cut short | an attempt went | Asked | ID as it asked | `roost-compose-submit` |
+| None, Asked | submit cut short | none went | as it was | ID put back | `roost-compose-submit` |
 | Asked | submit | project same | Asked | same ID, whatever else changed; the draft then compares what comes | `roost-compose-submit` |
 | Asked | task comes, draft says otherwise | | None | | `roost--compose-made` |
 | Asked | a poll's task comes, draft says otherwise | a request of its own out | Asked | | `roost--compose-made` |
@@ -2313,8 +2356,10 @@ Invariants:
 
 Checked: `random` is seeded differently at each start, so IDs don't repeat across
 restarts. A refused create records nothing, so retrying with a fixed base works.
+An attempt's ID is two hex digits longer than a draft's, so it is no other draft's.
 
-Open: none.
+Open: I5. Its host takes an attempt's request by the attempt's own ID, and knows
+nothing of what the others were made from.
 
 ### The send ID
 

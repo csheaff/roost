@@ -8538,6 +8538,39 @@ the draft stays.  The model found it: NewTaskDraft.first-kept-when-mixed.cfg."
       (should (equal (roost--compose-prompt) "Fix the parser"))
       (should (string-search "Made" roost--draft-note)))))
 
+(ert-deftest roost-a-fork-given-a-new-conversation-stays-for-a-task-that-goes-on-with-the-old ()
+  "A fork that goes on with its task's conversation is asked for, and you
+choose a new conversation: while it is being created, or after no reply,
+before asking again.  The task its host made goes on with the old one,
+so the draft stays, saying so.  The model's variant:
+NewTaskDraft.what-misses-a-field.cfg."
+  (dolist (asks-again '(nil t))
+    (roost-test--draft-world
+      (with-current-buffer roost--compose-buffer
+        (setq roost--compose-fields
+              (thread-first roost--compose-fields
+                            (plist-put :base "HEAD")
+                            (plist-put :source "fix-auth") (plist-put :source-id "1111111111111111")
+                            (plist-put :source-agent (plist-get roost--compose-fields :agent))
+                            (plist-put :conversation t)))
+        (roost-compose-submit)
+        (should (equal (alist-get 'forkFrom (car (car asked))) "1111111111111111"))
+        (when asks-again
+          (funcall (nth 2 (car asked)) (propertize "No reply after 660s" 'roost-no-reply t)))
+        (roost-compose-set-conversation)
+        (when asks-again
+          (roost-compose-submit)
+          (should-not (assq 'forkFrom (car (car asked))))
+          (should (equal (alist-get 'createId (car (car asked))) (alist-get 'createId (car (cadr asked))))))
+        (funcall (nth 1 (car asked))
+                 (append `((name . "fix-parser") (repo . "/repo") (alreadyMade . ,(and asks-again t))
+                           (forkedFrom (id . "1111111111111111") (name . "fix-auth")))
+                         (roost-test--task "2222222222222222"))))
+      (should (get-buffer roost--compose-buffer))
+      (with-current-buffer roost--compose-buffer
+        (should-not (roost--compose-continues))
+        (should (string-search "Made fix-parser from what you sent before" roost--draft-note))))))
+
 (ert-deftest roost-unreachable-hosts-are-named-rather-than-taken-as-empty ()
   (roost-test--isolated
    (let ((roost-hosts '(nil "dev" "lab")))

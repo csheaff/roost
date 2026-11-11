@@ -151,6 +151,13 @@ What each release changes, and what to do when upgrading. Newest first.
   new conversation instead, as a fork did before. Claude, Codex, Pi and
   OpenCode can each fork their own conversations; choosing another agent
   in the draft starts a new one. Nothing to do when upgrading.
+- A fork's draft closes only for a fork made as its Context line says. With
+  `C-c C-f` pressed while the fork was being created, or after no reply
+  came and before `C-c C-c` again, the draft closed for a task made the
+  other way: one that went on with the task's conversation, and had its
+  uncommitted changes, though the draft said a new conversation, or the
+  reverse. It now stays, saying what was made, as a draft whose prompt you
+  changed does. Nothing to do when upgrading.
 - A conversation with an agent needs no project. "New conversation" in the
   sidebar, or `C` in the menu, opens an agent's terminal at once, with
   nothing to write first: you say what you want there. It has no branch to

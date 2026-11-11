@@ -4593,13 +4593,15 @@ share.  Nothing for a draft that makes one task."
 
 (defun roost--compose-what ()
   "What the draft asks for, to tell whether it says that still.
-All of it, though you have narrowed it to some, and the task it would
-show under, which moving it elsewhere and back takes away."
+All of it, though you have narrowed it to some: every field a request to
+create is made from.  So also the task it would show under, which moving
+it elsewhere and back takes away, and whether a fork goes on with its
+task's conversation."
   (save-restriction
     (widen)
     (list (roost--compose-prompt)
           (mapcar (lambda (field) (plist-get roost--compose-fields field))
-                  '(:directory :agent :base :name :issue :parent :attempts)))))
+                  '(:directory :agent :base :name :issue :parent :attempts :source :conversation)))))
 
 (defun roost--compose-made (buffer fields task what &optional own)
   "Close BUFFER, the draft with FIELDS, as its host made TASK from WHAT.
