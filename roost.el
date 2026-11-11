@@ -11762,9 +11762,12 @@ Named for the first of them Roost has."
 
 (defun roost--insert-attempt-rows (attempts)
   "Insert a line for each of ATTEMPTS: its number, name, status and changes.
-The name opens the attempt, and the line is its task's, as a dashboard row is."
-  (let ((names (apply #'max (mapcar (lambda (task) (string-width (roost--field task 'name))) attempts)))
-        (words (apply #'max (mapcar (lambda (task) (string-width (roost--row-word task))) attempts))))
+And its agent, where they are by more than one.  The name opens the
+attempt, and the line is its task's, as a dashboard row is."
+  (let* ((names (apply #'max (mapcar (lambda (task) (string-width (roost--field task 'name))) attempts)))
+         (words (apply #'max (mapcar (lambda (task) (string-width (roost--row-word task))) attempts)))
+         (agents (delete-dups (mapcar (lambda (task) (or (roost--field task 'agent) "claude")) attempts)))
+         (agent-width (apply #'max (mapcar #'string-width agents))))
     (dolist (task attempts)
       (let ((start (point))
             (key (roost--key task))
@@ -11776,6 +11779,13 @@ The name opens the attempt, and the line is its task's, as a dashboard row is."
                             'help-echo "mouse-1 or RET: open it"
                             'action (lambda (_) (roost--attempts-open key)))
         (insert (make-string (- names (string-width name)) ?\s) "  "
+                ;; Whose attempt it is, where they are by more than one agent.
+                (if (cdr agents)
+                    (concat (propertize (truncate-string-to-width (or (roost--field task 'agent) "claude")
+                                                                  agent-width nil ?\s)
+                                        'face 'roost-dim)
+                            "  ")
+                  "")
                 (propertize word 'face (roost--status-word-face (roost--attention-status task)))
                 (make-string (- words (string-width word)) ?\s) "  "
                 (cond ((not (assq 'diff task)) (propertize "Refreshing…" 'face 'roost-dim))
