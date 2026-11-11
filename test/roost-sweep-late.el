@@ -890,7 +890,8 @@ dashboard the command starts from."
      :start ,(lambda () (roost-retire (roost-sweep-late--mine)))
      :action "retire"
      :refusals ((,roost-sweep-late--unmerged . asks) (,roost-sweep-late--uncommitted . asks)
-                (,roost-sweep-late--other-branch . asks) ("The agent is active; stop it or wait before retiring this task")))
+                (,roost-sweep-late--other-branch . asks) ("The agent is active; stop it or wait before retiring this task")
+                ("Its agent has offered a task since you were asked: Lint. Look at it again before retiring")))
     (retire-from-the-panel
      :origin panel :closes t
      :fields ((ahead . 0))
@@ -905,11 +906,14 @@ dashboard the command starts from."
      :start ,(lambda () (roost-merge-retire (roost-sweep-late--mine)))
      :action "merge"
      :refusals (("The integration branch main no longer exists")
-                ("The task's branch has moved since you were asked; look at it again before merging")))
+                ("The task's branch has moved since you were asked; look at it again before merging")
+                ("Its agent has offered a task since you were asked: Lint. Look at it again before merging")))
     (forget
      :fields ((status . "stopped") (live))
      :start ,(lambda () (roost-forget (roost-sweep-late--mine)))
-     :action "forget" :refusals (("The agent is running; stop the task before forgetting it")))
+     :action "forget"
+     :refusals (("The agent is running; stop the task before forgetting it")
+                ("Its agent has offered a task since you were asked: Lint. Look at it again before forgetting")))
     (forget-running
      :fields ((status . "running"))
      :start ,(lambda () (roost-forget (roost-sweep-late--mine)))
@@ -924,7 +928,8 @@ dashboard the command starts from."
     (discard
      :start ,(lambda () (roost-discard (roost-sweep-late--mine)))
      :action "discard" :refusals (("The task's branch has moved since you were asked; look at it again before discarding")
-                                  ("The task holds more than you were told; look at it again before discarding")))
+                                  ("The task holds more than you were told; look at it again before discarding")
+                                  ("Its agent has offered a task since you were asked: Lint. Look at it again before discarding")))
     (update
      :start ,(lambda () (roost-update (roost-sweep-late--mine)))
      :action "update" :refusals ((,roost-sweep-late--uncommitted-update . asks) ("Task worktree is gone")))

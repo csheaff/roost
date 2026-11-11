@@ -4838,6 +4838,23 @@ def taken_offers(store, tasks):
                 take_offer(store, parent, offer)
 
 
+def require_offers_named(task, named, doing):
+    """Refuse DOING, as "discarding", to TASK while it holds an offer that
+    NAMED lacks: the IDs of the offers the question before named, as its
+    request says. An offer goes with its record, and one its agent made
+    since you were asked would go unseen. One named that has gone since,
+    taken or dismissed, is no reason to refuse. NAMED is None from an Emacs
+    from before requests said, and for a dry run, which check nothing.
+    Under the registry lock, kept until the task is stopped, when it offers
+    no more (`propose_task`), or its record is gone."""
+    if not isinstance(named, list):
+        return
+    unnamed = [offer["title"] for offer in task_offers(task) if offer["id"] not in named]
+    if unnamed:
+        raise RoostError("Its agent has offered %s since you were asked: %s. Look at it again before %s"
+                         % ("a task" if len(unnamed) == 1 else "%d tasks" % len(unnamed), "; ".join(unnamed), doing))
+
+
 def attach(store, task, files):
     """Copy FILES, each {"name": a relative path, "data": its bytes in base64},
     to the task's attachments on this host, where its agent can read them.
@@ -5588,18 +5605,22 @@ def merge_task(task, integration, here, squash, tip):
     return None
 
 
-def retire(store, task, merge=False, merged_head=None, squash=False, teardown=None, still_open=False, expect=None):
+def retire(store, task, merge=False, merged_head=None, squash=False, teardown=None, still_open=False, expect=None,
+           offers=None):
     """Remove a finished task's worktree, branch, window and record.
     Never discards uncommitted files or unmerged commits. With MERGE, merge
     the task first, as one commit with SQUASH. EXPECT is the branch's commit
     when you were asked, if Emacs knew it, and a branch that has moved since
-    is not merged. TEARDOWN, the project's teardown command, runs in the
-    worktree before it is removed."""
+    is not merged. OFFERS is the IDs of the offers the question named, and
+    a task whose agent has offered another since is left as it is
+    (`require_offers_named`). TEARDOWN, the project's teardown command,
+    runs in the worktree before it is removed."""
     inventory = inventory_for(task)
     pane = owned_pane(task, inventory)
     require_finished(task, pane)
     if task.get("paneId") in inventory and not pane:
         raise RoostError("Task's tmux ownership changed; stop or forget the task instead")
+    require_offers_named(task, offers, "merging" if merge else "retiring")
     repo = task["repo"]
     branch = task["branch"]
     put_back_removed(store, task)
@@ -5647,11 +5668,13 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
                 raise RoostError("The task's branch has moved since you were asked; look at it again before merging")
             with integrating(store, task, "merge", integration, repo if here else None):
                 squashed = merge_task(task, integration, here, squash, tip)
-        # Hooks came in meanwhile, and the agent may be at work again.
+        # Hooks came in meanwhile, and the agent may be at work again, or
+        # have offered a task: Git merged without the registry lock.
         task = store.read_to_act_on(task["id"])
         try:
             inventory = inventory_for(task)
             require_finished(task, owned_pane(task, inventory))
+            require_offers_named(task, offers, "retiring")
             if worktree_exists:
                 check_worktree(store, task)
                 require_clean(str(worktree))
@@ -6045,13 +6068,15 @@ def discard_losses(task, branch_exists, worktree, worktree_exists, work, going=(
         unreadSubmodules=sum(entry["commits"] is None for entry in submodules))
 
 
-def discard(store, task, expect=None, dry_run=False, teardown=None, told=None):
+def discard(store, task, expect=None, dry_run=False, teardown=None, told=None, offers=None):
     """Delete a task's worktree, branch, window and record, whatever they
     hold. With DRY_RUN, only say what would be lost, as `discard_losses`
     counts it. Otherwise EXPECT is the branch's commit when you were told,
     and a branch that has moved since is not deleted. TOLD is what the dry
     run counted, and a task that would lose more now is not deleted either,
-    nor its agent stopped: an agent goes on working while you read.
+    nor its agent stopped: an agent goes on working while you read. Nor one
+    whose agent has offered a task since, which OFFERS, the IDs of the
+    offers the question named, lacks (`require_offers_named`).
     TEARDOWN, the project's teardown command, runs in the worktree before it
     is removed."""
     repo = task["repo"]
@@ -6080,6 +6105,7 @@ def discard(store, task, expect=None, dry_run=False, teardown=None, told=None):
             # Asking again would only find more.
             raise RoostError("The task holds more than you were told; %slook at it again before discarding"
                              % ("its agent is at work, so stop it (K), then " if task["status"] in ACTIVE else ""))
+    require_offers_named(task, offers, "discarding")
     stop(store, task)
     remove_worktrees(store, task, worktree if worktree_exists else None, work, force=True, teardown=teardown)
     shutil.rmtree(copy_staging(task["worktree"]), ignore_errors=True)
@@ -6093,13 +6119,16 @@ def discard(store, task, expect=None, dry_run=False, teardown=None, told=None):
     return task
 
 
-def forget(store, task):
+def forget(store, task, offers=None):
     """Drop Roost's record without touching Git, closing an ended task's window.
-    The escape hatch for tasks Roost can no longer retire."""
+    The escape hatch for tasks Roost can no longer retire. OFFERS is the IDs
+    of the offers the question named, and a task whose agent has offered
+    another since is kept (`require_offers_named`)."""
     inventory = pane_inventory(task["socket"])
     pane = owned_pane(task, inventory) if inventory else None
     if pane and not pane["dead"]:
         raise RoostError("The agent is running; stop the task before forgetting it")
+    require_offers_named(task, offers, "forgetting")
     if inventory:
         close_panes(task, inventory, check=False)
     left = []
@@ -8146,17 +8175,20 @@ TASK_ACTIONS = {
     "retarget": lambda store, task, request: retarget(store, task, request.get("base")),
     "retire": lambda store, task, request: retire(store, task, merged_head=request.get("mergedHead"),
                                                   teardown=text(request.get("teardown")),
-                                                  still_open=request.get("stillOpen") is True),
+                                                  still_open=request.get("stillOpen") is True,
+                                                  offers=request.get("offers")),
     "merge": lambda store, task, request: retire(store, task, merge=True, merged_head=request.get("mergedHead"),
                                                  squash=request.get("style") == "squash",
                                                  teardown=text(request.get("teardown")),
                                                  still_open=request.get("stillOpen") is True,
-                                                 expect=text(request.get("expect"))),
-    "forget": lambda store, task, request: forget(store, task),
+                                                 expect=text(request.get("expect")),
+                                                 offers=request.get("offers")),
+    "forget": lambda store, task, request: forget(store, task, request.get("offers")),
     "discard": lambda store, task, request: discard(store, task, request.get("expect"),
                                                     request.get("dryRun") is True,
                                                     text(request.get("teardown")),
-                                                    request.get("told")),
+                                                    request.get("told"),
+                                                    request.get("offers")),
     "update": lambda store, task, request: update(store, task),
     "take-offer": lambda store, task, request: take_offer(store, task, text(request.get("offer"))),
 }

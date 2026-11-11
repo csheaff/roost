@@ -40,15 +40,16 @@ CONSTANTS
                     \*   that task's commit, which only its branch has;
                     \* "fork reads": a fork is made of this task, and reads its worktree;
                     \* "offer": its agent offers a task;
-                    \* and a timing, for a finding (see the skill):
-                    \* "offer once asked": its agent offers a task after you
-                    \*   were asked, before the request stops it
+                    \* "offer once asked": and may do so after you were
+                    \*   asked, before the request stops it, as while you
+                    \*   read the question
     Break           \* "none", or a guard turned off, for a TaskOnHost.<variant>.cfg:
                     \* "retire_force", "branch_no_cas", "no_safe_check",
                     \* "agent_only_went", "no_stamp", "agent_any_branch", "no_recount",
                     \* "x_not_seen_again", "x_stamp_first", "proof_goes",
                     \* "going_counts", "retarget_own", "fork_no_hold",
-                    \* "fork_any_time", "offer_after_stop"
+                    \* "fork_any_time", "offer_after_stop", "offers_not_named",
+                    \* "offers_named_once"
 
 Req   == 1..MaxRequests
 Kinds == {"retire", "merge", "discard", "forget"}
@@ -361,8 +362,9 @@ Asked == \E r \in Req : req[r].pc \in {"start", "git merge", "after merge", "mer
 
 \* `propose_task`, from the agent's own server, which may be answering as
 \* `stop` closes its pane: under the registry lock, refused once the task
-\* is stopped.  The base config leaves out an offer made once you were
-\* asked.  Broken: `offer_after_stop` takes one from a stopped task.
+\* is stopped.  One made once you were asked, as while you read the
+\* question, is for a config with "offer once asked".  Broken:
+\* `offer_after_stop` takes one from a stopped task.
 AgentOffers == Aside(
     /\ "offer" \in Also /\ offers = 0 /\ regLock = 0 /\ rec
     /\ agent # "idle"
@@ -376,7 +378,8 @@ AgentOffers == Aside(
 (* doing.  For `m`, Emacs sends the branch as it last measured it          *)
 (* (`expect`); for `x`, what the dry run told you (`expect`, `told`).      *)
 (* Both were read before you answered, so the agent works on between.      *)
-(* The question names the offers that go with the task (`toldOffers`).     *)
+(* The question names the offers that go with the task, and the request    *)
+(* says which those were (`toldOffers`, its `offers`).                     *)
 
 Ask(r, k) ==
     /\ req[r].pc = "none" /\ rec /\ \A q \in 1..(r - 1) : req[q].pc # "none"
@@ -414,24 +417,36 @@ PutBack == IF removing # 0 /\ tw = "partly" THEN "there" ELSE tw
 \* holds the worktree lock, or a fork holds it shared.
 Held == wtLock # 0 \/ reading = "held"
 
+\* `require_offers_named`, under the registry lock: a request is refused
+\* while the record holds an offer its question didn't name.  The lock is
+\* kept from there until the record goes, or the agent is stopped and can
+\* offer no more; but for a merge, which lets it go while Git merges, and
+\* asks again after.  Broken: `offers_not_named` has the request say
+\* nothing of them, as the code did; `offers_named_once` doesn't ask again
+\* after the merge.
+Named(r)      == Break = "offers_not_named" \/ offers <= req[r].toldOffers
+NamedAgain(r) == Break = "offers_named_once" \/ Named(r)
+
 Start(r) == req[r].pc = "start" /\ regLock = 0 /\ Roost(r,
     LET k == req[r].kind IN
     \/ /\ ~rec \/ Held
        /\ Refuse(r)
        /\ UNCHANGED <<gitVars, recordVars, agent, wtLock>>
-    \* `forget`: refused while the agent's pane is live; Git is left alone.
+    \* `forget`: refused while the agent's pane is live, or for an offer
+    \* the question didn't name; Git is left alone.
     \/ /\ rec /\ ~Held /\ k = "forget"
-       /\ IF agent # "stopped" THEN Refuse(r) /\ UNCHANGED rec
+       /\ IF agent # "stopped" \/ ~Named(r) THEN Refuse(r) /\ UNCHANGED rec
           ELSE rec' = FALSE /\ Go(r, "done") /\ UNCHANGED regLock
        /\ UNCHANGED <<gitVars, status, removing, retiringCommit, noted, agent, wtLock>>
-    \* `retire`, steps 3 to 6: `require_finished`, `put_back_removed`,
-    \* `require_clean`, `require_agent_work_kept`; for `merge`, a branch
-    \* gone or moved from `expect`, then `merging_in`, `integration_branch`
-    \* and `integrating`, with the branch it merges into as the record has
-    \* it now (`into`).
+    \* `retire`, steps 3 to 6: `require_finished`, `require_offers_named`,
+    \* `put_back_removed`, `require_clean`, `require_agent_work_kept`; for
+    \* `merge`, a branch gone or moved from `expect`, then `merging_in`,
+    \* `integration_branch` and `integrating`, with the branch it merges
+    \* into as the record has it now (`into`).
     \/ /\ rec /\ ~Held /\ k \in {"retire", "merge"}
        /\ LET doMerge == k = "merge" /\ (tb \/ ~retiringCommit)
               ok      == /\ status # "active"
+                         /\ Named(r)
                          /\ PutBack = "gone" \/ twDirty = {}
                          /\ ~(AsMade /\ (xDirty # {} \/ Ahead # {}))
                          /\ doMerge => (tb /\ tbCommits = req[r].expect /\ CanMergeInto(integ))
@@ -446,9 +461,10 @@ Start(r) == req[r].pc = "start" /\ regLock = 0 /\ Roost(r,
                                  /\ regLock' = r /\ UNCHANGED wtLock
        /\ UNCHANGED <<twDirty, tb, tbCommits, mainCommits, mine, mineCommits, x, xOn, xDirty, wt,
                       wtCommits, recordVars, agent>>
-    \* `discard`: the branch moved from `expect`, or more to lose than you
-    \* were told (`told`), refuses; else `stop`.  Counted and stopped in one
-    \* step: an agent's write in the moment between is left out.
+    \* `discard`: the branch moved from `expect`, more to lose than you
+    \* were told (`told`), or an offer the question didn't name, refuses;
+    \* else `stop`.  Counted and stopped in one step: an agent's write in
+    \* the moment between is left out.
     \/ /\ rec /\ ~Held /\ k = "discard"
        /\ LET now == Losses
               ok  == /\ tb = req[r].toldBranch /\ (tb => tbCommits = req[r].expect)
@@ -456,6 +472,7 @@ Start(r) == req[r].pc = "start" /\ regLock = 0 /\ Roost(r,
                           /\ now.commits <= req[r].told.commits
                           /\ now.changes <= req[r].told.changes
                           /\ now.x <= req[r].told.x
+                     /\ Named(r)
           IN /\ tw' = PutBack
              /\ IF ~ok
                 THEN Refuse(r) /\ UNCHANGED <<agent, status>>
@@ -478,10 +495,10 @@ GitMerge(r) == req[r].pc = "git merge" /\ Roost(r,
     /\ UNCHANGED <<tw, twDirty, tb, tbCommits, mine, x, xOn, xDirty, wt, recordVars, agent, regLock, wtLock>>)
 
 \* Back under the lock: its mark cleared, the worktree let go, the record
-\* read again, and the agent and its worktree checked again.
+\* read again, and the agent, its offers and its worktree checked again.
 AfterMerge(r) == req[r].pc = "after merge" /\ regLock = 0 /\ Roost(r,
     /\ wtLock' = 0
-    /\ IF ~rec \/ status = "active" \/ (req[r].hadWorktree /\ tw # "gone" /\ twDirty # {})
+    /\ IF ~rec \/ status = "active" \/ ~NamedAgain(r) \/ (req[r].hadWorktree /\ tw # "gone" /\ twDirty # {})
        THEN Refuse(r)
        ELSE Go(r, "checkpoint") /\ regLock' = r
     /\ UNCHANGED <<gitVars, recordVars, agent>>)

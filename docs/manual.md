@@ -267,7 +267,9 @@ own status is as it would be without it.
 
 A task keeps at most three offers waiting, and one offered again by its
 title changes its brief. An offer goes with its task, and the question before
-you merge, retire, discard or forget the task names it. A new task starts
+you merge, retire, discard or forget the task names it. One its agent makes
+while you read that question keeps the task, and Roost says which: ask again,
+and the question names it. A new task starts
 without the offering task's changes, and the agent is told so.
 
 Roost gives the agent a tool, `propose_task`, from an MCP server of the

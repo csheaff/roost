@@ -10618,6 +10618,85 @@ print(json.dumps(dict(data=data)))
         self.assertEqual(record.get("lastPrompt"), line)
         self.assertNotIn("offers", record)
 
+    def finish(self, action, task, **args):
+        """The reply to ACTION, which finishes TASK, asked as Emacs asks it:
+        a discard with what its dry run just told you."""
+        if action == "discard":
+            told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
+            args = dict(args, expect=told.pop("commit"), told=told)
+        return self.request(action, id=task["id"], **args)
+
+    def test_an_offer_made_since_you_were_asked_keeps_its_task(self):
+        # The question before a task is finished names the offers that go
+        # with it, and its request says which those were. One its agent
+        # made while you read would go with the record, and nothing named it.
+        store = roost.Store(str(self.state))
+        for action, doing in (("retire", "retiring"), ("merge", "merging"), ("discard", "discarding"),
+                              ("forget", "forgetting")):
+            with self.subTest(action=action):
+                task = self.with_a_commit(action) if action == "merge" else self.create(name=action)
+                named = self.offered(task)
+                # You are asked, and meanwhile its agent offers another.
+                since = self.offered(task, title="Test calc")
+                if action == "forget":
+                    # Which Emacs stops first, as its question said.
+                    self.assertTrue(self.request("stop", id=task["id"])["ok"])
+                record = store.read(task["id"])
+                tips = [self.git("rev-parse", branch) for branch in (task["branch"], "main")]
+                for asked, said in (([named["id"]], "a task since you were asked: Test calc"),
+                                    ([], "2 tasks since you were asked: Document calc; Test calc")):
+                    reply = self.finish(action, task, offers=asked)
+                    self.assertEqual(reply, dict(ok=False, error="Its agent has offered %s. Look at it again before %s"
+                                                 % (said, doing)))
+                    # Nothing is changed: its record and its offers, its
+                    # work, where it would merge, and its agent, which runs on.
+                    self.assertEqual(store.read(task["id"]), record)
+                    self.assertTrue(Path(task["worktree"]).is_dir())
+                    self.assertEqual([self.git("rev-parse", branch) for branch in (task["branch"], "main")], tips)
+                    if action != "forget":
+                        self.assertFalse(roost.pane_inventory(self.socket)[task["paneId"]]["dead"])
+                # Asked again, the question names both, and it goes.
+                reply = self.finish(action, task, offers=[named["id"], since["id"]])
+                self.assertTrue(reply["ok"], reply)
+                self.assertFalse(store.path(task["id"]).exists())
+                # An Emacs from before requests said is asked nothing, as before.
+                older = self.with_a_commit("older") if action == "merge" else self.create(name=action + " older")
+                self.offered(older)
+                if action == "forget":
+                    self.assertTrue(self.request("stop", id=older["id"])["ok"])
+                reply = self.finish(action, older)
+                self.assertTrue(reply["ok"], reply)
+                self.assertFalse(store.path(older["id"]).exists())
+        # One the question named that you took since, as in another Emacs,
+        # is no reason to refuse: nothing goes that it didn't name.
+        task = self.create(name="taken since")
+        named, other = self.offered(task), self.offered(task, title="Test calc")
+        self.assertTrue(self.request("take-offer", id=task["id"], offer=named["id"])["ok"])
+        self.assertTrue(self.finish("retire", task, offers=[named["id"], other["id"]])["ok"])
+
+    def test_an_offer_made_while_git_merges_keeps_its_task(self):
+        # Git merges without the registry lock, for as long as its hooks
+        # take, and the agent's server answers meanwhile.
+        task = self.with_a_commit()
+        named = self.offered(task)
+        with self.stopped_in_a_hook(task, "post-merge", offers=[named["id"]]):
+            self.offered(task, title="Test calc")
+        self.assertEqual(self.replied, dict(ok=False, error=(
+            "task is merged into main, and not retired: Its agent has offered a task since you were asked: "
+            "Test calc. Look at it again before retiring")))
+        # Its work is in main, and the task waits with both offers, its agent running.
+        self.assertTrue((self.repo / ("work-" + task["id"])).exists())
+        record = roost.Store(str(self.state)).read(task["id"])
+        self.assertEqual([offer["title"] for offer in record["offers"]], ["Document calc", "Test calc"])
+        self.assertEqual(record["status"], "ready")
+        self.assertNotIn("integrating", record)
+        self.assertTrue(Path(task["worktree"]).is_dir())
+        self.assertFalse(roost.pane_inventory(self.socket)[task["paneId"]]["dead"])
+        # Asked again, with both named, it retires.
+        reply = self.request("retire", id=task["id"], offers=[offer["id"] for offer in record["offers"]])
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(self.request("list")["result"], [])
+
 
 class WorktreeInclude(unittest.TestCase):
     """Which files a .worktreeinclude lists, as Claude Code reads it."""

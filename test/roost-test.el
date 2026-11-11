@@ -4420,7 +4420,8 @@ terminal's, on a pty.  Skips the test where it can't be made."
          (roost-merge-retire task))
        ;; Not yet measured, its host merges what is there, as it always did.
        (should (equal acted (list (append '("merge" (style . "squash"))
-                                          (when measured `((expect . ,measured)))))))))))
+                                          (when measured `((expect . ,measured)))
+                                          '((offers . []))))))))))
 
 (ert-deftest roost-a-merge-refused-as-moved-measures-the-task-for-next-time ()
   ;; Watching or not: the next `m' would say the same otherwise, for good.
@@ -4471,7 +4472,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
        (roost-discard task)
        (should (string-match-p "loses 2 commits no other branch has and 1 uncommitted file" asked))
        ;; What you were told goes with it, for its host to count again.
-       (should (equal acted '(("discard" (expect . "abc123") (told (commits . 2) (changes . 1))))))
+       (should (equal acted '(("discard" (expect . "abc123") (told (commits . 2) (changes . 1)) (offers . [])))))
        ;; Another name: nothing happens.
        (setq acted nil)
        (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "fix")))
@@ -4491,14 +4492,15 @@ terminal's, on a pty.  Skips the test where it can't be made."
                                        "3 uncommitted files,")
                                asked))
        (should (equal acted '(("discard" (expect . "abc123")
-                               (told (commits . 1) (submoduleCommits . 2) (unreadSubmodules . 1) (changes . 3))))))
+                               (told (commits . 1) (submoduleCommits . 2) (unreadSubmodules . 1) (changes . 3))
+                               (offers . [])))))
        (setq acted nil)
        ;; Nothing to lose: a plain question.
        (setq told '((commits . 0) (changes . 0) (commit . "abc123")))
        (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t))
                  ((symbol-function 'read-string) (lambda (&rest _) (error "Not asked to type"))))
          (roost-discard task))
-       (should (equal acted '(("discard" (expect . "abc123") (told (commits . 0) (changes . 0))))))
+       (should (equal acted '(("discard" (expect . "abc123") (told (commits . 0) (changes . 0)) (offers . [])))))
        ;; x on a task holding work merged nowhere offers to discard it.
        (setq acted nil)
        (let ((unmerged (roost--cache-task "dev" (append '((ahead . 1)) (roost-test--task nil "ready"))))
@@ -15138,6 +15140,84 @@ it of the same ID's, or nil for the first."
        (setq task (roost--cache-task "dev" (append '((name . "budget")) (roost-test--task "1111111111111111" "ready"))))
        (roost-retire task)
        (should (string-prefix-p "Retire budget" asked))))))
+
+(ert-deftest roost-finishing-a-task-tells-its-host-which-offers-its-question-named ()
+  ;; Its agent may offer another while you read, which would go with the
+  ;; task unseen: its host refuses a request that names fewer than it holds.
+  (roost-test--isolated
+   (let* ((first '((id . "0a1b2c3d") (title . "Fix add") (brief . "add() subtracts.")))
+          (second '((id . "1b2c3d4e") (title . "Lint") (brief . "Lint it.")))
+          (cache (lambda (&rest offers)
+                   (roost--cache-task "dev" (append `((name . "budget") (integrationBranch . "main") (live)
+                                                      ,@(when offers `((offers ,@offers))))
+                                                    (roost-test--task "1111111111111111" "ready")))))
+          asked sent meanwhile)
+     (cl-letf* ((answer (lambda (reply)
+                          (lambda (prompt &rest _)
+                            (setq asked prompt)
+                            (when meanwhile (funcall meanwhile))
+                            reply)))
+                ((symbol-function 'y-or-n-p) (funcall answer t))
+                ((symbol-function 'yes-or-no-p) (funcall answer t))
+                ((symbol-function 'read-string) (funcall answer "budget"))
+                ((symbol-function 'roost--release-terminal) #'ignore)
+                ((symbol-function 'roost--request-wait)
+                 (lambda (&rest _) '((discard (commits . 0) (changes . 0) (commit . "abc123")))))
+                ;; As its host reads them.
+                ((symbol-function 'roost--request)
+                 (lambda (_host action parameters &rest _)
+                   (push (cons action (alist-get 'offers (json-parse-string (roost--json-encode parameters)
+                                                                            :object-type 'alist)))
+                         sent))))
+       (pcase-dolist (`(,finish . ,action) '((roost-retire . "retire") (roost-merge-retire . "merge")
+                                             (roost-discard . "discard") (roost-forget . "forget")))
+         ;; One waits as you are asked, and another comes while you read:
+         ;; the request names the one the question did.
+         (setq sent nil
+               meanwhile (lambda () (funcall cache first second)))
+         (funcall finish (funcall cache first))
+         (should (string-prefix-p "Its offer Fix add goes with it.  " asked))
+         (should (equal sent `((,action . ["0a1b2c3d"]))))
+         ;; Asked again, as its host refused, it names both.
+         (setq sent nil meanwhile nil)
+         (funcall finish (gethash '("dev" "1111111111111111") roost--tasks))
+         (should (string-prefix-p "Its 2 offers go with it.  " asked))
+         (should (equal sent `((,action . ["0a1b2c3d" "1b2c3d4e"]))))
+         ;; With none, it says that it named none: a list, and empty,
+         ;; where nothing said would have its host check nothing.
+         (setq sent nil)
+         (funcall finish (funcall cache))
+         (should (equal sent `((,action . [])))))))))
+
+(ert-deftest roost-a-finish-refused-for-an-offer-made-since-lists-the-task-for-next-time ()
+  ;; Watching or not: asked again, the question would otherwise name the
+  ;; offers it named before, and its host refuse it again, until a poll.
+  (pcase-dolist (`(,refusal . ,lists)
+                 `(("Its agent has offered a task since you were asked: Lint. Look at it again before retiring" . t)
+                   ;; One made while Git merged, without the registry lock.
+                   (,(concat "fix auth is merged into main, and not retired: Its agent has offered a task since "
+                             "you were asked: Lint. Look at it again before retiring")
+                    . t)
+                   ("Task is retired")))
+    (dolist (finish '(roost-retire roost-merge-retire roost-discard roost-forget))
+      (roost-test--isolated
+       (let ((task (roost--cache-task "dev" (append '((live)) (roost-test--task nil "ready"))))
+             listed said)
+         (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) t))
+                   ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+                   ((symbol-function 'roost--release-terminal) #'ignore)
+                   ((symbol-function 'roost--request-wait)
+                    (lambda (&rest _) '((discard (commits . 0) (changes . 0) (commit . "abc123")))))
+                   ((symbol-function 'message) (lambda (format &rest args) (push (apply #'format format args) said)))
+                   ((symbol-function 'roost--refresh-host)
+                    (lambda (host quiet ids) (push (list host quiet ids) listed)))
+                   ((symbol-function 'roost--request)
+                    (lambda (_host _action _parameters _success failure &rest _)
+                      (funcall failure refusal))))
+           (funcall finish task))
+         ;; Said as any refusal is.
+         (should (equal said (list (concat "Roost dev: " refusal))))
+         (should (equal listed (when lists (list (list "dev" nil (list (roost--field task 'id))))))))))))
 
 (ert-deftest roost-a-reply-from-before-an-offer-changed-keeps-it-as-it-is ()
   ;; An offer is no event of the agent's: the task's updatedAt stays, and

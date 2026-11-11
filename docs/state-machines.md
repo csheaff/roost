@@ -234,7 +234,7 @@ Invariants:
 | Removing | refused | | Ended | marker cleared; agent stays stopped | `remove_worktrees` |
 | Removing | helper dies | | Removal cut short | marker stays | |
 | Removal cut short | retire, merge, discard | | Removing | `put_back_removed` first | `retire`, `discard` |
-| any but Removing | forget | no live pane | Gone | window closed; Git left | `forget` |
+| any but Removing | forget | no live pane, and no offer its question didn't name | Gone | window closed; Git left | `forget` |
 | Ended | retire, merge | a step after the checkpoint fails | Finishing, still stopped | `retiringCommit` stays | `retire` |
 | Live, Ended | retarget | not Merging, Removing or Removal cut short; a branch other than its own | as it was | `integrationBranch` and `baseCommit` saved, whole under the lock | `retarget` |
 
@@ -275,6 +275,9 @@ Invariants:
   failed and its creation was cut short once the task was saved: the task records the
   offer it came from, and every listing takes such an offer. (`make_task`,
   `taken_offers`; `make crash`'s `CreateFromOffer`.)
+- I6. An offer goes with its task only if the question before named it: the request
+  says which offers that question named, and its host refuses while the record holds
+  another. ([Finishing a task](#finishing-a-task), I6.)
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
@@ -284,13 +287,14 @@ Invariants:
 | Waiting | you open it, do it here, or dismiss it | | Waiting or None | dropped | `take_offer` |
 | Waiting | a task is made from it | its take failed | Waiting or None | dropped | `make_task`, `take_offer` |
 | Waiting | a listing | a task records it as the offer it came from | Waiting or None | dropped | `taken_offers` |
-| Waiting | task finished or forgotten | | gone with the record | the question before names them | `roost--offers-sentence` |
-| any | agent offers | you were asked, and the task not yet stopped | gone with the record, unnamed | **Broken**: nothing tells the host which offers the question named | `propose_task` |
+| Waiting | task finished or forgotten | every offer it holds is one the question named | gone with the record | the question before names them, and the request says which, as `offers` | `roost--offers-sentence`, `roost--offers-named` |
+| Waiting | task finished or forgotten | it holds an offer the question didn't name, as one made while you read | Waiting | refused, naming it, and nothing changes; Emacs lists the task again, so asking again names it | `require_offers_named`, `roost--finish-refused` |
 
 `test/formal/emacs_and_hosts` checks I2 in Emacs as `NoOfferRollback`: no reply brings
 back an offer you took, or hides one made since. `test/formal/task_on_host` checks
-what finishing a task takes as `OffersTold`: a stopped task takes no offer, so none
-arrives while its worktree goes, to go with it unseen.
+what finishing a task takes as `OffersTold`: a request is refused for an offer its
+question didn't name, and a stopped task takes no offer, so none arrives after that,
+as while its worktree goes, to go with it unseen.
 
 In Emacs, opening an offer takes it at once and opens an ordinary
 [new task draft](#the-new-task-draft): nothing ties the offer to the draft, so the
@@ -299,9 +303,7 @@ a late reply leaves a draft moved elsewhere and back. Do it here is an ordinary
 [send](#the-send-id) of a fixed line, with a send ID of the task's and the offer's IDs,
 so that asking again pastes it once, then a take. A take is asked only for a task still listed: one that went while
 Do it here's prompt went, as its host was forgotten, stays gone.
-Open: an offer made once you were asked, before the request stops the agent, goes
-with the task unnamed. A discard leaves the longest gap, as its agent works on while
-you read what it loses. `TaskOnHost.finding-offer-untold.cfg` keeps it.
+Open: none.
 
 ### Creation
 
@@ -397,7 +399,7 @@ Invariants:
 | `attach` | decoding, writing | worktree lock shared | saves nothing |
 | `make_task`, for a fork | snapshot of its source | the source's worktree lock shared | saves nothing of the source |
 | `remove_worktrees` | teardown, removal | worktree lock exclusive, `removing` marker, status `stopped` | re-reads, clears only its own marker |
-| `integrating` | Git's merge and its hooks | worktree lock exclusive, `integrating` marker, for a merge the repository's lock | re-reads, clears only its own marker; `retire` asks again whether the agent is at work |
+| `integrating` | Git's merge and its hooks | worktree lock exclusive, `integrating` marker, for a merge the repository's lock | re-reads, clears only its own marker; `retire` asks again whether the agent is at work, or has offered a task its question didn't name |
 
 Steps outside any lock, by design: `merged_pull_request_head` (only its answer
 is kept, and `retire` compares it to the branch's tip read under the lock);
@@ -514,10 +516,10 @@ What each step leaves if it stops there, and what asking again does.
 | --- | --- | --- | --- |
 | 1 | read record, ask forge | none, then none | nothing changed |
 | 2 | `require_not_removing` | registry | refused, nothing changed |
-| 3 | `require_finished`, pane ownership; `permission` at Codex's plan menu counts as finished | registry | refused |
+| 3 | `require_finished`, pane ownership; `permission` at Codex's plan menu counts as finished. Then `require_offers_named`: the record holds no offer but those the request says its question named (`offers`) | registry | refused, nothing changed |
 | 4 | `put_back_removed` if `removing` | registry | restores tracked files, its link |
 | 5 | `check_worktree`, clean, submodules, Git lock, agent work | registry | refused, nothing changed |
-| 6 | branch moved from `expect`, then merge, into `integrationBranch` as the record has it then | registry | see next machine; a second merge finds it there |
+| 6 | branch moved from `expect`, then merge, into `integrationBranch` as the record has it then; the record read again after, with `require_finished`, `require_clean` and `require_offers_named` again | registry, released while Git merges | see next machine; a second merge finds it there. Refused after: merged, and not retired |
 | 7 | `safe_to_delete`, by `integrationBranch` and `baseCommit` as the record has them now; save `retiringCommit` | registry | |
 | 8 | `stop` | registry | task stopped; agent's window gone |
 | 9 | `remove_worktrees` | released | worktree partly gone; `put_back_removed` restores it |
@@ -527,8 +529,12 @@ What each step leaves if it stops there, and what asking again does.
 
 `discard`: steps 2, 4, then `check_worktree(branch=False)`; the dry run stops
 there. Then `expect` against the branch, `told` against `discard_losses` counted
-again, `stop`, removal with force, branch, record. No checkpoint: `expect` and
-`told` are the guards, and a retry asks Emacs for a new dry run.
+again, `offers` against the offers the record holds (`require_offers_named`),
+`stop`, removal with force, branch, record. No checkpoint: `expect`, `told` and
+`offers` are the guards, and a retry asks Emacs for a new dry run.
+
+`forget`: step 2, then no live pane, `require_offers_named`, the window closed and
+`Store.remove`, in one hold of the registry lock.
 
 Invariants:
 - I1. No uncommitted work and no unmerged commit is lost by retire: checked
@@ -559,9 +565,24 @@ Invariants:
   `landed` shows. With its worktree still there, `resume` works. Once removal has
   gone through, as when `delete_branch` then fails, `resume` refuses for want of a
   worktree: the way on is to clear what refused it and finish the task again.
+- I6. No offer goes with a task but those the question before named. Emacs reads the
+  task's offers once, names them in the question, and sends their IDs with the
+  request (`offers`); `require_offers_named` refuses while the record holds another,
+  as one its agent made while you read, and one named that has gone since is no
+  matter. No offer arrives between that check and the record going: the registry
+  lock is held from the check until `stop` has saved `stopped`, which `propose_task`
+  refuses, and which nothing but `resume` leaves, itself refused while the worktree
+  goes and once a removal was cut short ([Task record](#task-record), I3 and I4).
+  `forget` checks and removes the record in one hold. A merge lets the lock go while
+  Git merges, so `retire` checks again on the record read after. A request with no
+  `offers`, as an older Emacs's, is checked for nothing, and each request, a retry
+  beside the original too, is checked by what its own question named. Holds;
+  `OffersTold` in `test/formal/task_on_host`.
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
+| asked | its agent offers a task while you read the question | | as it was | refused at step 3, naming the offer; asked again, the question names it | `require_offers_named` |
+| step 6 under way | its agent offers a task while Git merges | | merged, not retired, its agent running | says so; `x` retires it, its question naming the offer | `retire` |
 | step 6 done | removal refused by teardown's files | | stopped, merged, `retiringCommit` | says so; clearing them and `m` finishes | `remove_worktrees` |
 | step 8 done | agent committed in the last moment | | worktree gone, branch moved | `delete_branch` refuses; `m` merges the rest | `delete_branch` |
 | step 10 done, branch gone, `merge` asked | `retiringCommit` set | | only the record is left | merge skipped | `retire` |
@@ -570,13 +591,15 @@ Invariants:
 | step 9 under way, or cut short | another task with the same commits is retired | only this task's branch has them besides | that one refused | "unmerged commits" | `branches_going`, `safe_to_delete` |
 | step 9 under way, or cut short | another task with the same commits is discarded | only this task's branch has them besides | that one told of them, or refused | "holds more than you were told" | `branches_going`, `discard_losses` |
 
-Illegal or refused: an agent at work, a task another pane took, a dirty worktree,
+Illegal or refused: an agent at work, a task another pane took, an offer the
+question didn't name, a dirty worktree,
 unmerged commits, work in its agent's worktree or submodules, a locked worktree,
 a fork reading its worktree, and for `merge` a branch moved from `expect`; each
 before anything changes. `discard`
 refuses what `check_worktree` refuses with `branch=False`, a link, a path outside
 Roost's folder, a moved worktree, and a missing one whose branch the primary checkout
-holds; then a branch moved since its dry run, more to lose than it told you, and what
+holds; then a branch moved since its dry run, more to lose than it told you, an offer
+its question didn't name, and what
 `require_nothing_kept` finds. With the repository gone, nothing keeps a worktree, and
 `unregister_gone` has nothing to do.
 Open: none.

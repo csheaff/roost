@@ -8417,6 +8417,9 @@ won't retire, offer to discard it, which keeps that branch."
   (let* ((name (roost--field task 'name))
          (key (roost--key task))
          (listed (gethash key roost--tasks))
+         ;; Its offers, read once: the question names them, and its host is
+         ;; told which, as its agent may offer another while you read.
+         (named (roost--offers task))
          (offer (lambda (&optional branch)
                   (when (y-or-n-p
                          (if branch
@@ -8437,7 +8440,7 @@ won't retire, offer to discard it, which keeps that branch."
                                       "\\<roost-task-info-mode-map>\\[roost-merge-retire] merges it")))))
                     (roost-discard task))))
          (retire (lambda ()
-                   (roost--act task "retire" nil
+                   (roost--act task "retire" (list (roost--offers-named named))
                                (lambda (retired)
                                  (roost--retired-workspace retired)
                                  (roost--kill-worktree-buffers retired)
@@ -8453,7 +8456,7 @@ won't retire, offer to discard it, which keeps that branch."
                                       key listed
                                       (lambda ()
                                         (funcall offer (if (equal branch "a detached HEAD") "HEAD" branch))))))
-                                  (t (message "Roost %s: %s" (roost--host-label (roost--field task 'host)) err))))))))
+                                  (t (roost--finish-refused task err))))))))
     (cond
      ((member (roost--field task 'status) '("starting" "running" "permission" "background"))
       (user-error "%s's agent is at work; stop it (K) first, or wait" name))
@@ -8461,7 +8464,7 @@ won't retire, offer to discard it, which keeps that branch."
       (funcall offer (roost--other-branch task)))
      ((roost--unmerged-work-p task)
       (funcall offer))
-     ((y-or-n-p (concat (roost--offers-sentence task)
+     ((y-or-n-p (concat (roost--offers-sentence named)
                         (format "Retire %s, removing its worktree and branch (nothing in them would be lost)? "
                                 name)))
       (funcall retire)))))
@@ -8475,55 +8478,59 @@ A branch that moved while you were asked isn't merged: you look again."
   (interactive)
   (setq task (roost--choose task))
   (roost--refuse-conversation task "has no project to merge into")
-  (cond
-   ;; Nor will it merge from a worktree on another branch.
-   ((roost--other-branch task)
-    (user-error "%s's worktree is on %s, not its branch %s; check out %s there, with the commits to merge, first"
-                (roost--field task 'name) (roost--branch-label (roost--other-branch task))
-                (roost--field task 'branch) (roost--field task 'branch)))
-   ;; The host refuses a dirty worktree; say so rather than ask to merge.
-   ((roost--field task 'dirty)
-    (when (y-or-n-p (format "%s has uncommitted changes to commit first.  Open Magit? "
-                            (roost--field task 'name)))
-      (roost-review task)))
-   ((y-or-n-p (concat (roost--since-looked-sentence task)
-                      (roost--offers-sentence task)
-                      (format (if (eq roost-merge-style 'squash)
-                                  "Squash committed work from %s into one commit on %s and retire it? "
-                                "Merge committed work from %s into %s and retire it? ")
-                              (roost--field task 'name)
-                              (or (roost--field task 'integrationBranch) "its branch"))))
-    (roost--act task "merge" (append (when (eq roost-merge-style 'squash) '((style . "squash")))
-                                     ;; Where the branch was as you were asked: an
-                                     ;; agent can commit before you answer.
-                                     (when-let* ((tip (roost--field task 'branchTip)))
-                                       (list (cons 'expect tip))))
-                (lambda (merged)
-                  (roost--retired-workspace merged)
-                  (roost--kill-worktree-buffers merged)
-                  (roost--revert-merged-files merged)
-                  (roost--report-merge merged (roost--field merged 'retiringCommit)
-                                       (or (roost--field merged 'integrationBranch)
-                                           (roost--field task 'integrationBranch)))
-                  ;; The other tasks are measured against the branch that moved.
-                  (roost--refresh-host (roost--field merged 'host) nil)
-                  (message (concat (if (eq roost-merge-style 'squash)
-                                       "Squashed %s into %s, and removed its worktree and branch"
-                                     "Merged %s into %s, and removed its worktree and branch")
-                                   "%s")
-                           (roost--field task 'name)
-                           (or (roost--field task 'integrationBranch) "its branch")
-                           ;; The other attempts at its prompt stay until you finish them.
-                           (if-let* ((others (roost--attempts task)))
-                               (format "; %s %s"
-                                       (roost--names (mapcar (lambda (other) (roost--field other 'name)) others))
-                                       (if (cdr others) "remain: x on each discards it" "remains: x discards it"))
-                             "")))
-                (lambda (err)
-                  (message "Roost %s: %s" (roost--host-label (roost--field task 'host)) err)
-                  ;; So that `m' asks about where it is now, watching or not.
-                  (when (string-prefix-p "The task's branch has moved" err)
-                    (roost--refresh-host (roost--field task 'host) nil (list (roost--field task 'id)))))))))
+  ;; Its offers, read once: the question names them, and its host is told
+  ;; which, as its agent may offer another while you read.
+  (let ((named (roost--offers task)))
+    (cond
+     ;; Nor will it merge from a worktree on another branch.
+     ((roost--other-branch task)
+      (user-error "%s's worktree is on %s, not its branch %s; check out %s there, with the commits to merge, first"
+                  (roost--field task 'name) (roost--branch-label (roost--other-branch task))
+                  (roost--field task 'branch) (roost--field task 'branch)))
+     ;; The host refuses a dirty worktree; say so rather than ask to merge.
+     ((roost--field task 'dirty)
+      (when (y-or-n-p (format "%s has uncommitted changes to commit first.  Open Magit? "
+                              (roost--field task 'name)))
+        (roost-review task)))
+     ((y-or-n-p (concat (roost--since-looked-sentence task)
+                        (roost--offers-sentence named)
+                        (format (if (eq roost-merge-style 'squash)
+                                    "Squash committed work from %s into one commit on %s and retire it? "
+                                  "Merge committed work from %s into %s and retire it? ")
+                                (roost--field task 'name)
+                                (or (roost--field task 'integrationBranch) "its branch"))))
+      (roost--act task "merge" (append (when (eq roost-merge-style 'squash) '((style . "squash")))
+                                       ;; Where the branch was as you were asked: an
+                                       ;; agent can commit before you answer.
+                                       (when-let* ((tip (roost--field task 'branchTip)))
+                                         (list (cons 'expect tip)))
+                                       (list (roost--offers-named named)))
+                  (lambda (merged)
+                    (roost--retired-workspace merged)
+                    (roost--kill-worktree-buffers merged)
+                    (roost--revert-merged-files merged)
+                    (roost--report-merge merged (roost--field merged 'retiringCommit)
+                                         (or (roost--field merged 'integrationBranch)
+                                             (roost--field task 'integrationBranch)))
+                    ;; The other tasks are measured against the branch that moved.
+                    (roost--refresh-host (roost--field merged 'host) nil)
+                    (message (concat (if (eq roost-merge-style 'squash)
+                                         "Squashed %s into %s, and removed its worktree and branch"
+                                       "Merged %s into %s, and removed its worktree and branch")
+                                     "%s")
+                             (roost--field task 'name)
+                             (or (roost--field task 'integrationBranch) "its branch")
+                             ;; The other attempts at its prompt stay until you finish them.
+                             (if-let* ((others (roost--attempts task)))
+                                 (format "; %s %s"
+                                         (roost--names (mapcar (lambda (other) (roost--field other 'name)) others))
+                                         (if (cdr others) "remain: x on each discards it" "remains: x discards it"))
+                               "")))
+                  (lambda (err)
+                    (roost--finish-refused task err)
+                    ;; So that `m' asks about where it is now, watching or not.
+                    (when (string-prefix-p "The task's branch has moved" err)
+                      (roost--refresh-host (roost--field task 'host) nil (list (roost--field task 'id))))))))))
 
 ;;;###autoload
 (defun roost-forget (&optional task)
@@ -8536,14 +8543,18 @@ running agent is stopped first."
   (let* ((name (roost--field task 'name))
          ;; The host refuses while the agent runs, so stop it first.
          (running (roost--agent-running-p task))
+         ;; Its offers, read once: the question names them, and its host is
+         ;; told which, as its agent may offer another while you read.
+         (named (roost--offers task))
          (forget (lambda (&rest _)
-                   (roost--act task "forget" nil
+                   (roost--act task "forget" (list (roost--offers-named named))
                                (lambda (forgotten)
                                  (roost--retired-workspace forgotten)
                                  (when-let* ((left (roost--field forgotten 'leftBehind)))
                                    (message "Forgot %s; left in place: %s"
-                                            name (string-join left ", "))))))))
-    (when (yes-or-no-p (concat (roost--offers-sentence task)
+                                            name (string-join left ", "))))
+                               (lambda (err) (roost--finish-refused task err))))))
+    (when (yes-or-no-p (concat (roost--offers-sentence named)
                                (format (if running
                                            "Stop %s's agent and forget the task, leaving its worktree and branch as they are? "
                                          "Forget %s, leaving its worktree and branch as they are? ")
@@ -8592,29 +8603,34 @@ experiment you don't want; finished work is merged or retired instead."
          (label (if (> worktrees 0)
                     (format "%s, with %d worktree%s its agent made,"
                             name worktrees (if (= worktrees 1) "" "s"))
-                  name)))
+                  name))
+         ;; Its offers, read once: the question names them, and its host is
+         ;; told which, as its agent may offer another while you read.
+         (named (roost--offers task)))
     (if (not (if losses
                  (equal (string-trim
                          (read-string (format "%sDiscarding %s loses %s%s.  Type its name to discard it: "
-                                              (roost--offers-sentence task)
+                                              (roost--offers-sentence named)
                                               label (if (cdr losses)
                                                         (concat (string-join (butlast losses) ", ")
                                                                 " and " (car (last losses)))
                                                       (car losses))
                                               (if (roost--agent-running-p task) ", and stops its agent" ""))))
                         name)
-               (y-or-n-p (concat (roost--offers-sentence task)
+               (y-or-n-p (concat (roost--offers-sentence named)
                                  (format "Discard %s, %sdeleting its worktree and branch (nothing in them would be lost)? "
                                          label (if (roost--agent-running-p task) "stopping its agent and " ""))))))
         (message "%s was not discarded" name)
       (roost--act task "discard" (list (cons 'expect (alist-get 'commit told))
                                        ;; Its host counts again, as its agent may
                                        ;; have gone on working while you read.
-                                       (cons 'told (assq-delete-all 'commit (copy-alist told))))
+                                       (cons 'told (assq-delete-all 'commit (copy-alist told)))
+                                       (roost--offers-named named))
                   (lambda (discarded)
                     (roost--retired-workspace discarded)
                     (roost--kill-worktree-buffers discarded)
-                    (message "Discarded %s" name))))))
+                    (message "Discarded %s" name))
+                  (lambda (err) (roost--finish-refused task err))))))
 
 (defun roost--kill-worktree-buffers (task)
   "Kill the Magit and Dired buffers left in TASK's removed worktree.
@@ -11556,12 +11572,32 @@ It no longer waits under its task, and nothing starts."
   (mouse-set-point event)
   (popup-menu roost-offer-menu event))
 
-(defun roost--offers-sentence (task)
-  "TASK's offers that wait, which go with it, as a sentence to ask after, or \"\"."
-  (pcase (roost--offers task)
+(defun roost--offers-sentence (offers)
+  "OFFERS, which go with their task, as a sentence to ask after, or \"\".
+They are its offers that wait, as `roost--offers' gave them: the request
+that follows the question says which it named, with `roost--offers-named'
+of the same list."
+  (pcase offers
     ('nil "")
     (`(,offer) (format "Its offer %s goes with it.  " (alist-get 'title offer)))
-    (offers (format "Its %d offers go with it.  " (length offers)))))
+    (_ (format "Its %d offers go with it.  " (length offers)))))
+
+(defun roost--offers-named (offers)
+  "What a request to finish a task says of OFFERS, which its question named.
+Their IDs, as `roost--offers-sentence' named them: its host refuses when
+the task holds another, which its agent offered while you read, and
+which would go with the task unseen.  A vector, as an empty list would
+say nothing, and its host would then check nothing."
+  (cons 'offers (vconcat (mapcar (lambda (offer) (alist-get 'id offer)) offers))))
+
+(defun roost--finish-refused (task err)
+  "Say ERR, with which TASK's host refused to finish it.
+When that is for an offer its agent made since you were asked, list
+TASK again, watching or not: asking again then names the offer, where it
+would be refused the same way until a poll listed it."
+  (message "Roost %s: %s" (roost--host-label (roost--field task 'host)) err)
+  (when (string-search "Its agent has offered " err)
+    (roost--refresh-host (roost--field task 'host) nil (list (roost--field task 'id)))))
 
 (defconst roost--row-words
   '("permission" "starting" "error" "failed" "crashed" "ci failed" "conflicts" "comments"

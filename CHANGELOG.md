@@ -177,6 +177,10 @@ What each release changes, and what to do when upgrading. Newest first.
   task draft, filled in, and the task you create from it shows under the
   one that offered it, while you stay where you were. Right-click it, or
   press `e` or `x` on it, to have that agent do it there or to dismiss it.
+  An offer goes with its task, and the question before you merge, retire,
+  discard or forget the task names it. One its agent makes while you read
+  that question keeps the task, and Roost says so: ask again, and the
+  question names it.
   Only Claude Code takes the tool so far, from an MCP server of the
   helper's.
 - A Claude task goes on showing `permission` while a subagent in the

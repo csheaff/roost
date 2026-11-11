@@ -8,8 +8,8 @@ description: >
   forget, retarget, remove_worktrees, remove_agent_worktrees, agent_work,
   delete_branch, safe_to_delete, branches_going, discard_losses,
   put_back_removed, require_not_removing, holding_worktree, integrating,
-  conversation_to_fork, propose_task, the registry lock, or the order of
-  their steps in scripts/roost_remote.py;
+  conversation_to_fork, propose_task, require_offers_named, the registry
+  lock, or the order of their steps in scripts/roost_remote.py;
   when "A task on its host" in docs/state-machines.md changes; or when asked
   to verify finishing a task. Not for creation, the agent's status or
   Emacs's views.
@@ -26,7 +26,8 @@ idle, others working in the repository's `.claude/worktrees`, in the
 worktree its agent made too, and another worktree made at its path as
 Roost removes it. Where a config says so, also: you change the branch the
 task merges into (`B`), the task is a fork that began at a commit only its
-source's branch has, a fork is made of it, and its agent offers a task.
+source's branch has, a fork is made of it, and its agent offers a task,
+before you are asked or while you read the question.
 `make crash` kills one request at each step; this model reaches what that
 doesn't: interleavings, and the moments between a read and the act on it.
 
@@ -53,7 +54,7 @@ doesn't: interleavings, and the moments between a read and the act on it.
 python3 test/formal/check.py task_on_host
 ```
 
-About 80 s, twenty-three runs. Four must pass: `TaskOnHost.cfg`, and the
+About 80 s, twenty-four runs. Four must pass: `TaskOnHost.cfg`, and the
 model again at other bounds, as the runner takes one passing config per
 model and all of it at once takes too long. `TaskOnHostRetarget.cfg` has a
 retarget and a fork's start, `TaskOnHostRetargetWork.cfg` those with work
@@ -62,8 +63,8 @@ offer. Each `TaskOnHost.<variant>.cfg` breaks one guard, through the `Break`
 constant, and must fail on the rule its first line names: that proves each
 rule can still fail. A `TaskOnHost.finding-<what>.cfg` is the code as it
 is, with a timing the passing configs leave out, and fails until its
-finding is fixed. `make formal` runs every model. TLC and Java come from
-mise.
+finding is fixed; there is none now. `make formal` runs every model. TLC
+and Java come from mise.
 
 The last line says `all models as expected`, or names each run that
 wasn't, with TLC's output. Read every result with the pstack `/statechart`
@@ -78,8 +79,9 @@ or `discard` calls them, needs the model checked against it.
 
 | Model | Code in scripts/roost_remote.py |
 | --- | --- |
-| `Start` | `rpc` (lock, `read_to_act_on`), `require_not_removing`, `forget`, `retire` up to `merging_in`, `integration_branch`, `discard` up to `stop`, `discard_losses`, `put_back_removed` |
-| `GitMerge`, `AfterMerge`, `MergeFailed` | `integrating`, `merge_task`, `retire` after the merge |
+| `Ask` | what Emacs read before it asked, and the request carries: `expect`, `told`, and `offers`, the offers its question named (`roost--offers-named` in roost.el), which `TASK_ACTIONS` hands each action |
+| `Start` | `rpc` (lock, `read_to_act_on`), `require_not_removing`, `forget`, `retire` up to `merging_in`, `integration_branch`, `discard` up to `stop`, `discard_losses`, `put_back_removed`, `require_offers_named` in each |
+| `GitMerge`, `AfterMerge`, `MergeFailed` | `integrating`, `merge_task`, `retire` after the merge, `require_offers_named` again among its checks |
 | `Checkpoint` | `safe_to_delete`, `branches_going`, `retiringCommit` in `retire` |
 | `Stop` | `stop`, the list of agent worktrees `retire` passes to `remove_worktrees`, with `seen` |
 | `RemoveBegin` … `RemoveEnd` | `remove_worktrees`, `holding_worktree`, `remove_agent_worktrees`, `agent_worktree_seen`, `run_teardown` |
@@ -101,15 +103,17 @@ A conversation is a task in a repository Roost keeps (`conversation_repository`)
 with a worktree and a branch there, and finishes as any task. `retarget`
 refuses one, so the model's runs with no retarget are its runs.
 
-Last confirmed against the code at commit `089089e`, with the changes to
-`safe_to_delete`, `discard_losses` and `make_task`, and `branches_going`,
-that came with this line. Since `e910487` that took in `retarget`,
-conversations, a fork's start and read, offers, and `require_finished` at a
-plan menu. Merged beside it, from "Git and the forge": `retarget` leaves
-where the task's commits count from as it was when the branch named has
-them all, which `YouRetarget` has. If `git log 089089e..HEAD -- scripts/roost_remote.py` shows
-changes to anything above, check the model against them before you trust a
-pass, and move this commit forward only once you have.
+Last confirmed against the code at commit `8f651f3`, with
+`require_offers_named`, its calls in `retire`, `discard` and `forget`, and
+the `offers` that `TASK_ACTIONS` hands them, that came with this line.
+Since `e910487` that took in `retarget`, which leaves where the task's
+commits count from as it was when the branch named has them all,
+conversations, a fork's start and read, offers, `require_finished` at a
+plan menu, and a branch that is going keeping no commit (`safe_to_delete`,
+`discard_losses`, `branches_going`). If
+`git log 8f651f3..HEAD -- scripts/roost_remote.py` shows changes to
+anything above, check the model against them before you trust a pass, and
+move this commit forward only once you have.
 
 ## Reading a failure
 
@@ -155,7 +159,8 @@ work but the commit a fork starts with, and one retarget, to `main`, your
 branch or the branch of the agent's worktree. `TaskOnHostRetargetWork.cfg`:
 the same with one unit of work, one request and one crash.
 `TaskOnHostForkOffer.cfg`: two requests and one crash, no work, one fork
-made of the task and one offer.
+made of the task and one offer, made at any moment until the task is
+stopped.
 
 Left out, by design or as covered elsewhere: creating a task (`make crash`'s
 `Create`) but for a fork's read of its source, `update`, `pr` and its
@@ -163,7 +168,8 @@ shared hold of the worktree, `resume`, the forge (`merged_pull_request_head`),
 a merge that conflicts or a hook that refuses it (each changes nothing),
 submodules, links and moved worktrees (`check_worktree`), records from older
 helpers, taking an offer (`take_offer`, in `make crash` and
-`test/formal/emacs_and_hosts`), and a second task but for the one this was
+`test/formal/emacs_and_hosts`), so that one offer, counted, stands for the
+IDs a request names, and a second task but for the one this was
 forked from: its branch, and its going, where its discard told you it
 would lose nothing. One that told you of the commit, as when this task's
 worktree was going by then, is left out: you chose. `discard` counts its
@@ -179,17 +185,7 @@ commits, as the agent's worktree's once its agent switched it to another.
 
 ## Known findings
 
-One, replayed on the real helper, and the code as it is:
-
-- **An offer made once you were asked** (`TaskOnHost.finding-offer-untold.cfg`,
-  `OffersTold`). You are asked what a discard loses, with the offers that
-  go; its agent, still at work, offers a task; you answer; the offer goes
-  with the record, never named. Retire and merge need the agent at rest, so
-  there it takes a status that lags. To replay: a dry run, `propose_task`,
-  then the discard. The fix needs Emacs to send which offers it named, and
-  the host to refuse when it has others, so it is more than this section's.
-  Its switch is `"offer once asked"` in `Also`, which the passing config
-  with offers takes on once it is fixed.
+None open.
 
 The variants keep what the model found before, each a fix undone:
 
@@ -206,3 +202,13 @@ The variants keep what the model found before, each a fix undone:
   on the other's branch for the commit only those two had, and both went.
 - `TaskOnHost.fork-not-held.cfg`: a fork read its source's worktree with no
   hold on it, as a removal began.
+- `TaskOnHost.offers-not-named.cfg` and `TaskOnHost.offers-named-once.cfg`:
+  an offer made once you were asked went with the task, unnamed. You were
+  asked what a discard loses, with the offers that go; its agent, still at
+  work, offered a task; you answered; the offer went with the record. Now
+  the request says which offers its question named, and its host refuses
+  while the record holds another (`require_offers_named`), under the
+  registry lock it keeps until the agent is stopped, after which
+  `propose_task` refuses. A merge lets that lock go while Git merges, so it
+  asks again after: the second variant leaves that out. The timing is
+  `"offer once asked"` in `Also`, on in `TaskOnHostForkOffer.cfg`.
