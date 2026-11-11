@@ -313,8 +313,9 @@ class Lifecycle(unittest.TestCase):
     def test_hostile_values_go_through_as_themselves_and_nothing_runs(self):
         """Names, prompts, branches and paths, as you type them or an issue
         brings them, reach Git, tmux and the agent intact, through creating,
-        renaming, sending to, updating, merging and discarding a task. None
-        of it runs: each part a shell or tmux would run leaves a file."""
+        renaming, sending to, retargeting, updating, merging and discarding a
+        task. None of it runs: each part a shell or tmux would run leaves a
+        file."""
         marks, place = (Path(tempfile.mkdtemp(prefix=prefix, dir="/tmp")) for prefix in ("roostmarks", "roostplace"))
         for folder in (marks, place):
             self.addCleanup(shutil.rmtree, folder, True)
@@ -436,6 +437,11 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(((repo / "hello").read_text(), roost.current_branch(str(repo))), ("changed\n", branch))
         self.assertFalse(wt.exists())
         wt = Path(second["worktree"])
+        # Told which branch it merges into by its name, which starts with a
+        # dash, and by one that names nothing.
+        self.assertFalse(self.request("retarget", id=second["id"], base=hostile("retarget"))["ok"])
+        reply = self.request("retarget", id=second["id"], base=branch)
+        self.assertEqual((reply["result"]["baseRef"], reply["result"]["integrationBranch"]), (branch, branch))
         self.assertTrue(self.request("update", id=second["id"])["ok"])
         self.assertEqual((wt / "hello").read_text(), "changed\n")
         (wt / "other").write_text("x\n")
@@ -3480,7 +3486,8 @@ class Lifecycle(unittest.TestCase):
         attached = [dict(name="a", data=base64.b64encode(b"a").decode())]
         with self.stopped_in_a_hook(task, "post-merge"):
             for action, args in (("stop", {}), ("resume", {}), ("send", dict(text="more")), ("shell", {}),
-                                 ("rename", dict(name="other")), ("attach", dict(files=attached)), ("look", {}),
+                                 ("rename", dict(name="other")), ("retarget", dict(base="main")),
+                                 ("attach", dict(files=attached)), ("look", {}),
                                  ("update", {}), ("pr", dict(title="T")), ("retire", {}), ("merge", {}),
                                  ("discard", {}), ("forget", {})):
                 with self.subTest(action=action):
@@ -4782,6 +4789,147 @@ class Lifecycle(unittest.TestCase):
                 prompted = self.create(name="docs", prompt=prompt)
                 self.assertEqual(self.request("rename", id=prompted["id"], name="manual")["result"]["task"],
                                  prompt)
+
+    def base_fields(self, task):
+        """What TASK's record says it starts from and merges into."""
+        record = roost.Store(str(self.state)).read(task["id"])
+        return tuple(record[field] for field in ("baseRef", "baseCommit", "integrationBranch", "integrationRef"))
+
+    def test_retargeting_a_task_merges_it_into_the_branch_it_was_rebased_onto(self):
+        self.git("switch", "-q", "-c", "feature-b")
+        (self.repo / "feature").write_text("feature\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "feature")
+        self.git("switch", "-q", "main")
+        main, feature = self.git("rev-parse", "main"), self.git("rev-parse", "feature-b")
+        # Started from main, where it should have started from feature-b.
+        task = self.create(name="fix parser")
+        self.assertEqual(self.base_fields(task), ("main", main, "main", "refs/heads/main"))
+        self.commit_in(task)
+        wt = Path(task["worktree"])
+        self.git("rebase", "-q", "feature-b", cwd=wt)
+        # Against main, feature-b's commit counts as the task's, and its file as changed.
+        listed = self.request("list", full=True)["result"][0]
+        self.assertEqual((listed["ahead"], listed["behind"]), (2, 0))
+        self.assertEqual(sorted(file["path"] for file in listed["files"]), ["feature", "work"])
+        reply = self.request("retarget", id=task["id"], base="feature-b")
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(self.base_fields(task), ("feature-b", feature, "feature-b", "refs/heads/feature-b"))
+        self.assertEqual(reply["result"]["integrationBranch"], "feature-b")
+        self.assertNotIn("note", reply["result"])
+        # Only its own commit and file now.
+        listed = self.request("list", full=True)["result"][0]
+        self.assertEqual((listed["ahead"], listed["behind"], listed["conflicts"]), (1, 0, []))
+        self.assertEqual([file["path"] for file in listed["files"]], ["work"])
+        # Brought up to date from feature-b, which has nothing new, not from main, which has.
+        self.git("commit", "--allow-empty", "-qm", "main moved")
+        self.assertIs(self.request("update", id=task["id"])["result"]["update"]["changed"], False)
+        # And merged into it, leaving main alone.
+        main = self.git("rev-parse", "main")
+        merged = self.request("merge", id=task["id"])
+        self.assertTrue(merged["ok"], merged)
+        self.assertEqual(self.git("rev-parse", "main"), main)
+        self.assertEqual(self.git("show", "feature-b:work"), "work")
+        self.assertEqual(self.git("ls-tree", "--name-only", "main"), "hello")
+        self.assertFalse(wt.exists())
+
+    def test_retargeting_onto_a_remote_branch_merges_into_its_local_one_and_says_what_differs(self):
+        remote = self.root / "remote.git"
+        roost.git(self.root, "clone", "-q", "--bare", str(self.repo), str(remote))
+        self.git("remote", "add", "origin", str(remote))
+        self.git("push", "-q", "origin", "main:release")
+        self.git("fetch", "-q", "origin")
+        task = self.create(name="fix parser")
+        tip = self.commit_in(task)
+        start = self.git("rev-parse", "main")
+        retarget = lambda base: self.request("retarget", id=task["id"], base=base)
+        # With no local release, Roost makes one that tracks origin's, as for a new task.
+        reply = retarget("origin/release")
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(self.base_fields(task), ("origin/release", start, "release", "refs/heads/release"))
+        self.assertEqual(self.git("rev-parse", "--abbrev-ref", "release@{upstream}"), "origin/release")
+        self.assertNotIn("note", reply["result"])
+        # A branch asked for in full is recorded by its short name.
+        self.assertTrue(retarget("refs/heads/main")["ok"])
+        self.assertEqual(self.base_fields(task), ("main", start, "main", "refs/heads/main"))
+        # Another task's branch gives the branch that task merges into, from where the two part.
+        other = self.create(name="other", base="release")
+        self.commit_in(other, "other")
+        self.assertTrue(retarget(other["branch"])["ok"])
+        self.assertEqual(self.base_fields(task), (other["branch"], start, "release", "refs/heads/release"))
+        # The local branch is where origin's was, and origin's has moved on.
+        self.git("commit", "--allow-empty", "-qm", "pushed")
+        self.git("push", "-q", "origin", "main:release")
+        self.git("fetch", "-q", "origin")
+        reply = retarget("origin/release")
+        self.assertEqual(reply["result"]["note"], "release here and origin/release are at different commits, "
+                         "and it merges into release as it is here")
+        self.assertEqual(self.base_fields(task), ("origin/release", start, "release", "refs/heads/release"))
+        # A pull request open against the old branch keeps its base, on GitHub or GitLab.
+        store = roost.Store(str(self.state))
+        for pr, said in ((dict(number=12, url="u", state="OPEN", base="release"),
+                          "its pull request still targets release, which gh pr edit 12 --base main changes"),
+                         # One just opened has only its number.
+                         (dict(number=12, url="u"),
+                          "its pull request still targets release, which gh pr edit 12 --base main changes"),
+                         (dict(number=12, url="u", state="OPEN", base="release", forge="gitlab"),
+                          "its pull request still targets release, which glab mr update 12 --target-branch main "
+                          "changes"),
+                         # Changed there already, or no longer open.
+                         (dict(number=12, url="u", state="OPEN", base="main"), None),
+                         (dict(number=12, url="u", state="MERGED", base="release"), None)):
+            with self.subTest(pr=pr):
+                self.assertTrue(retarget("release")["ok"])
+                record = store.read(task["id"])
+                record["pr"] = pr
+                store.save(record)
+                reply = retarget("main")
+                self.assertEqual(reply["result"].get("note"), said)
+                # Said once: the record keeps none.
+                self.assertNotIn("note", store.read(task["id"]))
+        self.assertEqual(self.git("rev-parse", task["branch"]), tip)
+
+    def test_retargeting_is_refused_with_no_branch_to_merge_into(self):
+        task = self.create(name="fix parser")
+        self.commit_in(task)
+        before, refs = self.base_fields(task), self.git("for-each-ref")
+        refused = lambda base: self.request("retarget", id=task["id"], base=base).get("error", "")
+        for base in ("nowhere", "origin/nowhere", "-main", "--all", " "):
+            with self.subTest(base=base):
+                self.assertEqual(refused(base), "No branch, tag or commit named %r to merge into" % base)
+        for base in ("", None, 3):
+            with self.subTest(base=base):
+                self.assertEqual(refused(base), "Name the branch the task should merge into")
+        for base in (task["branch"], "refs/heads/" + task["branch"]):
+            with self.subTest(base=base):
+                self.assertIn("is the task's own branch", refused(base))
+        self.assertEqual(self.git("for-each-ref"), refs)
+        # A branch with no commit in common.
+        orphan = self.git("commit-tree", "-m", "unrelated", self.git("rev-parse", "HEAD^{tree}"))
+        self.git("branch", "unrelated", orphan)
+        self.assertIn("have no commit in common", refused("unrelated"))
+        # Its branch gone, as after you deleted it.
+        with patch.object(roost, "branch_tip", return_value=None):
+            self.assertIn("no longer exists", refused("main"))
+        # A tag is no branch: it gives the primary checkout's, which is on none.
+        self.git("tag", "v1")
+        self.git("checkout", "-q", "--detach")
+        self.assertIn("v1 names no branch to merge into", refused("v1"))
+        self.git("checkout", "-q", "main")
+        # Refused, the task merges where it did.
+        self.assertEqual(self.base_fields(task), before)
+        # On a branch again, the tag gives that.
+        self.assertTrue(self.request("retarget", id=task["id"], base="v1")["ok"])
+        self.assertEqual(self.base_fields(task), ("v1", before[1], "main", "refs/heads/main"))
+        # Its own branch as its remote has it.
+        remote = self.root / "remote.git"
+        roost.git(self.root, "clone", "-q", "--bare", str(self.repo), str(remote))
+        self.git("remote", "add", "origin", str(remote))
+        self.git("push", "-q", "origin", task["branch"])
+        self.assertIn("is the task's own branch", refused("origin/" + task["branch"]))
+        # A conversation is in no project.
+        conversation = self.create(name="Conversation 09:15", directory="/nowhere", conversation=True)
+        self.assertIn("is a conversation", self.request("retarget", id=conversation["id"], base="main")["error"])
 
     def test_seen_is_recorded_for_every_emacs_until_the_next_event(self):
         task = self.create()

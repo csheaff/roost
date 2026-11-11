@@ -620,6 +620,7 @@ counted once you stop and resume it (`K`, then `s`).
 | `e` | `roost-send` | Paste a prompt into the agent and press Enter |
 | `i` | `roost-task-info` | The task's next step, prompt, your latest prompt, changes, checks, open review threads, the agent's latest reply and details |
 | `R` | `roost-rename` | Rename the task, in Roost, its tab or perspective, and its agent's tmux window; its branch and worktree keep the name it started with |
+| `B` | `roost-retarget` | Change the branch the task starts from and merges into, as after you rebased its branch onto another: `m`, `u` and its counts follow; no commit moves, and a pull request already open keeps its base |
 | `l` | `roost-switch-task` | Choose a task by name, waiting tasks first |
 | `/` | `roost-search` | Find messages in your tasks' conversations, retired tasks' too; `RET` opens a live task, `TAB` shows more of a message (its first 1,500 characters) |
 | `b` | `roost-sidebar-mode` | Keep the task list at the left of the frame |
@@ -748,7 +749,9 @@ branch the task starts from, and the draft says so next to the starting ref
 gives the local branch of its name, which Roost makes to track it if there
 isn't one, as `git switch` would. A task's branch, as when you fork one with
 `C-u c`, gives that task's integration branch. With no starting ref, or a
-tag or commit, it is the branch the primary checkout has checked out.
+tag or commit, it is the branch the primary checkout has checked out. `B`
+changes it later, by the same rules, for a task started from the wrong
+branch.
 
 In the pull request draft: `C-c C-c` creates the pull request (`C-u` as a draft)
 and `C-c C-k` cancels, as do the Create, Create draft and Cancel buttons in its
