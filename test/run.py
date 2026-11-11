@@ -266,6 +266,10 @@ def main():
     if not parts:
         print("Nothing to run.")
         return 0
+    if args.k and not failures and not len(counts["ert"][0]) and not counts["python"][0]:
+        # An Emacs regexp for the ERT tests: \\| between alternatives.
+        print("No test matches %s" % args.k)
+        return 1
     # Only a whole suite, every case of it, vouches for what it read.
     if not args.k and args.sample == 1 and passed_file():
         now = passed()
