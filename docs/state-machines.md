@@ -2551,14 +2551,12 @@ Checked: `random` is seeded differently at each start, so IDs don't repeat acros
 restarts. A refused create records nothing, so retrying with a fixed base works.
 An attempt's ID is two hex digits longer than a draft's, so it is no other draft's.
 
-Open: a draft that has named another attempt forgets its ID (I4), and what it asks for
+A draft that has named another attempt forgets its ID (I4), and what it asks for
 next is another task, as its note says. Changed back to what it said before, that
 makes the same attempt at the same words a second time, and its own task twice if the
 request it gave up on is made after all. Roost named a task of the earlier `C-c C-c`
-first, as it does for a draft of one task; the model's `AtMostOnce` counts only the
-draft's own task as said, and fails there, at three asks
-(`NewTaskAttempts.finding-told-of-another-attempt.cfg`). Not decided: the rule, or what
-such a draft does next.
+first, as it does for a draft of one task, so that is a second ask of yours, not a
+retry: the model's `AtMostOnce` counts as said any task of that `C-c C-c`.
 
 ### The send ID
 

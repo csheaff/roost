@@ -41,8 +41,9 @@ The rules, each an INVARIANT, from the invariants in `docs/state-machines.md`:
   asked for only after Roost said the first was made, or after you moved
   the draft and asked from another project (which the creation ID allows).
   Of an attempt after a draft's first, the same attempt at the same words,
-  after Roost said the draft's own task of that C-c C-c was made: that is
-  the one a draft names.
+  after Roost said a task of that C-c C-c was made: its own, which it
+  closes for, or whichever its host made from what it said before, which
+  it names.
 - `AttemptsAtOnePrompt`: the tasks one ID makes, a draft's attempts, are each
   made from the same words.
 - `FlagSaysCreating`, `FlagSaysSending`: "Creating…" or "Sending" only while
@@ -165,9 +166,9 @@ others, 8 kept: 31.8 million states, 13 minutes; NewTaskAttempts 3
 projects, 3 versions, 2 asks, 3 held: 3.1 million states, 2.1 minutes, and
 with three asks of a draft that says one thing, 2 projects, 1 held: 2.1
 million states, 2.1 minutes), each on one worker. Two attempts with three
-asks of a draft you change break `AtMostOnce`, which finding 6 keeps at
-small bounds; with that rule reading as finding 6 says it might, they pass
-there (840 thousand states, half a minute).
+asks of a draft you change pass too, at 1 project, 2 versions, 1 held (840
+thousand states, a minute), since `AtMostOnce` counts as said any task of
+the earlier C-c C-c that the draft named.
 
 Scope switches, each turned on by one finding or known config:
 `SubmitQuitsQuestion` (C-c C-c with a question left open) and `EditBack` (the
@@ -242,26 +243,6 @@ Each is a config here that fails as named.
    3. You add a line and C-c C-c: another text, ID2. The agent gets P, then
       P and the line. Rests on sshd leaving the helper running, which
       Checked and found sound lists as not proved.
-6. **A task asked for again once Roost named another attempt**
-   (`NewTaskAttempts.finding-told-of-another-attempt.cfg`, `AtMostOnce`),
-   at three asks, where `NewTaskAttempts.cfg` checks two. It came with the
-   fix of finding 3, which lets a draft name an attempt that is not its own.
-   1. A draft that makes two attempts says P. C-c C-c: attempt 2 and its own
-      task, with the draft's ID. No reply comes to its own request.
-   2. You change the draft to Q and C-c C-c: the same IDs. Its host makes
-      attempt 2 from P, from the first request, and answers the draft's own,
-      asked for with Q, with that attempt. The draft says "Made fix 2 from
-      what you sent before", and forgets its ID.
-   3. You change it back to P and C-c C-c, which makes another task, as the
-      note says: a new ID. Its host makes attempt 2 from P a second time.
-      Or the first request for the draft's own task, still on its way, is
-      made from P, and then the new one is too.
-   Roost named a task of the earlier C-c C-c before you asked again, as it
-   does of a draft that makes one task; the rule counts only the draft's
-   own (`OwnOf`), which was the one a draft named. If `OwnOf` is every task
-   of that C-c C-c, which says the same of the code before the fix, three
-   asks pass at this config's bounds. Whether the rule changes, or what the
-   draft does once it has named another attempt, is not decided.
 
 Known and kept as a config: `PromptDraft.known-kill-after-paste.cfg`, the
 send ID's I1 ("a kill between the two pastes again"); and

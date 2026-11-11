@@ -446,13 +446,16 @@ DraftNeverLost ==
 \* asked to another project and asked there.
 MovedBetween(a, b) == \E i \in Reqs : a < i /\ i <= b /\ reqs[i].what[1] # reqs[a].what[1]
 
-\* The draft's own task of the C-c C-c that task J is of: J itself, or,
-\* for an attempt after the first, the one the draft closes for or names.
-OwnOf(j) == {k \in Tasks : tasks[k].cid = tasks[j].cid /\ tasks[k].n = 1}
+\* The tasks of the C-c C-c that task J is of: the draft closes for its
+\* own, or names whichever of them its host made from what it said before
+\* ("Made fix 2 from what you sent before"), an attempt after the first
+\* too since `made_from_other_words`.  Before that only its own was ever
+\* named, and this read the same.
+OwnOf(j) == {k \in Tasks : tasks[k].cid = tasks[j].cid}
 
 \* A retry after a lost reply makes no second task: a task made from the
 \* same words in the same project as an earlier one, and the same attempt
-\* at them, was asked for after Roost said the earlier one's own task was
+\* at them, was asked for after Roost said a task of the earlier C-c C-c was
 \* made, or after you moved the draft to another project and asked there,
 \* which the creation ID's table allows ("new ID; a task from the old one
 \* stays"), back again too.  Earlier and after are as you asked, whichever
