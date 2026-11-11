@@ -61,7 +61,8 @@ what they found, under "Found by the models".
   fake Codex that keeps a rollout: no Codex was signed in here, so no
   turn in Plan mode ran live.
 - `make test compile` after all of it: 618 ERT tests and 573 Python
-  tests pass.
+  tests pass. `make formal`: 97 configs in the five sections, every
+  model as expected, in twenty-five minutes on four cores.
 - Not done: `make crash` whole. The scenarios for retiring, discarding,
   retargeting and making a fork were run alone, with only the lock file
   Git 2.43 leaves, as on `main`.
