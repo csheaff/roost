@@ -55,7 +55,7 @@ ENDED = ("stopped", "exited", "failed", "crashed")
 TRANSIENT = ("live", "diff", "dirty", "files", "size", "ahead", "behind", "update", "worktreeMissing",
              "prStatus", "unpushed", "lastMessage", "gitStamp", "agentWork", "merging", "landed", "conflicts",
              "sinceLooked", "teardownFailure", "teardownOutput", "worktreePr", "worktreeHead", "branchTip",
-             "leftBehind")
+             "leftBehind", "note")
 LAST_MESSAGE_TAIL = 256 * 1024
 LAST_MESSAGE_LIMIT = 2000
 INTERRUPT_TAIL = 64 * 1024
@@ -5696,6 +5696,73 @@ def update(store, task):
     return task
 
 
+def retarget(store, task, base):
+    """Have TASK start from BASE and merge into its branch from now on, as
+    when it started from the wrong branch and its own has since been
+    rebased onto the right one. BASE names a branch as a new task's start
+    does (`integration_for`): a remote-tracking branch gives the local one
+    of its name, and another task's branch that task's. What `m` merges
+    into, `u` merges in and its commits count from all follow. Only the
+    record changes: no commit moves, and a pull request open against the
+    old branch stays as it is, which the reply's `note` says, as it does
+    that the local branch is not where its remote one is."""
+    if task.get("conversation") is True:
+        raise RoostError("%s is a conversation, in no project, with no branch to merge into" % task["name"])
+    base = text(base)
+    if not base:
+        raise RoostError("Name the branch the task should merge into")
+    repo, branch = task["repo"], task["branch"]
+    # A branch before anything else of its name, by its full name: you chose
+    # from the branches, a tag of the same name would otherwise shadow it,
+    # and Git takes a name that starts with - for an option.
+    ref = next((full for full in ("refs/heads/" + base, "refs/remotes/" + base)
+                if git(repo, "show-ref", "--verify", "--quiet", full, check=False).returncode == 0), base)
+    resolved = None if ref.startswith("-") else git(repo, "rev-parse", "--verify", "--quiet", ref + "^{commit}",
+                                                    check=False)
+    if resolved is None or resolved.returncode:
+        raise RoostError("No branch, tag or commit named %r to merge into" % base)
+    commit = resolved.stdout.strip()
+    full = git(repo, "rev-parse", "--symbolic-full-name", ref, check=False).stdout.strip()
+    own = "%s is the task's own branch; name the branch it should merge into" % base
+    if full == "refs/heads/" + branch:
+        raise RoostError(own)
+    tip = branch_tip(task)
+    if not tip:
+        raise RoostError("The task's branch %s no longer exists; there is nothing to merge" % branch)
+    start = git(repo, "merge-base", tip, commit, check=False).stdout.strip()
+    if not start:
+        raise RoostError("%s and the task's branch %s have no commit in common, so neither merges into the other"
+                         % (base, branch))
+    # Last, as it makes the local branch of a remote one that has none.
+    integration = integration_for(store, repo, repo, ref, current_branch(repo))
+    if not integration:
+        raise RoostError("%s names no branch to merge into, and the primary checkout %s has none checked out; "
+                         "name a branch" % (base, repo))
+    # As its own remote-tracking branch gives.
+    if integration == branch:
+        raise RoostError(own)
+    before = task.get("integrationBranch")
+    task.update(baseRef=base[len("refs/heads/"):] if base.startswith("refs/heads/") else base, baseCommit=start,
+                integrationBranch=integration, integrationRef="refs/heads/" + integration)
+    store.save(task)
+    notes = []
+    if full.startswith("refs/remotes/") and branch_tip(task, integration) != commit:
+        notes.append("%s here and %s are at different commits, and it merges into %s as it is here"
+                     % (integration, base, integration))
+    pr = recorded_pull_request(task)
+    # One just opened has no state yet, nor a base.
+    target = pr.get("base") or before
+    if pr and pr.get("state") in (None, "OPEN") and target != integration:
+        notes.append("its pull request still targets %s, which %s changes"
+                     % (target or "the branch it was opened against",
+                        ("glab mr update %s --target-branch %s" if pr.get("forge") == "gitlab"
+                         else "gh pr edit %s --base %s") % (pr["number"], shlex.quote(integration))))
+    if notes:
+        # For Emacs to say once.
+        task["note"] = "; ".join(notes)
+    return task
+
+
 def discard_losses(task, branch_exists, worktree, worktree_exists, work):
     """What discarding a task would lose, as counts: commits on no other
     branch, commits in submodules on no remote of theirs, and uncommitted
@@ -7751,6 +7818,7 @@ TASK_ACTIONS = {
     "seen": lambda store, task, request: seen(store, task, request.get("updatedAt")),
     "turn": lambda store, task, request: turn(store, task, text(request.get("turn"))),
     "rename": lambda store, task, request: rename(store, task, request.get("name")),
+    "retarget": lambda store, task, request: retarget(store, task, request.get("base")),
     "retire": lambda store, task, request: retire(store, task, merged_head=request.get("mergedHead"),
                                                   teardown=text(request.get("teardown")),
                                                   still_open=request.get("stillOpen") is True),
@@ -7908,7 +7976,8 @@ def rpc(request):
 # which goes when its time is up; nor `create`, which has its eleven minutes,
 # and which a kill cuts short cleanly: `settle_creation` undoes it; nor `send`,
 # whose prompt is better not sent than sent long after you stopped waiting.
-DETACHED = ("retire", "merge", "discard", "forget", "update", "pr", "resume", "stop", "rename", "shell", "attach")
+DETACHED = ("retire", "merge", "discard", "forget", "update", "pr", "resume", "stop", "rename", "retarget", "shell",
+            "attach")
 
 
 def detach():

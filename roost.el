@@ -1199,7 +1199,7 @@ A reply to create read before then can come after.")
 (defun roost--cache-task (host task)
   "Cache TASK from HOST and notify only on attention transitions."
   (setf (alist-get 'host task) host)
-  (dolist (field '(pushed alreadySent alreadyMade))
+  (dolist (field '(pushed alreadySent alreadyMade note))
     (setq task (assq-delete-all field task)))
   (when-let* ((old (gethash (roost--key task) roost--tasks)))
     ;; Looks and the agent's events move apart: the newer of each counts.
@@ -4479,7 +4479,9 @@ terminal the action ended closes."
              (roost--discard-terminal terminals)
              (cl-incf (gethash host roost--revisions 0))
              ;; `pushed' is transient: the callback sees it, the cache does not.
+             ;; So is `note', what there is to say of a change of branch.
              (let ((pushed (assq 'pushed updated))
+                   (note (assq 'note updated))
                    (already (alist-get 'alreadySent updated))
                    (torn (alist-get 'teardownFailure updated))
                    (output (alist-get 'teardownOutput updated))
@@ -4490,7 +4492,7 @@ terminal the action ended closes."
                (when-let* ((said (cdr (assoc action roost--action-messages))))
                  (message (if already "Already sent to %s" said) (roost--field task 'name)))
                (when callback
-                 (funcall callback (if pushed (cons pushed updated) updated)))
+                 (funcall callback (append (delq nil (list pushed note)) updated)))
                (when left
                  (message "%s" (string-join (delq nil (list (current-message)
                                                             (concat "left in place: " (string-join left ", "))))
@@ -7959,6 +7961,44 @@ Its branch and worktree keep the name it started with."
                          ;; Caching the reply renames its workspace and panel.
                          (lambda (_) (message "Renamed %s to %s" old name)))))))
 
+;;;###autoload
+(defun roost-retarget (&optional task base)
+  "Change the branch TASK starts from and merges into to BASE.
+As when it started from the wrong branch and you have since rebased its
+own onto the right one: `m' then merges it there, `u' merges that
+branch into it, and its commits and changes count from it.  A
+remote-tracking branch, such as origin/main, gives the local branch of
+its name, as for a new task.  No commit moves, and a pull request
+already open keeps its base, which Roost says."
+  (interactive)
+  (setq task (roost--choose task))
+  (roost--refuse-conversation task "has no branch to merge into")
+  (let* ((name (roost--field task 'name))
+         (now (roost--field task 'integrationBranch))
+         (base (string-trim
+                (or base
+                    (completing-read
+                     (format "%s merges into %s; change to: " name
+                             (if (member now '(nil "")) "no branch" now))
+                     ;; Git runs on the task's host.  Not its own branch,
+                     ;; which merges into no other.
+                     (remove (roost--field task 'branch)
+                             (when (roost--field task 'repo)
+                               (split-string (or (roost--git-in (roost--project-directory task) "for-each-ref"
+                                                                "--format=%(refname:short)"
+                                                                "refs/heads" "refs/remotes")
+                                                 "")
+                                             "\n" t))))))))
+    (when (string-empty-p base)
+      (user-error "Name the branch %s should merge into" name))
+    (roost--act task "retarget" `((base . ,base))
+                (lambda (updated)
+                  (message "%s now merges into %s%s" name (roost--field updated 'integrationBranch)
+                           (if-let* ((note (roost--field updated 'note))) (concat "; " note) ""))
+                  ;; What it is ahead and behind by, and conflicts with, as
+                  ;; measured against the new branch.
+                  (roost--refresh-host (roost--field updated 'host) nil (list (roost--field updated 'id)))))))
+
 (defun roost--landed (task &optional measured)
   "Whether TASK's commits are all merged, as its host last measured.
 That is, in its integration branch or a pull request GitHub merged at
@@ -9618,7 +9658,8 @@ there are no tasks at all."
     ["Stop…" roost-stop :active (roost--menu-applies-p 'roost-stop)]
     ["Resume" roost-resume :active (roost--menu-applies-p 'roost-resume)]
     ["Details" roost-task-info :active (roost--menu-applies-p 'roost-task-info)]
-    ["Rename…" roost-rename :active (roost--menu-applies-p 'roost-rename)])
+    ["Rename…" roost-rename :active (roost--menu-applies-p 'roost-rename)]
+    ["Branch to merge into…" roost-retarget :active (roost--menu-applies-p 'roost-retarget)])
   "Menu items acting on the task at point.")
 
 (easy-menu-define roost-task-menu nil
@@ -9660,7 +9701,7 @@ With no task at all, none of the task commands do."
 ;; `roost--stop-inapt-p': older transient doesn't say which entry it asks about.
 (dolist (command '(roost-open-task roost-shell roost-files roost-send roost-task-info roost-review
                    roost-diff roost-mark-looked roost-update roost-pr roost-merge-retire roost-retire roost-forget
-                   roost-stop roost-resume roost-goto-note roost-rename))
+                   roost-stop roost-resume roost-goto-note roost-rename roost-retarget))
   (defalias (intern (format "roost--%s-inapt-p" (string-remove-prefix "roost-" (symbol-name command))))
     (lambda () (roost--dispatch-inapt-p command))
     (format "Whether `%s' does not apply to the task of `roost-dispatch'." command)))
@@ -9697,6 +9738,7 @@ Unknown Git statistics count as making sense."
       ;; Retires the task, or discards work merged nowhere.
       ('roost-retire (and (not active) (not (roost--agent-work-left task))))
       ('roost-goto-note (and worktree (roost--task-notes task) t))
+      ('roost-retarget (not (roost--conversation-p task)))
       (_ t))))
 
 (defun roost--next-step (task &optional menu beside)
@@ -9776,7 +9818,8 @@ terminal or worktree, or ask which task."
     ("f" "Files" roost-files :inapt-if roost--files-inapt-p)
     ("e" "Send prompt" roost-send :inapt-if roost--send-inapt-p)
     ("i" "Details" roost-task-info :inapt-if roost--task-info-inapt-p)
-    ("R" "Rename" roost-rename :inapt-if roost--rename-inapt-p)]
+    ("R" "Rename" roost-rename :inapt-if roost--rename-inapt-p)
+    ("B" "Branch to merge into" roost-retarget :inapt-if roost--retarget-inapt-p)]
    ["Review"
     ("r" "Magit" roost-review :inapt-if roost--review-inapt-p)
     ("D" "Diff" roost-diff :inapt-if roost--diff-inapt-p)
@@ -9823,6 +9866,7 @@ terminal or worktree, or ask which task."
   "X" #'roost-forget
   "u" #'roost-update
   "R" #'roost-rename
+  "B" #'roost-retarget
   "I" #'roost-task-panel-mode
   ;; Commands beyond this task, as in the dashboard and sidebar.
   "n" #'roost-next-waiting
@@ -10374,14 +10418,16 @@ EVIDENCE means results stand above it, and its heading says whose it is."
 (defun roost--insert-details (task width)
   "Insert where TASK's work lives, in WIDTH columns."
   (let ((base (roost--field task 'baseRef))
-        (integration (roost--field task 'integrationBranch)))
+        (integration (roost--field task 'integrationBranch))
+        (retarget (propertize "B" 'face 'roost-key)))
     (roost--insert-heading "Details")
     (dolist (entry `(,@(unless (roost--conversation-p task)
                          ;; A conversation's branch is Roost's own, with nothing to merge.
                          `(("Branch" . ,(format "%s, from %s%s%s" (roost--field task 'branch) base
+                                          ;; Where you see that it is the wrong one.
                                           (if (and integration (not (string-empty-p integration)))
-                                              (format ", merges into %s" integration)
-                                            "")
+                                              (format ", merges into %s (%s changes that)" integration retarget)
+                                            (format " (%s gives it a branch to merge into)" retarget))
                                           (if-let* ((other (roost--other-branch task)))
                                               (format "; the worktree is on %s" (roost--branch-label other))
                                             "")))))
@@ -10523,6 +10569,7 @@ are told apart."
   "X" #'roost-forget
   "u" #'roost-update
   "R" #'roost-rename
+  "B" #'roost-retarget
   "n" #'roost-next-waiting
   "/" #'roost-search
   "w" #'roost-workload

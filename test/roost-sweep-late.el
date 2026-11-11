@@ -167,6 +167,9 @@ what its host said when it read it.")
       ("resume" (roost-sweep-late--became record "starting" '(live . t)))
       ("rename" (let ((name (cons 'name (alist-get 'name request))))
                   (cons name (cons '(renamedAt . "2026-11-01T10:05:00+00:00") (assq-delete-all 'name record)))))
+      ("retarget" (let ((base (alist-get 'base request)))
+                    (append `((baseRef . ,base) (integrationBranch . ,base))
+                            (assq-delete-all 'baseRef (assq-delete-all 'integrationBranch record)))))
       ("retire" (roost-sweep-late--became record "retired"))
       ("forget" (roost-sweep-late--became record "forgotten"))
       ("merge" (roost-sweep-late--became record "retired" '(retiringCommit . "c9")))
@@ -209,7 +212,7 @@ SUCCESS and FAILURE take it when it comes.  Its host reads the world now."
       ("create" (unless (assq 'alreadyMade reply)
                   (setq roost-sweep-late--records
                         (append roost-sweep-late--records (list (cons (alist-get 'id reply) reply))))))
-      ((or "stop" "resume" "rename" "shell" "pr" "take-offer")
+      ((or "stop" "resume" "rename" "retarget" "shell" "pr" "take-offer")
        (when (assoc id roost-sweep-late--records)
          (setf (alist-get id roost-sweep-late--records nil nil #'equal) (assq-delete-all 'pushed reply)))))))
 
@@ -875,6 +878,10 @@ dashboard the command starts from."
     (rename
      :start ,(lambda () (roost-rename (roost-sweep-late--mine) "renamed"))
      :action "rename" :refusals ((,roost-sweep-late--retired)))
+    (retarget
+     :start ,(lambda () (roost-retarget (roost-sweep-late--mine) "release"))
+     :action "retarget"
+     :refusals ((,roost-sweep-late--retired) ("No branch, tag or commit named 'release' to merge into")))
     (retire
      :fields ((ahead . 0))
      :start ,(lambda () (roost-retire (roost-sweep-late--mine)))
@@ -1181,6 +1188,7 @@ elsewhere."
                    :keys ,(lambda () (concat (locate-library "roost.el") "\r")))
     (pull-request-cancel :origin pr-draft :ask ,#'roost-pr-cancel :keys "no\r")
     (rename :ask ,(lambda () (roost-rename (roost-sweep-late--mine))) :keys "x\r")
+    (retarget :ask ,(lambda () (roost-retarget (roost-sweep-late--mine))) :keys "release\r")
     (stop :ask ,(lambda () (roost-stop (roost-sweep-late--mine))) :keys "y\r")
     (merge :ask ,(lambda () (roost-merge-retire (roost-sweep-late--mine))) :keys "y\r")
     (retire :ask ,(lambda () (roost-retire (roost-sweep-late--mine))) :keys "y\r")
@@ -1479,7 +1487,7 @@ Return their problems, each (TEXT PLACE...), as `roost-sweep--report' takes them
   (roost-sweep--report
    (roost-sweep-late--question-sweep
     (append roost-sweep-late--drafts-pending
-            '(open retire merge update update-conflicts stop rename resume poll-full notice))
+            '(open retire merge update update-conflicts stop rename retarget resume poll-full notice))
     roost-sweep-late--questions)))
 
 (defconst roost-sweep-late--breakages

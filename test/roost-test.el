@@ -4698,7 +4698,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
        (goto-char (point-min))
        (search-forward "These are feat's")
        (should (memq 'roost-status-permission (ensure-list (get-text-property (point) 'face))))
-       (should (string-search "merges into main; the worktree is on feat\n" (buffer-string))))
+       (should (string-search "merges into main (B changes that); the worktree is on feat\n" (buffer-string))))
      ;; Stopped, the next step resumes it: the line beside its changes
      ;; says how to finish it instead.
      (setq task (funcall on "HEAD" '(status . "stopped") '(live)))
@@ -11248,6 +11248,76 @@ field (FIELD . :none) is left out."
        (when-let* ((panel (get-buffer "*roost: login fix*"))) (kill-buffer panel))
        (while (cdr (roost--tabs)) (tab-bar-close-tab))
        (unless original-tab-bar-mode (tab-bar-mode -1))))))
+
+(ert-deftest roost-retarget-changes-the-branch-a-task-merges-into ()
+  ;; Started from the wrong branch, a task merged into it for good.
+  (roost-test--isolated
+   (let* ((task (roost--cache-task "dev" (append '((repo . "/home/user/ledger") (baseRef . "main")
+                                                   (integrationBranch . "main"))
+                                                 (roost-test--task))))
+          (note nil)
+          sent listed asked refreshed said)
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (_host action parameters success _failure)
+                  (push (cons action parameters) sent)
+                  (let ((base (alist-get 'base parameters)))
+                    (funcall success (append `((repo . "/home/user/ledger") (baseRef . ,base)
+                                               (integrationBranch . ,(string-remove-prefix "origin/" base))
+                                               ,@(when note `((note . ,note))))
+                                             (roost-test--task))))))
+               ((symbol-function 'roost--git-in)
+                (lambda (directory &rest args)
+                  (push (cons directory args) listed)
+                  "codex/roost/fix-auth-123456\nfeature-b\nmain\norigin/feature-b\n"))
+               ((symbol-function 'completing-read)
+                (lambda (prompt collection &rest _)
+                  (push (cons prompt collection) asked)
+                  " feature-b "))
+               ((symbol-function 'roost--refresh-host) (lambda (&rest args) (push args refreshed)))
+               ((symbol-function 'message)
+                (lambda (format &rest args) (setq said (apply #'format format args)))))
+       (roost-retarget task)
+       ;; Asked among its project's branches, on its host, but for its own.
+       (should (equal listed `((,(roost--project-directory task) "for-each-ref" "--format=%(refname:short)"
+                                "refs/heads" "refs/remotes"))))
+       (should (equal asked '(("fix auth merges into main; change to: " "feature-b" "main" "origin/feature-b"))))
+       (should (equal sent '(("retarget" (id . "0123456789abcdef") (base . "feature-b")))))
+       (should (equal said "fix auth now merges into feature-b"))
+       ;; Its panel says so at once, and what it counts from that branch is
+       ;; measured again.
+       (should (equal (roost--field (gethash (roost--key task) roost--tasks) 'integrationBranch) "feature-b"))
+       (should (equal refreshed '(("dev" nil ("0123456789abcdef")))))
+       (with-temp-buffer
+         (roost-task-info-mode)
+         (setq roost--buffer-task-key (roost--key task))
+         (roost--render-task-info)
+         (should (string-search "from feature-b, merges into feature-b (B changes that)\n" (buffer-string)))
+         ;; A click there asks, as the key does.
+         (goto-char (point-max))
+         (search-backward "changes that")
+         (should (eq (get-text-property (point) 'roost-key-command) #'roost-retarget)))
+       ;; Named, it asks nothing.  What its host adds is said once, and not kept.
+       (setq asked nil
+             note "its pull request still targets main, which gh pr edit 12 --base feature-b changes")
+       (roost-retarget task "origin/feature-b")
+       (should-not asked)
+       (should (equal (car sent) '("retarget" (id . "0123456789abcdef") (base . "origin/feature-b"))))
+       (should (equal said (concat "fix auth now merges into feature-b; " note)))
+       (should-not (assq 'note (gethash (roost--key task) roost--tasks)))
+       ;; No branch named asks nothing of its host, nor does a conversation,
+       ;; which merges nowhere.
+       (setq sent nil)
+       (should-error (roost-retarget task " ") :type 'user-error)
+       (let ((conversation (roost--cache-task "dev" (append '((conversation . t))
+                                                            (roost-test--task "1111111111111111")))))
+         (should-error (roost-retarget conversation "main") :type 'user-error)
+         (should-not (roost--action-applies-p conversation 'roost-retarget)))
+       (should-not sent)
+       (should (roost--action-applies-p task 'roost-retarget))
+       ;; On B wherever R renames, and in the menu.
+       (dolist (map (list roost-dashboard-mode-map roost-task-info-mode-map roost-sidebar-list-mode-map))
+         (should (eq (keymap-lookup map "B") #'roost-retarget)))
+       (should (eq (cdr (assq 'roost-retarget (roost-test--task-menu-suffixes))) 'roost--retarget-inapt-p))))))
 
 (ert-deftest roost-a-rename-from-another-emacs-renames-the-tab-and-panels ()
   (roost-test--isolated

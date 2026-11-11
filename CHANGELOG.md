@@ -4,6 +4,18 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- `B` changes the branch a task starts from and merges into
+  (`roost-retarget`, "Branch to merge into" in the `h` menu). A task
+  started from the wrong branch kept merging into it, even once you had
+  rebased its own branch onto the right one. Now `B`, in the dashboard,
+  sidebar or task panel, asks for a branch of its project, and from then
+  on `m` merges the task there, `u` brings that branch into it, and its
+  commits, changes and conflicts count from it. A remote-tracking branch,
+  such as `origin/main`, gives the local branch of its name, as for a new
+  task, and Roost says so when the two are at different commits. No commit
+  moves: rebase the task's branch yourself. A pull request already open
+  keeps its base, and Roost names the `gh pr edit --base` that changes it.
+  The panel's Branch line names the key. Nothing to do when upgrading.
 - A conversation plans work in your projects. Ask the agent in one to plan
   a piece of work, and each task it would split it into waits, dim, under
   the conversation, naming its project; `RET` or a click opens it as a new
