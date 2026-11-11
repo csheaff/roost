@@ -105,7 +105,9 @@ Last confirmed against the code at commit `089089e`, with the changes to
 `safe_to_delete`, `discard_losses` and `make_task`, and `branches_going`,
 that came with this line. Since `e910487` that took in `retarget`,
 conversations, a fork's start and read, offers, and `require_finished` at a
-plan menu. If `git log 089089e..HEAD -- scripts/roost_remote.py` shows
+plan menu. Merged beside it, from "Git and the forge": `retarget` leaves
+where the task's commits count from as it was when the branch named has
+them all, which `YouRetarget` has. If `git log 089089e..HEAD -- scripts/roost_remote.py` shows
 changes to anything above, check the model against them before you trust a
 pass, and move this commit forward only once you have.
 

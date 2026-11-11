@@ -216,4 +216,8 @@ Last confirmed at `089089e`, with the changes to `retarget` and
 and `B` (the record's branch and start can change, in both models, and `x`
 has its steps), conversations, attempts and forks (no new steps: see
 above), and `roost--cache-task` and `roost--apply-snapshot` noting tasks
-that went, which the models don't read.
+that went, which the models don't read. Merged beside it, from the other
+sections: `safe_to_delete` leaves out branches that are going
+(`branches_going`, and an agent's own worktree's), which only refuses more
+than the models' `SafeToDelete`; and `retarget` stamps `retargetedAt`, which
+nothing here reads.

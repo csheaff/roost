@@ -151,6 +151,29 @@ branch rules block reading `to merge` is fixed under [#227](https://github.com/c
 `roost-a-pull-request-github-holds-up-isnt-to-merge`. The rest are under
 [Known and not fixed](#known-and-not-fixed).
 
+### Found by the models, 2026-11-11
+
+The models of each section, brought in line with offers, conversations, forks,
+several attempts and `B`, found these. Each was replayed on the real code before
+it was fixed or left. A finding left open has a config that fails on purpose
+until it is fixed, which its section's skill lists.
+
+| Finding | Sev | What goes wrong | Machine | Status |
+| --- | --- | --- | --- | --- |
+| LC-7 | S1 | `x` takes the branch Claude made for an agent's own worktree as the one keeping the task's commits, and deletes both: after `B` names it, or for a fork that never committed once its source is gone | [Finishing a task](#finishing-a-task) | Fixed, `test_a_branch_that_goes_with_the_task_keeps_none_of_its_commits` |
+| LC-8 | S1 | A fork and the task it was made from, finished at once, each count on the other's branch, and the commit only they have goes with both | [Finishing a task](#finishing-a-task) | Fixed, `test_two_tasks_that_share_a_commit_never_both_go_on_the_others_word` |
+| FORGE-13 | S1 | `B` naming what has all the task's commits, as a tag at its tip, makes it read as a task that never committed: `x` retires it with its commit merged nowhere, and one merged there reads as not merged | [Landed](#landed) | Fixed, `test_retargeting_onto_a_branch_that_has_the_tasks_commits_leaves_them_merged` |
+| REQUESTS-9 | S3 | A reply read before `B` and arriving after brings back the old branch: `m` asks about one branch, and the host merges into the other | [Cached task](#cached-task) | Fixed, `roost-a-reply-read-before-the-branch-changed-keeps-the-new-one`, `test_retargeting_is_no_event_of_the_agents_and_says_when_it_was` |
+| STATUS-10 | S3 | Codex at "Implement this plan?" reads `ready`: a prompt sent is dropped, and the Enter after it implements the plan | [Agent status](#agent-status) | Fixed, [#239](https://github.com/csheaff/roost/issues/239), `test_codex_asks_about_its_plan_once_a_plan_mode_turn_ends` |
+| STATUS-11 | S3 | A subagent's request, with the main agent's beside it, is hidden once the main agent's is answered and its turn ends | [A task's request](#a-tasks-request) | Fixed, `test_a_subagents_request_among_several_outlasts_the_main_agents_turn` |
+| LC-9 | S3 | A fork made as its source is retired or discarded starts from a worktree half removed | [Worktree lock](#worktree-lock) | Fixed, `test_a_task_stays_while_a_fork_reads_where_its_work_stands` |
+| VIEWS-14 | S3 | A fork's draft closes for a fork made the other way, with its task's conversation or without, when `C-c C-f` is pressed as it is created | [The new task draft](#the-new-task-draft) | Fixed, `roost-a-fork-given-a-new-conversation-stays-for-a-task-that-goes-on-with-the-old` |
+| FORGE-14 | S4 | A branch named in another Emacs, or by a `B` whose reply was lost, goes unmeasured while Git's stamp stays, and the row keeps saying "merged" | [Task measurement](#task-measurement) | Fixed, `roost-a-branch-to-merge-into-named-elsewhere-is-measured-against` |
+| FORGE-15 | S3 | After `B` makes a commit of the task's own its start, by naming what has some of its commits, a reset of its branch reads wrong: `x` retires a task that is ahead, or one merged reads as not | [Landed](#landed) | Open: `LandedRetarget.ResetToStart.cfg`, `ResetToStartMerged.cfg`, `ResetBeforeStart.cfg` |
+| VIEWS-15 | S3 | Several attempts at one prompt are made from two, when the draft's own request is lost or refused, you change the prompt, and ask again | [The creation ID](#the-creation-id) | Open: `NewTaskAttempts.finding-mixed.cfg` |
+| LC-10 | S4 | An offer its agent makes after you were asked goes with a discarded task, unnamed | [Finishing a task](#finishing-a-task) | Open: `TaskOnHost.finding-offer-untold.cfg` |
+| STATUS-12 | S4 | Closing Codex's plan menu says nothing, so its task reads `permission` until your next prompt | [Agent status](#agent-status) | Accepted: `AgentStatus.PlanMenuClosed.cfg` |
+
 ## A task on its host
 
 The helper's records and what it does to Git, from a task being asked for to its
@@ -3199,7 +3222,7 @@ registry lock.
 | `offers`, `offersAt` | `propose_task`, `take_offer`, `make_task` and `list_tasks` (the parent's, through `take_offer`) | yes |
 | `mayOffer`, `parent`, `offer` | `make_task` | yes; never changed |
 | `conversation`, `remoteControl`, `forkSession`, `forkedFrom`, `attempt` | `make_task` | yes; never changed |
-| `baseRef`, `baseCommit`, `integrationBranch`, `integrationRef` | `make_task`, `retarget` | yes |
+| `baseRef`, `baseCommit`, `integrationBranch`, `integrationRef`, `retargetedAt` | `make_task`, `retarget` | yes |
 | `activity` | `update_hook` (`note_activity`), `apply_program_status`, `spawn` | yes |
 
 No lost update found in any of them. The last three rows were added on the

@@ -35,6 +35,37 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## The models, brought in line with what is new — 2026-11-11
+
+Each section of `test/formal` against the code as it is, for offers,
+conversations, forks, several attempts at one prompt, `B`, Codex's plan
+menu and a subagent's request. Each was done by its skill: the diff of
+the functions it covers read against the model, what is new modelled
+with a variant that breaks it, and every counterexample replayed on the
+real code before anything was changed. `docs/state-machines.md` lists
+what they found, under "Found by the models".
+
+- **Nine bugs fixed**, each with a test that failed first. Three could
+  lose work or retire it unmerged: `x` taking a branch that goes with the
+  task for the one keeping its commits; a fork and its source finished at
+  once; and `B` naming what already has the task's commits. The rest
+  showed a wrong status, branch or draft.
+- **Three left open**, each a config that fails until it is fixed: a
+  reset after `B` that reads wrong, attempts made from two prompts after
+  an edited retry, and an offer made once you were asked. One accepted:
+  Codex says nothing when its plan's menu is closed.
+- **Two new models**: who asks when Claude's subagents can too
+  (`SubagentAsks.tla`), and small ones beside each section's for `B`, two
+  attempts, and a fork beside an offer.
+- **Codex's plan menu** is from Codex's source, read at `e58bf8f`, and a
+  fake Codex that keeps a rollout: no Codex was signed in here, so no
+  turn in Plan mode ran live.
+- `make test compile` after all of it: 618 ERT tests and 573 Python
+  tests pass.
+- Not done: `make crash` whole. The scenarios for retiring, discarding,
+  retargeting and making a fork were run alone, with only the lock file
+  Git 2.43 leaves, as on `main`.
+
 ## The new look, on real sessions and other themes — 2026-11-11
 
 Emacs 29.3 under Xvfb, Magit 3.3.0 as Ubuntu 24.04 packages it, Claude
@@ -136,7 +167,8 @@ isolated tmux server, as `make contract-live` runs its sessions.
   merged, the one of offers included: none was extended for what is new
   here (the branch a task merges into, attempts, an agent's activity, a
   subagent's request outlasting its main agent's turn), so they say the
-  models still hold together, not that the new code keeps to them.
+  models still hold together, not that the new code keeps to them. Since
+  done: "The models, brought in line with what is new", above.
 
 ## UX review — 2026-11-09
 
