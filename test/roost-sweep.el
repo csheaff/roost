@@ -81,6 +81,7 @@ KIND is `committed', `uncommitted', `untracked' or `binary'."
     ("opencode failed turn" (status . "failed") (agent . "opencode") (live . t) (lastEvent . "StopFailure")
      (error . "Its turn ended on an error (APIError): invalid x-api-key"))
     ("running" (status . "running") (live . t) (task . ,roost-sweep--long-prompt)
+     (activity . "Running python3 -m unittest discover -s test -p 'test_*.py'")
      (diff . "") (ahead . 0))
     ("in the background, under a name longer than a narrow sidebar" (status . "background") (live . t)
      (diff . "") (ahead . 0))

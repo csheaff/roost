@@ -80,7 +80,7 @@ contract:
 contract-live:
 	python3 test/agent_contract.py --live $(CONTRACT_FLAGS) $(CONTRACT_AGENTS)
 
-# Pictures of the task panel, sidebar and dashboard in every task state of
+# Pictures of the task panel and dashboard in every task state of
 # the sweep's gallery, with no agent or host: see test/qa/gallery.el. Needs
 # a display, as Xvfb gives, and ImageMagick's import.
 GALLERY_OUT ?= gallery

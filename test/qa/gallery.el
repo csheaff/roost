@@ -1,8 +1,8 @@
 ;;; gallery.el --- Pictures of Roost's views in every task state -*- lexical-binding: t; -*-
 
-;; `make gallery' draws the task panel, the sidebar and the dashboard for
-;; the sweep's gallery of task states (test/roost-sweep.el), a few to a
-;; sheet, and captures each sheet as a PNG: how Roost looks, without an
+;; `make gallery' draws the task panel and the dashboard for the sweep's
+;; gallery of task states (test/roost-sweep.el), a few to a sheet, and
+;; captures each sheet as a PNG: how Roost looks, without an
 ;; agent, tmux or a host, in seconds.  It needs a display and
 ;; ImageMagick's `import'; on Linux, Xvfb will do:
 ;;
@@ -38,8 +38,10 @@
       ((quit error) (setq text (format "Could not draw this:\n%S" err))))
     text))
 
-(defun roost-gallery--show (columns)
-  "Show COLUMNS, each (TITLE WIDTH . TEXT), side by side in the frame."
+(defun roost-gallery--show (columns &optional list)
+  "Show COLUMNS, each (TITLE WIDTH . TEXT), side by side in the frame.
+With LIST, as a list of tasks is: each line cut at its window's edge,
+in a window just as wide as it was drawn for."
   (delete-other-windows)
   (let ((window (selected-window)) (n 0))
     (dolist (column columns)
@@ -52,14 +54,14 @@
             (goto-char (point-min))
             (setq mode-line-format nil
                   cursor-type nil
-                  truncate-lines nil
+                  truncate-lines list
                   truncate-partial-width-windows nil
-                  word-wrap t
+                  word-wrap (not list)
                   header-line-format (propertize (concat " " title) 'face 'shadow)))
           (set-window-buffer window buffer)
-          (set-window-fringes window 8 8)
+          (set-window-fringes window (if list 0 8) (if list 0 8))
           (when (cdr (memq column columns))
-            (setq window (split-window window (+ width 3) t))))))))
+            (setq window (split-window window (+ width (if list 1 3)) t))))))))
 
 (defun roost-gallery--capture (file)
   "Capture the display as FILE."
@@ -87,15 +89,11 @@
       (roost-gallery--show
        (mapcar (lambda (state) (cons state (cons 44 (roost-gallery--copy 'panel state 44)))) states))
       (roost-gallery--capture (format "%spanel-%d.png" out (cl-incf n))))
-    ;; The lists show every state at once: one will do for each.
+    ;; The dashboard shows every state at once.  Not the sidebar, whose
+    ;; rows are laid out for the window they are in: `make qa' shows it.
     (roost-gallery--show
-     (list (cons "sidebar, 44 columns" (cons 44 (roost-gallery--copy 'sidebar "permission" 44)))
-           (cons "sidebar, 30 columns" (cons 30 (roost-gallery--copy 'sidebar "permission" 30)))
-           (cons "sidebar, 20 columns" (cons 20 (roost-gallery--copy 'sidebar "permission" 20)))
-           (cons "sidebar, 12 columns" (cons 12 (roost-gallery--copy 'sidebar "permission" 12)))))
-    (roost-gallery--capture (format "%ssidebar.png" out))
-    (roost-gallery--show
-     (list (cons "dashboard" (cons 180 (roost-gallery--copy 'dashboard "permission" 180)))))
+     (list (cons "dashboard" (cons 180 (roost-gallery--copy 'dashboard "permission" 180))))
+     t)
     (roost-gallery--capture (format "%sdashboard.png" out))
     (message "Roost's gallery is in %s" out)
     (kill-emacs 0)))

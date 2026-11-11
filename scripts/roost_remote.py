@@ -6767,6 +6767,59 @@ def capture(store, task_id, entry, at=None):
             file.write(json.dumps(dict(entry, at=time.time() if at is None else at), ensure_ascii=False) + "\n")
 
 
+# What an agent is doing as it works, from the tool it starts: what it
+# would ask to do, said as doing it.
+ACTIVITIES = (("Asks to run outside the sandbox: ", "Running "), ("Asks to run ", "Running "),
+              ("Asks to edit ", "Editing "), ("Asks to write ", "Writing "), ("Asks to read ", "Reading "),
+              ("Asks to fetch ", "Fetching "), ("Asks to search the web for ", "Searching the web for "),
+              ("Asks to use ", "Using "))
+# Tools that keep the agent's own notes, which say nothing of the work.
+QUIET_TOOLS = ("TodoWrite", "TaskCreate", "TaskUpdate", "TaskList", "TaskGet", "ToolSearch", "ExitPlanMode",
+               "AskUserQuestion")
+
+
+def tool_activity(payload, worktree=None):
+    """What an agent does as it starts the tool PAYLOAD names, as a phrase
+    for the views to show beside `running`: "Running python3 -m pytest",
+    "Editing notes.py". None for a tool that says nothing of the work, or
+    asks you something, which its status says."""
+    tool = payload.get("tool_name")
+    if not isinstance(tool, str) or not tool or tool in QUIET_TOOLS:
+        return None
+    args = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+
+    def said(key):
+        value = args.get(key)
+        return one_line(value)[:REQUEST_LIMIT] if isinstance(value, str) and one_line(value) else None
+
+    if tool in ("Task", "Agent"):
+        return "Starting a subagent" + (": " + said("description") if said("description") else "")
+    if tool in ("Grep", "Glob"):
+        return ("Searching for " if tool == "Grep" else "Looking for ") + (said("pattern") or "files")
+    if tool.startswith("mcp__") and tool.count("__") >= 2:
+        _, server, name = tool.split("__", 2)
+        return "Using %s's %s" % (server, name)
+    asks = permission_request(payload, worktree)
+    for asking, doing in ACTIVITIES:
+        if asks and asks.startswith(asking):
+            # On one line, without what a terminal would take for a key.
+            return one_line(doing + asks[len(asking):])
+    return None
+
+
+def note_activity(task, payload):
+    """Keep in TASK what its agent is doing, as the event PAYLOAD says: the
+    tool it starts, until it starts another; nothing once it stops working."""
+    if task.get("status") not in ("running", "background"):
+        task.pop("activity", None)
+    elif payload.get("hook_event_name") == "PreToolUse":
+        doing = tool_activity(payload, task.get("worktree"))
+        if doing:
+            task["activity"] = doing
+    elif payload.get("hook_event_name") == "UserPromptSubmit":
+        task.pop("activity", None)
+
+
 def update_hook(store, task_id, payload, run_id=None):
     with store.locked():
         task = store.read(task_id)
@@ -6824,6 +6877,7 @@ def update_hook(store, task_id, payload, run_id=None):
             if "lastPrompt" in updates:
                 updates["lastPrompt"] = later_prompt(task, updates["lastPrompt"])
             task.update(updates)
+            note_activity(task, payload)
             request = (named or permission_request(payload, task.get("worktree"))) if asks else None
             if request:
                 task["request"] = request

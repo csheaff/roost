@@ -14471,6 +14471,38 @@ it of the same ID's, or nil for the first."
          (when (get-buffer roost--compose-buffer)
            (kill-buffer roost--compose-buffer)))))))
 
+(ert-deftest roost-a-working-agent-says-what-it-is-doing ()
+  ;; Beside `running', in the dashboard and at the top of its panel: the
+  ;; tool its host last heard it start.  Not once it rests, or went.
+  (roost-test--isolated
+   (let* ((doing "Running python3 -m pytest -q")
+          (drawn (lambda (&rest fields)
+                   (clrhash roost--tasks)
+                   (let ((task (roost--cache-task
+                                "dev" (append fields `((activity . ,doing) (live . t)
+                                                       (lastMessage . "Earlier reply."))
+                                              (roost-test--task "1111111111111111" "running")))))
+                     (list (roost--activity task)
+                           (substring-no-properties (roost--dashboard-row task (roost--dashboard-layout (list task) 140) 140))
+                           (with-temp-buffer
+                             (roost-task-info-mode)
+                             (setq roost--buffer-task-key (roost--key task))
+                             (cl-letf (((symbol-function 'roost--task-info-width) (lambda () 44)))
+                               (roost--render-task-info))
+                             (buffer-string)))))))
+     (pcase-let ((`(,activity ,row ,panel) (funcall drawn)))
+       (should (equal activity doing))
+       (should (string-suffix-p doing row))
+       ;; Its third line, under the name and where it runs.
+       (should (equal (nth 2 (split-string panel "\n")) doing)))
+     ;; Waiting for you, what it was doing is over.
+     (pcase-let ((`(,activity ,row ,panel) (funcall drawn '(status . "ready"))))
+       (should-not activity)
+       (should-not (string-search doing row))
+       (should-not (string-search doing panel)))
+     ;; Nor is it doing it once its window went.
+     (should-not (car (funcall drawn '(live)))))))
+
 (ert-deftest roost-a-conversations-offer-opens-in-the-project-it-names ()
   ;; A conversation is in no project: it plans, and each task it offers
   ;; says which of yours it is for.  The draft opens there, starts from

@@ -10301,7 +10301,22 @@ scrolled it away."
                               (roost--project-name task)
                               (or (roost--field task 'agent) "claude"))
                       'face 'roost-dim)
-          "\n"))
+          "\n")
+  ;; While it works, what it is doing, which the status word can't say.
+  (when-let* ((doing (roost--activity task)))
+    (insert (propertize (concat (truncate-string-to-width doing (max 8 (1- width)) nil nil "…") "\n")
+                        'face 'roost-dim 'help-echo doing))))
+
+(defun roost--activity (task)
+  "What TASK's agent is doing now, as its host last heard, or nil.
+The tool it last started, as \"Running make test\" or \"Editing
+ledger.py\", while it works: an agent that reports none says nothing."
+  (when-let* ((doing (roost--field task 'activity))
+              ((stringp doing))
+              ((not (string-empty-p doing)))
+              ((member (roost--field task 'status) '("running" "background")))
+              ((roost--field task 'live)))
+    doing))
 
 (defun roost--insert-question (task)
   "Insert what TASK's agent asks your permission for, if it does."
@@ -11119,6 +11134,8 @@ column shrinks first, then the agent column is dropped."
               (let ((text (truncate-string-to-width
                            (roost--one-line (roost--with-since-looked
                                              task (or (roost--permission-request task)
+                                                      ;; While it works, what it is doing.
+                                                      (roost--activity task)
                                                       (roost--last-message-summary task)
                                                       (roost--prompt-text task))))
                            (* 3 room) nil nil "…")))

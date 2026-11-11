@@ -4,6 +4,31 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A working agent says what it is doing. Beside `running`, the dashboard
+  shows the tool the agent last started, as `Running make test` or
+  `Editing ledger.py`, where a waiting agent's reply goes, and the task
+  panel says it under the task's name. It comes from the agent's hooks, so
+  an agent that reports no tools says nothing: Claude Code does, and tasks
+  started before this update do once their agent starts its next tool.
+  Nothing to do when upgrading.
+- The task panel is quiet until something is wrong. Beside a terminal it
+  keeps bold for the task's name and colour for what wants you, which now
+  comes first, under the name, after a `▲`: the worktree on another
+  branch, a merge under way or one that would conflict, the worktree gone,
+  the last error. The next step follows, then what the task changed, with
+  no heading: how much, dim, and the files plainly. The prompts fold to one
+  dim line, your latest, and so do the details; `RET` or a click on either
+  unfolds it. A row of keys opens the task's other views, `r Magit`,
+  `f Files`, `t Shell`, `? More`, where the panel said `? opens the menu`.
+  The remaining headings are dim. A panel in a window of its own, 72
+  columns or wider, keeps its prompts and details unfolded. To have bold
+  headings back, give `roost-label` the weight you like. From
+  [#241](https://github.com/csheaff/roost/issues/241).
+- `make gallery` draws the task panel and the dashboard in every task
+  state of the sweep's gallery and captures them as pictures, with no
+  agent or host, and `make qa` takes screenshots under X, as with Xvfb, as
+  it did on macOS only.
+
 - A conversation plans work in your projects. Ask the agent in one to plan
   a piece of work, and each task it would split it into waits, dim, under
   the conversation, naming its project; `RET` or a click opens it as a new

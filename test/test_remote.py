@@ -740,6 +740,46 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual((listed["status"], listed["lastEvent"]), ("ready", "Interrupt"))
         self.assertNotIn("request", store.read(task["id"]))
 
+    def test_a_working_agent_says_what_it_is_doing(self):
+        # The tool it starts, as a phrase the views show beside `running`,
+        # until it starts another; nothing once it stops working.
+        task = self.create()
+        store = roost.Store(str(self.state))
+        hook = lambda **payload: roost.update_hook(store, task["id"], payload)
+        doing = lambda: store.read(task["id"]).get("activity")
+        hook(hook_event_name="UserPromptSubmit", prompt="Fix it")
+        self.assertIsNone(doing())
+        wt = task["worktree"]
+        for tool, arguments, said in (
+                ("Bash", dict(command="python3 -m pytest -q"), "Running python3 -m pytest -q"),
+                ("Edit", dict(file_path=wt + "/src/notes.py"), "Editing src/notes.py"),
+                ("Write", dict(file_path=wt + "/new.py"), "Writing new.py"),
+                ("Read", dict(file_path=wt + "/README.md"), "Reading README.md"),
+                ("Grep", dict(pattern="def add"), "Searching for def add"),
+                ("Glob", dict(pattern="**/*.py"), "Looking for **/*.py"),
+                ("WebFetch", dict(url="https://example.com/x"), "Fetching https://example.com/x"),
+                ("Agent", dict(description="Review the diff"), "Starting a subagent: Review the diff"),
+                ("mcp__roost__propose_task", dict(title="x"), "Using roost's propose_task"),
+                ("Frobnicate", {}, "Using Frobnicate")):
+            hook(hook_event_name="PreToolUse", tool_name=tool, tool_input=arguments)
+            self.assertEqual(doing(), said)
+        # Its own notes say nothing of the work: what it was doing stays.
+        hook(hook_event_name="PreToolUse", tool_name="TodoWrite", tool_input=dict(todos=[]))
+        self.assertEqual(doing(), "Using Frobnicate")
+        hook(hook_event_name="PostToolUse", tool_name="Frobnicate")
+        self.assertEqual(doing(), "Using Frobnicate")
+        # On one line, whatever a command holds, and listed for Emacs.
+        hook(hook_event_name="PreToolUse", tool_name="Bash", tool_input=dict(command="make\n\x1b[2Jtest"))
+        self.assertEqual(doing(), "Running make [2Jtest")
+        self.assertEqual(self.request("list")["result"][0]["activity"], "Running make [2Jtest")
+        # Asking, or at rest, it does nothing to speak of.
+        hook(hook_event_name="PermissionRequest", tool_name="Bash", tool_input=dict(command="rm -rf build"))
+        self.assertIsNone(doing())
+        hook(hook_event_name="PreToolUse", tool_name="Bash", tool_input=dict(command="rm -rf build"))
+        self.assertEqual(doing(), "Running rm -rf build")
+        hook(hook_event_name="Stop")
+        self.assertIsNone(doing())
+
     def test_an_approved_command_shows_running_before_it_ends(self):
         # Claude reports nothing between your approval and the command's end,
         # which for tests or a build can be minutes of `permission`.

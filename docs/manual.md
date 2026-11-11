@@ -312,11 +312,17 @@ for one on this machine. `X` on a project, or "Forget" on its menu, stops listin
 you start a task there again. With perspectives or tabs and no task yet, there
 is no sidebar to click: start the first with `M-x roost-new-task`. `I` docks a
 panel at the right of an open task's terminal,
-kept current as the agent works: what to do next, the start of the task's
-prompt, three lines there, the files it changed, those not yet committed
-first, and what a merge would rest on (below). Once you have sent the agent more, your latest prompt shows
-under the task's, a reminder of where you left off that the terminal may
-have scrolled away. A click or `RET` on a file
+kept current as the agent works. It is quiet until something is wrong: bold is
+the task's name, and colour is what wants you, which comes first, under the
+name, after a `▲`: its worktree on another branch, a merge under way or one
+that would conflict, its worktree gone, its last error. Then what to do next,
+the files it changed, those not yet committed first, and what a merge would
+rest on (below). While the agent works, the line under its name says what it
+is doing, as `Running make test`. At the foot, a row of keys opens the task's
+other views (`r Magit`, `f Files`, `t Shell`, `? More`), and two dim lines
+fold what you seldom need there: your latest prompt, a reminder of where you
+left off that the terminal may have scrolled away, and the details of where
+the work lives. `RET` or a click on either unfolds it. A click or `RET` on a file
 opens its diff in Magit, in a buffer of its own, as Magit's diff of the file
 you visit has, so another file's diff, in the same window, leaves it open behind (`magit-diff-buffer-file-locked`
 set to nil keeps one buffer for all). There `;` writes a note for the agent (more under
