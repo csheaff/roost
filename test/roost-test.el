@@ -558,7 +558,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
                (should (string-match-p "^Answer it in its terminal: RET$" (buffer-string)))
                (should (string-match-p "^Waiting for your answer$" (buffer-string)))
                ;; After what can be checked, as its agent's own account.
-               (should (string-match-p "^Checks\nNo CI results: no pull request\n\nAgent's latest reply  its own account$"
+               (should (string-match-p "^No CI results: no pull request\n\nAgent's latest reply  its own account$"
                                        (buffer-string)))))
          (kill-buffer buffer))))))
 
@@ -781,7 +781,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
            (funcall press "▸ Details")
            (should (equal roost--panel-open '(details)))
            (should (string-match-p (concat keys "▸ Now the logout\\. And its test\\.\n"
-                                           "▾ Details\n  Branch\ncodex/roost/fix-auth-123456, from main\n\\'")
+                                           "▾ Details\n  Branch\ncodex/roost/fix-auth-123456, from main (B gives it a branch to merge into)\n\\'")
                                    (buffer-string)))
            (should (looking-at-p "▾ Details"))
            (push-button)
@@ -806,7 +806,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
                                           (roost-test--task)))
          (roost--render-task-info)
          (should (string-match-p "^Prompt\nFix the login\\.\n\nYour latest prompt\nNow the logout\\.\n" (buffer-string)))
-         (should (string-match-p "^Details\n  Branch       codex/roost/fix-auth-123456, from main\n" (buffer-string)))
+         (should (string-match-p "^Details\n  Branch       codex/roost/fix-auth-123456, from main (B gives it a branch to merge into)\n" (buffer-string)))
          (should-not (string-match-p "▸\\|▾\\|\\? More" (buffer-string))))))))
 
 (ert-deftest roost-a-draft-from-a-tiled-pane-opens-beside-the-tiles ()
@@ -4354,13 +4354,13 @@ terminal's, on a pty.  Skips the test where it can't be made."
        (roost--cache-task "dev" (append '((name . "typo") (files ((path . "notes.py") (added . 2) (deleted . 0))))
                                         (roost-test--task "1111111111111111")))
        (roost--render-task-info)
-       (should (string-match-p "^fix authentication\n\n\\(?:In a file's diff[^\n]+\n\\)?typo also changes notes\\.py\n\nChecks$"
+       (should (string-match-p "^fix authentication\n\n\\(?:In a file's diff[^\n]+\n\\)?typo also changes notes\\.py\n\nNo CI results: no pull request$"
                                (buffer-string)))
        ;; Beside a terminal, where none of its other views is left to
        ;; open, the row of keys starts at the menu's.
        (cl-letf (((symbol-function 'roost--task-info-width) (lambda () 44)))
          (roost--render-task-info))
-       (should (string-match-p " X forgets it\n\ntypo also changes notes\\.py\n\nChecks$" (buffer-string)))
+       (should (string-match-p " X forgets it\n\ntypo also changes notes\\.py\n\nNo CI results: no pull request$" (buffer-string)))
        (should (string-match-p "\n\n\\? More\n▸ fix authentication\n▸ Details\n\\'" (buffer-string))))
      ;; A pull request's thread on the whole file says so too.
      (should (string-search "worktree is gone"
@@ -4810,7 +4810,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
        ;; how to finish it, so that is said once, there.
        (should (string-match-p (concat "\\`[^\n]+\n[^\n]+\n"
                                        (regexp-quote (format (concat "▲ On feat, not the task's branch %s, so the "
-                                                                     "changes below are feat's.\n\nIts worktree is on feat")
+                                                                     "changes below are feat's.\n\nx discards the task, keeping feat")
                                                              own)))
                                (buffer-string)))
        (should (= (cl-count-if (lambda (line) (string-search "x discards the task" line))
@@ -9982,7 +9982,7 @@ Each is (NAME . BYTES); the host puts it in /host/a/, numbering nothing."
          (with-current-buffer "*roost: fix auth*"
            (unwind-protect
                (progn
-                 (should (string-match-p "^Checks\nNot heard from GitLab about !12 yet$" (buffer-string)))
+                 (should (string-match-p "^Not heard from GitLab about !12 yet$" (buffer-string)))
                  (should (string-match-p "^Pull request\n  !12  https://gitlab.com/g/r/-/merge_requests/12\n"
                                          (buffer-string)))
                  (puthash '("dev" "0123456789abcdef")
@@ -11211,16 +11211,16 @@ field (FIELD . :none) is left out."
                                         (car threads) (cadr threads))))
      ;; Without a pull request, no CI results, which looks unlike any that passed.
      (let ((text (funcall panel (append files '((lastMessage . "All tests pass.")) (roost-test--task)))))
-       (should (string-match-p "^Checks\nNo CI results: no pull request\n\nAgent's latest reply  its own account\nAll tests pass\\.$"
+       (should (string-match-p "^No CI results: no pull request\n\nAgent's latest reply  its own account\nAll tests pass\\.$"
                                text))
        (should-not (string-match-p "✓\\|passed" text)))
      ;; Nor with nothing to merge.
      (let ((text (funcall panel (append '((lastMessage . "Which one?")) (roost-test--task)))))
        (should-not (string-match-p "Checks\\|own account" text)))
      ;; A pull request GitHub hasn't been asked about, or that has no checks.
-     (should (string-match-p "^Checks\nNot heard from GitHub about #12 yet$"
+     (should (string-match-p "^Not heard from GitHub about #12 yet$"
                              (funcall panel (append files (roost-test--pr-task)))))
-     (should (string-match-p "^Checks\nNo CI results on #12$"
+     (should (string-match-p "^No CI results on #12$"
                              (funcall panel (append files (roost-test--turn-task '(checks . :none))))))
      ;; Those that fail by name, and pending ones, and how many passed.
      (let ((text (funcall panel (append files '((unpushed . 2) (dirty . t)) named))))

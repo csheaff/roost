@@ -7777,14 +7777,14 @@ there are no CI results, which looks unlike checks that passed.  As
          (number (roost--pr-name task))
          (counts (roost--pr-checks task))
          (mark (lambda (mark face text) (concat (propertize mark 'face face) " " text))))
-    (roost--insert-heading "Checks")
     (cond
-     ((not state) (roost--insert-indented "No CI results: no pull request" 'roost-dim))
-     ((not status) (roost--insert-indented (format "Not heard from %s about %s yet"
-                                                   (roost--forge-name (roost--field task 'pr)) number)
-                                           'roost-dim))
-     ((not counts) (roost--insert-indented (format "No CI results on %s" number) 'roost-dim))
+     ;; With none to list, one quiet line, under no heading.
+     ((not state) (roost--insert-quiet "No CI results: no pull request"))
+     ((not status) (roost--insert-quiet (format "Not heard from %s about %s yet"
+                                                (roost--forge-name (roost--field task 'pr)) number)))
+     ((not counts) (roost--insert-quiet (format "No CI results on %s" number)))
      (t
+      (roost--insert-heading "Checks")
       (pcase-let* ((`(,passing ,failing ,pending) counts)
                    (failed (seq-take (alist-get 'failingChecks status) (min failing roost--failed-checks-shown)))
                    (waiting (seq-take (alist-get 'pendingChecks status) (min pending 3)))
@@ -10099,6 +10099,10 @@ wants you, so that either shows from the terminal beside it."
           (if note (concat "  " (propertize note 'face 'roost-dim)) "")
           "\n"))
 
+(defun roost--insert-quiet (text)
+  "Insert TEXT as a block of one quiet line, with no heading."
+  (insert roost--gap (propertize text 'face 'roost-dim 'wrap-prefix "  ") "\n"))
+
 (defun roost--insert-loud (text face)
   "Insert TEXT in FACE as a line of what is wrong with the task.
 After a mark, with the lines it wraps to under its first word."
@@ -10299,7 +10303,17 @@ Windows showing the panel keep their scroll position, and the mark stays."
     ;; First, and most of the time not there: what is wrong.
     (roost--insert-wrong task next)
     (when next
-      (insert roost--gap next "\n"))
+      (insert roost--gap
+              ;; Which branch the worktree is on was just said, in its
+              ;; colour: here, only how to put it right.
+              (let ((said (and (roost--other-branch task)
+                               (not (roost--field task 'worktreeMissing))
+                               (format "Its worktree is on %s, not the task's branch: "
+                                       (roost--branch-label (roost--other-branch task))))))
+                (if (and said (string-prefix-p said next))
+                    (substring next (length said))
+                  next))
+              "\n"))
     (unless beside
       (roost--insert-question task))
     ;; With room, what you asked for comes before what came of it.

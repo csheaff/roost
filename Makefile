@@ -11,7 +11,7 @@ TEST_LOAD_PATH ?=
 JOBS ?=
 K ?=
 RUN = python3 test/run.py --emacs "$(EMACS)" $(if $(JOBS),--jobs $(JOBS)) $(if $(K),-k '$(K)') \
-  $(if $(TEST_LOAD_PATH),--load-path $(TEST_LOAD_PATH))
+  $(if $(TEST_LOAD_PATH),--load-path='$(TEST_LOAD_PATH)')
 
 .PHONY: test
 test:

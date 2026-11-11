@@ -24,6 +24,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -131,7 +132,7 @@ def start_ert(args, share, of, scratch):
     log = scratch / ("ert-%d.log" % share)
     env = dict(os.environ, ROOST_TEST_SHARE="%d/%d" % (share, of), ROOST_TEST_SAMPLE=str(args.sample),
                ROOST_TEST_MATCH=args.k or "")
-    command = [args.emacs, "-Q", "--batch", "-L", str(ROOT), "-L", str(HERE)] + args.load_path
+    command = [args.emacs, "-Q", "--batch", "-L", str(ROOT), "-L", str(HERE)] + list(args.load_path)
     for name in ERT_FILES:
         command += ["-l", str(HERE / name)]
     command += ["-f", "roost-test-run-share"]
@@ -176,8 +177,9 @@ def main():
     parser.add_argument("--ert", action="store_true", help="only the ERT suite")
     parser.add_argument("--python", action="store_true", help="only the Python suite")
     parser.add_argument("--emacs", default=os.environ.get("EMACS") or "emacs")
-    parser.add_argument("--load-path", nargs="*", default=[], metavar="ARG",
-                        help="more arguments for Emacs, as in -L ~/src/magit/lisp")
+    # One argument, as --load-path="-L a -L b": -L would read as an option of ours.
+    parser.add_argument("--load-path", default="", metavar="ARGS", type=lambda value: shlex.split(value),
+                        help='more arguments for Emacs, in one, as in --load-path="-L ~/src/magit/lisp"')
     parser.add_argument("--slowest", type=int, default=0, metavar="N", help="name the N slowest tests")
     parser.add_argument("--keep", action="store_true", help="keep the logs of a run that passed")
     parser.add_argument("--worker", nargs=2, help=argparse.SUPPRESS)

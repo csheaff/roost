@@ -3575,14 +3575,14 @@ def switched_branch(qa, repo):
                         " && printf 'x\\n' > FEAT.md && git add FEAT.md && git commit -qm 'On feat'"
                         " && git push -q origin %s\"" % (feat, feat, feat))
     answer_yes(qa, name)
-    qa.wait("the branch", lambda s: "worktree is on " + feat in panel_text(qa, s))
+    qa.wait("the branch", lambda s: "▲ On " + feat in panel_text(qa, s))
     qa.step("On another branch", expect=[
         ("the panel says so first, under the task's name",
          lambda s: re.match(r"[^\n]*\n[^\n]*\n▲ On %s, not the task's branch roost/[^ ]*, so the changes\s+below"
                             r"\s+are\s+%s's\." % (feat, feat), panel_text(qa, s))),
         ("then how to finish it",
-         lambda s: ("Its worktree is on %s, not the task's branch: x discards the task, keeping %s; to merge its work"
-                    " with m or P" % (feat, feat)) in panel_text(qa, s)),
+         lambda s: ("x discards the task, keeping %s; to merge its work with m or P" % feat) in panel_text(qa, s)
+         and "Its worktree is on" not in panel_text(qa, s)),
         ("its changes are that branch's, said once",
          lambda s: re.search(r"Committed\n\s*FEAT\.md", panel_text(qa, s))
          and panel_text(qa, s).count("▲") == 1),

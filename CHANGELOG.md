@@ -48,7 +48,10 @@ What each release changes, and what to do when upgrading. Newest first.
   unfolds it. A row of keys opens the task's other views, `r Magit`,
   `f Files`, `t Shell`, `? More`, where the panel said `? opens the menu`.
   The remaining headings are dim. A panel in a window of its own, 72
-  columns or wider, keeps its prompts and details unfolded. To have bold
+  columns or wider, keeps its prompts and details unfolded. Checks with
+  nothing to list, as with no pull request, are one dim line under no
+  heading, and a worktree on another branch is named once, in the `▲`
+  line, with the next step saying only how to put it right. To have bold
   headings back, give `roost-label` the weight you like. The sidebar says
   `on feat`, or `detached`, in the warning's colour beside a task whose
   worktree is on another branch, while its agent isn't at work and no
