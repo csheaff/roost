@@ -1087,6 +1087,14 @@ Things to know:
   keeps the task at `permission` after the main agent's turn ends, until
   that subagent goes on or ends, or you send a prompt. With
   `roost-program-status` on, both say so themselves, at once.
+- In Plan mode, Codex ends its turn with a plan and then asks, in a menu,
+  whether to implement it. Text sent to it then would be dropped, and the
+  Enter after it would implement the plan, so the task shows `permission`
+  ("Asks whether to implement its plan"), its latest reply is the plan, and
+  `e` asks before sending. Codex says nothing when you close the menu, with
+  Esc or "No, stay in Plan mode", so the task shows `permission` until your
+  next prompt: answer `e`'s question with yes. Retiring and merging go
+  ahead meanwhile, as its turn is over.
 - In auto mode, Claude Code refuses some commands without asking: the
   task stays `running`, and Claude's reply says what it refused. A
   dangerous `rm` asks for two minutes, and is refused if you don't

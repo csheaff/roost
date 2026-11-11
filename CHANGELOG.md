@@ -174,6 +174,16 @@ What each release changes, and what to do when upgrading. Newest first.
   And a tool that fails once you approve it shows `running` at once, where
   it showed `permission` until the agent's next step. With
   `roost-program-status` on, such a turn's end still reads `background`.
+- A Codex task shows `permission` at "Implement this plan?", the menu Codex
+  opens when a turn in Plan mode ends with a plan. It read `ready`, so a
+  prompt sent from Roost, as with a quoted region, was dropped by the menu,
+  and the Enter after it implemented the plan. Now its request reads "Asks
+  whether to implement its plan", its latest reply is the plan, and `e`
+  asks before sending. Codex says nothing when you close the menu with Esc
+  or "No, stay in Plan mode", so the task shows `permission` until your
+  next prompt, which `e` sends once you say so; retiring and merging go
+  ahead meanwhile. From Codex's source, and not yet from a live run in
+  Plan mode.
   Nothing to do when upgrading.
 - A narrow sidebar keeps each task's name and still says its status. Where
   the status word would leave the name under a dozen columns, a mark in

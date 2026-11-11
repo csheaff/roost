@@ -3171,6 +3171,49 @@ class Lifecycle(unittest.TestCase):
         self.assertFalse(self.request("send", id=task["id"], text="yes")["ok"])
         self.assertFalse(self.request("retire", id=task["id"])["ok"])
 
+    def test_codex_asks_about_its_plan_once_a_plan_mode_turn_ends(self):
+        # In Plan mode Codex ends its turn and then opens a menu, "Implement
+        # this plan?". Text pasted there is dropped, and the Enter after it
+        # takes the first choice, so a prompt sent then would implement the
+        # plan and be lost (#239). Codex says nothing of the menu, by a hook
+        # or to its terminal, nor when you close it.
+        for relayed in (False, True):
+            with self.subTest(relayed=relayed):
+                task = self.create(name="plan-%s" % relayed, agent="codex", programStatus=relayed,
+                                   command=[sys.executable, str(FAKE_AGENT), "codex"])
+                if relayed:
+                    self.wait_for(task, lambda record: record.get("programStatusRun") == record["runId"])
+                self.wait(task, "ready")
+                self.assertTrue(self.request("send", id=task["id"], text="plan")["ok"])
+                record = self.wait(task, "permission", "Plan")
+                self.assertEqual(record["request"], "Asks whether to implement its plan")
+                # The plan is what it replied, though its hook's reply left it out.
+                self.assertEqual(record["lastReply"], "Two steps.\n\n# Plan\n- Step one\n- Step two")
+                # Its word that it is done, as after any turn, leaves it asking.
+                time.sleep(.5)
+                self.assertEqual(roost.Store(str(self.state)).read(task["id"])["status"], "permission")
+                self.assertFalse(self.request("send", id=task["id"], text="more")["ok"])
+                # "Yes, implement this plan" is its next turn.
+                roost.tmux(self.socket, "send-keys", "-t", task["paneId"], "yes", "Enter")
+                record = self.wait(task, "ready", "Stop")
+                self.assertNotIn("request", record)
+                self.assertEqual(record["lastPrompt"], "Implement the plan.")
+                self.assertEqual(record["lastReply"], "Implemented.")
+                # Closed with Esc, it still reads as asking, as nothing said
+                # otherwise: a prompt sent anyway is its next turn's.
+                self.assertTrue(self.request("send", id=task["id"], text="plan")["ok"])
+                self.wait(task, "permission", "Plan")
+                roost.tmux(self.socket, "send-keys", "-t", task["paneId"], "no", "Enter")
+                time.sleep(.3)
+                self.assertEqual(roost.Store(str(self.state)).read(task["id"])["status"], "permission")
+                self.assertTrue(self.request("send", id=task["id"], text="something else", force=True)["ok"])
+                record = self.wait(task, "ready", "Stop")
+                self.assertNotIn("request", record)
+                # Its turn over, the menu holds up nothing: the task can go.
+                self.assertTrue(self.request("send", id=task["id"], text="plan")["ok"])
+                self.wait(task, "permission", "Plan")
+                self.assertTrue(self.request("retire", id=task["id"])["ok"])
+
     def test_codex_deferred_start_requires_first_prompt_in_native_terminal(self):
         reply = self.request("create", directory=str(self.repo), name="deferred", socket=self.socket,
                              agent="codex", command=[sys.executable, str(FAKE_AGENT), "codex", "deferred-start"])
@@ -11086,6 +11129,54 @@ class LastMessage(unittest.TestCase):
         self.write(".codex/sessions/2026/08/28/rollout-2026-08-28T18-33-42-other.jsonl",
                    [message("assistant", "wrong")])
         self.assertEqual(roost.last_message(task), "done")
+
+    def test_codex_asks_about_a_plan_its_rollout_holds_and_its_hook_left_out(self):
+        agent = roost.CodexAgent()
+        message = lambda role, said: {"type": "response_item", "payload": {
+            "type": "message", "role": role,
+            "content": [{"type": "input_text" if role == "user" else "output_text", "text": said}]}}
+        plan = "Here it is.\n<proposed_plan>\n# Plan\n1. Read\n2. Write\n</proposed_plan>\n"
+        rollout = ".codex/sessions/2026/11/11/rollout-2026-11-11T09-00-00-abc-123.jsonl"
+        stop = lambda **fields: agent.observe(dict(fields, hook_event_name="Stop", session_id="abc-123"), "running")
+        self.write(rollout, [message("user", "Plan the change"), message("assistant", plan)])
+        # In Plan mode the reply its hook reports has no plan in it.
+        asked = stop(last_assistant_message="Here it is.")
+        self.assertEqual((asked["status"], asked["lastEvent"], asked["request"]),
+                         ("permission", "Plan", "Asks whether to implement its plan"))
+        self.assertEqual(asked["lastReply"], "Here it is.\n\n# Plan\n1. Read\n2. Write")
+        # A reply that was all plan reports none.
+        self.assertEqual(stop()["lastReply"], "# Plan\n1. Read\n2. Write")
+        # Outside Plan mode Codex opens no menu, and its hook's reply has the tags.
+        plain = stop(last_assistant_message=plan)
+        self.assertEqual((plain["status"], plain["lastEvent"]), ("ready", "Stop"))
+        self.assertNotIn("request", plain)
+        # A plan earlier in the turn counts, as Codex's menu follows any.
+        self.write(rollout, [message("user", "Plan"), message("assistant", plan), message("assistant", "That is all.")])
+        self.assertEqual(stop(last_assistant_message="That is all.")["status"], "permission")
+        # Not one of a turn before, nor one you spoke after.
+        self.write(rollout, [message("user", "Plan"), message("assistant", plan),
+                             message("user", "And now?"), message("assistant", "Nothing more.")])
+        self.assertEqual(stop(last_assistant_message="Nothing more.")["status"], "ready")
+        # Tags within a line are words, not a plan.
+        self.write(rollout, [message("user", "Why?"), message("assistant", "It writes <proposed_plan> lines.")])
+        self.assertEqual(stop(last_assistant_message="It writes lines.")["status"], "ready")
+        # No rollout, one that can't be read, or no session: nothing is asked.
+        for session in ("none-such", "../abc-123", None, 5):
+            self.assertEqual(agent.observe(dict(hook_event_name="Stop", session_id=session), "running")["status"],
+                             "ready")
+        (self.home / rollout).write_text("not json\n")
+        self.assertEqual(stop()["status"], "ready")
+        # What Codex says to its terminal, done and then idle as after any
+        # turn, leaves the task asking; that it works again ends it.
+        task = dict(agent="codex", status="permission", lastEvent="Plan", runId="r",
+                    request="Asks whether to implement its plan")
+        for state in ("done", "idle"):
+            roost.apply_program_status(task, dict(state=state), "r")
+            self.assertEqual((task["status"], task["lastEvent"], task["request"]),
+                             ("permission", "Plan", "Asks whether to implement its plan"))
+        roost.apply_program_status(task, dict(state="working"), "r")
+        self.assertEqual((task["status"], task["lastEvent"]), ("running", "Approved"))
+        self.assertNotIn("request", task)
 
     def test_the_reply_codex_reports_is_the_latest_reply(self):
         # Codex 0.163.0's Stop carries the turn's reply, ahead of its rollout.

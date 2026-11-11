@@ -1239,6 +1239,21 @@ CODEX_HOOK_EVENTS = ("SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolU
                      "PostToolUse", "PermissionRequest", "Stop", "Interrupt")
 
 
+# A plan in a reply of Codex's, between lines of its tags, as its own
+# parser has them; one it is still writing has no closing line yet.
+PROPOSED_PLAN = re.compile(r"^[ \t]*<proposed_plan>[ \t]*$(.*?)(?:^[ \t]*</proposed_plan>[ \t]*$|\Z)", re.M | re.S)
+# What Codex asks once a Plan-mode turn ends with a plan, and the name of
+# that for a task's last event: no hook of Codex's says it.
+PLAN_REQUEST = "Asks whether to implement its plan"
+PLAN_EVENT = "Plan"
+
+
+def asks_about_plan(task):
+    """Whether TASK's agent rests at a menu that asks whether to implement
+    its plan: its turn is over, and nothing of it is at work."""
+    return task.get("status") == "permission" and task.get("lastEvent") == PLAN_EVENT
+
+
 class CodexAgent:
     """Native Codex TUI with per-invocation, normally reviewed lifecycle hooks."""
 
@@ -1312,24 +1327,69 @@ class CodexAgent:
             updates["lastReply"] = None
         if event == "UserPromptSubmit":
             updates["lastPrompt"] = payload.get("prompt")
+        if event == "Stop":
+            plan = self.plan_asked_about(payload)
+            if plan is not None:
+                # Its turn is over, but it asks: text sent now is dropped,
+                # and the Enter after it takes the menu's first choice.
+                updates.update(status="permission", lastEvent=PLAN_EVENT, request=PLAN_REQUEST)
+                said = "\n\n".join(part for part in (updates.get("lastReply"), plan) if part)
+                if said:
+                    updates["lastReply"] = said[:LAST_MESSAGE_LIMIT + 1]
         return updates
 
-    def last_message(self, task):
-        session = task.get("agentSession")
-        if not session or not re.fullmatch(r"[\w.-]+", session):
+    def rollout(self, session):
+        """The newest entries of the rollout of Codex's SESSION, oldest first,
+        or None without one."""
+        if not isinstance(session, str) or not re.fullmatch(r"[\w.-]+", session):
             return None
         sessions = Path.home() / ".codex" / "sessions"
         files = sorted(sessions.glob("*/*/*/rollout-*-" + session + ".jsonl"))
-        if not files:
+        return transcript_tail(files[-1]) if files else None
+
+    @staticmethod
+    def said(entry, role):
+        """The text of rollout ENTRY if it is a message of ROLE's, or None."""
+        payload = entry.get("payload") if isinstance(entry, dict) else None
+        if (entry.get("type") == "response_item" and isinstance(payload, dict)
+                and payload.get("type") == "message" and payload.get("role") == role):
+            return message_text(payload.get("content"), ("output_text", "input_text", "text")) or ""
+        return None
+
+    def plan_asked_about(self, payload):
+        """The plan Codex asks whether to implement as the turn of Stop hook
+        PAYLOAD ends, as Markdown, or None when it asks nothing. In Plan
+        mode a reply holds its plan between <proposed_plan> lines. Codex
+        shows that as the plan, leaves it out of the reply its hook reports,
+        and, the turn over, opens a menu: "Implement this plan?". It reports
+        nothing of the menu, not to its terminal either, and nothing when
+        you close it. Outside Plan mode it does none of that, and the reply
+        its hook reports has the lines in it. A rollout that is missing or
+        can't be read says nothing is asked."""
+        reply = payload.get("last_assistant_message")
+        if isinstance(reply, str) and PROPOSED_PLAN.search(reply):
             return None
+        try:
+            entries = self.rollout(payload.get("session_id")) or []
+        except (OSError, ValueError, TypeError):
+            return None
+        plan = None
+        for entry in entries:
+            if self.said(entry, "user") is not None:
+                # Another turn, or what you sent during this one, which
+                # Codex goes on with rather than ask.
+                plan = None
+            else:
+                found = PROPOSED_PLAN.search(self.said(entry, "assistant") or "")
+                if found:
+                    plan = found.group(1).strip()
+        return plan
 
-        def extract(entry):
-            payload = entry.get("payload")
-            if (entry.get("type") == "response_item" and isinstance(payload, dict)
-                    and payload.get("type") == "message" and payload.get("role") == "assistant"):
-                return message_text(payload.get("content"), ("output_text", "text"))
-
-        return last_assistant_text(transcript_tail(files[-1]), extract)
+    def last_message(self, task):
+        entries = self.rollout(task.get("agentSession"))
+        if entries is None:
+            return None
+        return last_assistant_text(entries, lambda entry: self.said(entry, "assistant"))
 
 
 PI_EXTENSION = r'''import { spawn } from "node:child_process";
@@ -4815,6 +4875,10 @@ def shell(store, task):
 
 
 def require_finished(task, pane):
+    # A menu about a plan comes after its turn, and you may have closed it
+    # since, of which nothing says: the agent is at rest either way.
+    if asks_about_plan(task):
+        return
     if task["status"] in ACTIVE:
         raise RoostError("The agent is active; stop it or wait before retiring this task")
     # The cached status can lag (or predate a reconnect); a live pane in an
@@ -7258,6 +7322,10 @@ def apply_program_status(task, fields, run_id):
         # A dialog while it rests, as one at its start or one you open,
         # waits on you too, but holds up no turn.
         changes = dict(status="permission", lastEvent="Blocked" if status == "running" else "Dialog")
+    elif state in ("done", "idle") and asks_about_plan(task):
+        # As after any turn: it says nothing of the menu it then opens,
+        # which its next turn's hook ends, or its word that it works.
+        pass
     elif state in ("done", "idle") and status == "permission" and task.get("lastEvent") == "Dialog":
         # Back at rest, as before the dialog: no turn ended.
         changes = dict(status="ready", lastEvent="Idle")

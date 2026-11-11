@@ -7,8 +7,10 @@ import itertools
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
+import tempfile
 import termios
 import time
 import urllib.parse
@@ -71,6 +73,17 @@ if codex:
                                                                          **fields)),
                        text=True, check=True)
     deferred_start = "deferred-start" in args
+    # Codex keeps a rollout of each session in its home. This one keeps
+    # its own from its first Plan-mode turn, in a home of the fixture's,
+    # which its hooks are then told is theirs: yours is left alone.
+    rollout = None
+
+    def record(role, said):
+        if rollout:
+            with rollout.open("a") as file:
+                file.write(json.dumps({"type": "response_item", "payload": {
+                    "type": "message", "role": role,
+                    "content": [{"type": "input_text" if role == "user" else "output_text", "text": said}]}}) + "\n")
 else:
     assert "--" not in args  # Pi's CLI does not accept an end-of-options marker.
     assert "--extension" in args and "--session-dir" in args
@@ -147,6 +160,7 @@ for line in sys.stdin:
         deferred_start = False
     status("working")
     if codex:
+        record("user", line)
         report("UserPromptSubmit", prompt=line)
     else:
         report("prompt", prompt=line, source="interactive")
@@ -177,6 +191,31 @@ for line in sys.stdin:
     elif line == "background" and codex:
         # Its turn ends with a command left running, and Codex works on.
         report("Stop")
+    elif line == "plan" and codex:
+        # A turn in Plan mode. Its reply holds a plan, which the reply its
+        # Stop hook reports leaves out. Then its menu asks whether to
+        # implement the plan, of which it says nothing: done, as after any
+        # turn.
+        if not rollout:
+            home = tempfile.TemporaryDirectory(prefix="fake-codex-")
+            for end in (signal.SIGTERM, signal.SIGHUP):
+                signal.signal(end, lambda *_: sys.exit(0))
+            rollout = Path(home.name) / ".codex/sessions/2026/11/11" / ("rollout-2026-11-11T00-00-00-%s.jsonl" % session)
+            rollout.parent.mkdir(parents=True)
+            os.environ["HOME"] = home.name
+            record("user", line)
+        record("assistant", "Two steps.\n<proposed_plan>\n# Plan\n- Step one\n- Step two\n</proposed_plan>")
+        report("Stop", last_assistant_message="Two steps.")
+        status("done")
+        if sys.stdin.readline().strip() == "yes":
+            # "Yes, implement this plan": Codex sends itself the words.
+            status("working")
+            record("user", "Implement the plan.")
+            report("UserPromptSubmit", prompt="Implement the plan.")
+            record("assistant", "Implemented.")
+            report("Stop", last_assistant_message="Implemented.")
+            status("idle")
+        # Else Esc, or "No, stay in Plan mode": nothing says so.
     elif line == "dialog" and not codex:
         # An extension asks whether a tool may run.
         report("ui_prompt_start", title="Allow\x1b[2J bash?\n")
@@ -196,6 +235,8 @@ for line in sys.stdin:
         break
     else:
         print("PROMPT " + line, flush=True)
+        if codex:
+            record("assistant", "PROMPT " + line)
         report("Stop" if codex else "agent_end")
         if codex:
             status("idle")

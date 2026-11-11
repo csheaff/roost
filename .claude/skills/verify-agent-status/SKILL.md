@@ -19,7 +19,8 @@ relayed or not. It checks one promise, in five rules:
 
 **Roost shows which agent needs you.** Once nothing is in flight and the
 poll has looked, an agent asking you something shows `permission`
-(`AskingShown`); one at its prompt shows `ready` or `failed`, and one that
+(`AskingShown`), at a request and at Codex's menu about its plan; one at its
+prompt shows `ready` or `failed`, and one that
 ended shows so (`DoneShownDone`); one at work never shows as waiting
 (`WorkNotWaiting`, though `permission` may stand while unsure); a hook's
 word that a turn failed or left work in the background stands
@@ -36,19 +37,20 @@ It does if the diff changes any of these, or what an agent sends:
 
 | Code (`scripts/roost_remote.py`) | In the model |
 | --- | --- |
-| `ClaudeAgent.observe`, `CodexAgent.observe` | `Observe` |
+| `ClaudeAgent.observe`, `CodexAgent.observe`, `plan_asked_about` | `Observe`, `EndPlan` |
 | `beside_program_status`, `run_ended` | `Beside`, `s1` in `Hook` |
 | `update_hook` (status, `hookAt`, `requestCommand`) | `Hook` |
-| `apply_program_status` | `Report` |
+| `apply_program_status`, `asks_about_plan` | `Report`, `PlanAsk` |
 | `program_status_recorder` (`record`, `finish`) | `Record`, `RunnerEnd` |
 | `runner`, its `finally` | `RunnerEnd` |
 | `list_tasks` (crash, recovery, `was_interrupted`, `approved_command_running`) | `Poll` |
 | `stop`, `resume`, `spawn` | `StopTask`, `Resume` |
 | The order of hooks and reports in `test/captures/claude-*`, `codex-*` | each step's script (`Prompt`, `Ask`, `End` ...) |
 
-Last confirmed to describe the code at `e910487`, with the change to
-`update_hook` and `beside_program_status` that came with this line. To see
-what has changed since: `git diff e910487 -- scripts/roost_remote.py`. Move this commit forward only
+Last confirmed to describe the code at `342ec40`, with the change to
+`CodexAgent.observe` and `apply_program_status` for Codex's plan menu that
+came with this line. To see what has changed since:
+`git diff 342ec40 -- scripts/roost_remote.py`. Move this commit forward only
 after you have read the diff of the functions above against the model and it
 still describes them.
 
@@ -65,9 +67,9 @@ About a minute; `make formal` runs every model. Each line is one config:
   waiting for the lock as Claude's turn ends.
 - `AgentStatus.No*.cfg` each break the code on purpose (the `Break`
   constant) and must fail on the rule they name, so each rule can still fail.
-- `LatePermissionPrompt`, `LateIdlePrompt` are findings:
-  the code as it is, under timings `AgentStatus.cfg` leaves out. They must
-  fail as they say until the code is fixed.
+- `LatePermissionPrompt`, `LateIdlePrompt` and `PlanMenuClosed` are findings:
+  the code as it is, under timings or moves of yours `AgentStatus.cfg` leaves
+  out. They must fail as they say until the code is fixed.
 
 `all models as expected` is a pass. Read every result, pass or fail, with
 the pstack `/statechart` skill: a violation as its shortest path in plain
@@ -105,14 +107,16 @@ constant in `AgentStatus.cfg` (say `LagPastTurnEnd = TRUE`), and keep a
 
 ## What it leaves out
 
-Pi, OpenCode and their report chains; subagents, MCP questions, dialogs,
-`/clear` and compaction; a hook Codex kills after 3 s (STATUS-3); a false
+Pi, OpenCode and their report chains; subagents, and so a request of one that
+outlasts the turn of the agent you talk to (`claude_answers`); MCP questions,
+dialogs, `/clear` and compaction; what an agent says it is doing (`activity`),
+which is no status; a hook Codex kills after 3 s (STATUS-3); a false
 `crashed` from tmux not answering; `seen` and the word Emacs shows. Hooks of
 one agent are taken as awaited, so in order, as the captures show. Bounds:
 ten steps, two runs, a gone agent may read `failed` or `exited` from a hook
 that landed after the crash.
 
-## Findings open at `e910487`
+## Findings open at `342ec40`
 
 Fixed: **StaleReport**. A relayed Claude's `working`, read before its
 `StopFailure` or `Stop` with background work and recorded after, made the
@@ -129,3 +133,8 @@ undo each half.
 - **LateIdlePrompt** (`WorkNotWaiting`), same condition: an `idle_prompt` a
   minute after a turn lands after your next prompt, and an unrelayed Claude
   at work reads `ready` until its next hook.
+- **PlanMenuClosed** (`DoneShownDone`), accepted: Codex says nothing when you
+  close its plan's menu, with Esc or "No, stay in Plan mode", so a Codex at
+  its prompt reads `permission` until your next prompt. `send` asks first and
+  goes through when you say so, and retiring and merging go ahead
+  (`require_finished`). Nothing short of reading its screen would tell.

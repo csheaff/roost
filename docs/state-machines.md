@@ -472,7 +472,7 @@ What each step leaves if it stops there, and what asking again does.
 | --- | --- | --- | --- |
 | 1 | read record, ask forge | none, then none | nothing changed |
 | 2 | `require_not_removing` | registry | refused, nothing changed |
-| 3 | `require_finished`, pane ownership | registry | refused |
+| 3 | `require_finished`, pane ownership; `permission` at Codex's plan menu counts as finished | registry | refused |
 | 4 | `put_back_removed` if `removing` | registry | restores tracked files, its link |
 | 5 | `check_worktree`, clean, submodules, Git lock, agent work | registry | refused, nothing changed |
 | 6 | branch moved from `expect`, then merge | registry | see next machine; a second merge finds it there |
@@ -707,7 +707,7 @@ reads `interrupted`.
 | `starting` | Runner made, agent has reported nothing yet | `ACTIVE`; set by `make_task` and `spawn` |
 | `ready` | Agent waits for a prompt | `lastEvent` says why: `SessionStart`/`session_start` (counts as seen), `Stop`, `Interrupt`, `Idle`, `Notification` |
 | `running` | Agent works on a prompt | `ACTIVE` |
-| `permission` | Agent asks something | `ACTIVE`; `lastEvent` `Dialog` means it holds up no turn |
+| `permission` | Agent asks something | `ACTIVE`; `lastEvent` `Dialog` means it holds up no turn, and `Plan` that its turn is over and Codex's menu asks whether to implement its plan |
 | `background` | Turn ended with work left: Claude's tasks or crons, Pi's queue | `ACTIVE`; never reported by Codex or OpenCode |
 | `stopped` | Stopped with `K` | `ENDED`; `paneId`, `windowId` None |
 | `exited` | Agent's process ended 0, or Claude said you left it | `ENDED` |
@@ -721,7 +721,9 @@ Invariants:
 - I1. `ACTIVE` means work may be under way; `ENDED` means the process has ended
   (comment at `ENDED`). Assumed by `list_tasks` and `require_finished`. **Not
   true of `failed` from `StopFailure`, or a report's `error`:** the agent lives,
-  which is why Emacs reads `live`.
+  which is why Emacs reads `live`. **Nor of `permission` with `lastEvent`
+  `Plan`:** the turn is over, so `require_finished` lets it go
+  (`asks_about_plan`).
 - I2. A status comes only from the current run: a hook, report or runner of an
   earlier run changes nothing (manual, How it works).
 - I3. `stopped` is final until `spawn`: no source but `spawn` leaves it.
@@ -733,7 +735,9 @@ Invariants:
 - I6. `permission` shows while the agent waits on you, and only then, as far as
   its hooks can say. `send` depends on it: it refuses `permission` because a
   paste and Enter could answer a menu. Unsure, it stands, as the manual allows.
-  Open: STATUS-3.
+  Open: STATUS-3. **Known to outlast the wait at Codex's plan menu:** closing
+  it, with Esc or "No, stay in Plan mode", sends nothing, so `permission`
+  stands until your next prompt; `send` goes through when forced.
 - I7. Every status change moves `updatedAt`; nothing else does (`turn`, `rename`,
   `seen`, `inspect` keep it).
 - I8. A live agent's status can only be wrong until its next event. **Not
@@ -814,10 +818,21 @@ agent. No `Notification`; no `background`; `error` isn't reset by hooks.
 | any | `PreToolUse`, `PostToolUse` | `running` | same | from `permission`, as Claude's above |
 | any | `PermissionRequest` | `permission` | same | |
 | any | `Stop` | `ready` | `Stop` | `lastReply` |
+| any | `Stop`, its turn's rollout holding a `<proposed_plan>` block that `last_assistant_message` leaves out | `permission` | `Plan` | `request` "Asks whether to implement its plan"; `lastReply` is the reply and the plan (`plan_asked_about`) |
 | any | `Interrupt` | `ready` | `Interrupt` | Esc, or a declined request |
 
 Codex waits for each hook, and kills one after 3 s (`timeout = 3`), losing its
 event: STATUS-3.
+
+In Plan mode Codex shows a reply's `<proposed_plan>` block as the plan, leaves
+it out of the reply its Stop hook reports, and once the turn is over opens a
+menu, "Implement this plan?". A paste there is dropped, and the Enter after it
+takes the first choice, which implements the plan. Codex says nothing of the
+menu: no hook, and to its terminal `done` as after any turn. So the Stop hook
+reads the turn's rollout, from the last message of yours on: a plan there that
+the reported reply lacks means the menu follows. Outside Plan mode the reply
+keeps the block, and no menu opens. "Yes, implement this plan" is a
+`UserPromptSubmit`; Esc, and "No, stay in Plan mode", are nothing at all.
 
 #### Pi, unrelayed (`PiAgent.observe`)
 
@@ -869,6 +884,7 @@ and OpenCode may send a hook late, so theirs set none. Conditions are tried in t
 | --- | --- | --- | --- | --- |
 | not `running` | `working` | `T`, or from `permission` | `running` | `Approved` from `permission`, else `Working` |
 | not `permission` | `blocked` | | `permission` | `Blocked` from `running`, else `Dialog` |
+| `permission`, `lastEvent` `Plan` | `done`, `idle` | | unchanged | unchanged: Codex reports nothing of its plan's menu |
 | `permission`, `lastEvent` `Dialog` | `done`, `idle` | | `ready` | `Idle` |
 | `starting`, `running`, `permission` | `done` | | `ready` | `Stop` |
 | `running`, `permission` | `idle` | | `ready` | `Interrupt` if `T`, else `Idle` |
