@@ -14471,6 +14471,31 @@ it of the same ID's, or nil for the first."
          (when (get-buffer roost--compose-buffer)
            (kill-buffer roost--compose-buffer)))))))
 
+(ert-deftest roost-the-sidebar-says-a-worktree-is-on-another-branch ()
+  ;; As the panel says first: for every task at once, in the warning's
+  ;; colour, while its agent isn't at work and no louder word is there.
+  (roost-test--isolated
+   (let ((row (lambda (width status &rest fields)
+                (clrhash roost--tasks)
+                (let* ((task (roost--cache-task "dev" (append fields '((live . t))
+                                                              (roost-test--task "1111111111111111" status))))
+                       (roost--name-counts (roost--count-names)))
+                  (roost--sidebar-row task width)))))
+     (let ((astray (funcall row 30 "stopped" '(worktreeBranch . "feat"))))
+       (should (string-suffix-p " on feat" astray))
+       (should (memq 'roost-status-permission
+                     (ensure-list (get-text-property (1- (length astray)) 'face astray)))))
+     (should (string-suffix-p " detached" (funcall row 30 "stopped" '(worktreeBranch . "HEAD"))))
+     ;; A long branch is cut, and a narrow sidebar keeps the name and a mark.
+     (should (string-suffix-p " on feature/long-…"
+                              (funcall row 40 "stopped" '(worktreeBranch . "feature/long-branch-name"))))
+     (should (string-suffix-p " !" (funcall row 16 "stopped" '(worktreeBranch . "feat"))))
+     ;; On its own branch, at work, or with the worktree gone, as before.
+     (should (string-suffix-p " stopped" (funcall row 30 "stopped")))
+     (should (string-suffix-p " running" (funcall row 30 "running" '(worktreeBranch . "feat"))))
+     (should-not (string-search "on feat" (funcall row 30 "stopped" '(worktreeBranch . "feat")
+                                                   '(worktreeMissing . t)))))))
+
 (ert-deftest roost-a-working-agent-says-what-it-is-doing ()
   ;; Beside `running', in the dashboard and at the top of its panel: the
   ;; tool its host last heard it start.  Not once it rests, or went.

@@ -22,8 +22,11 @@ What each release changes, and what to do when upgrading. Newest first.
   `f Files`, `t Shell`, `? More`, where the panel said `? opens the menu`.
   The remaining headings are dim. A panel in a window of its own, 72
   columns or wider, keeps its prompts and details unfolded. To have bold
-  headings back, give `roost-label` the weight you like. From
-  [#241](https://github.com/csheaff/roost/issues/241).
+  headings back, give `roost-label` the weight you like. The sidebar says
+  `on feat`, or `detached`, in the warning's colour beside a task whose
+  worktree is on another branch, while its agent isn't at work and no
+  louder word is there, so the warning reaches you with the panel closed.
+  From [#241](https://github.com/csheaff/roost/issues/241).
 - `make gallery` draws the task panel and the dashboard in every task
   state of the sweep's gallery and captures them as pictures, with no
   agent or host, and `make qa` takes screenshots under X, as with Xvfb, as

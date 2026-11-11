@@ -11871,7 +11871,19 @@ under a dozen columns, `roost--status-mark' stands for it."
                                  (string-width (roost--row-name task))
                                (min (string-width (roost--row-name task)) 12))
                              1 (string-width label)))))
-         (label (cond ((not status) nil)
+         ;; A worktree on another branch, which the panel says first: here
+         ;; too, for every task at once, while its agent isn't at work and
+         ;; no louder word is there.  Merging and retiring act on the
+         ;; task's branch, so until it is back they are refused.
+         (astray (and (or idle (member status '("stopped" "exited" "merged")))
+                      (not (roost--field task 'worktreeMissing))
+                      (when-let* ((branch (roost--other-branch task)))
+                        (propertize (if (equal branch "HEAD") "detached"
+                                      (concat "on " (truncate-string-to-width branch 14 nil nil "…")))
+                                    'face 'roost-status-permission))))
+         (label (cond (astray (if (funcall fits astray) astray
+                                (propertize "!" 'face 'roost-status-permission)))
+                      ((not status) nil)
                       (idle (seq-find (lambda (text) (funcall fits text t))
                                       (list status (roost--since-looked-text task t))))
                       ((funcall fits status) status)
