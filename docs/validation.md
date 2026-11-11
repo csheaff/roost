@@ -35,6 +35,32 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## The new look, on real sessions and other themes — 2026-11-11
+
+Emacs 29.3 under Xvfb, Magit 3.3.0 as Ubuntu 24.04 packages it, Claude
+Code 2.1.322 with Haiku.
+
+- **Six real tasks on two hosts**, the second this machine under another
+  home behind `test/qa/fake_ssh.py`: five started with prompts, one from
+  an Org heading's draft, their prompts answered in their terminals. The
+  README's four screenshots are of that session (`docs/demo.md`). One
+  agent, reading the project's plans, offered a task unasked, which showed
+  under its row.
+- **Magit 3.3.0.** A click on a changed file in a panel failed there, and
+  so did review notes and the commits to review: three of Magit's names
+  that Magit 4 changed. With that Magit on the load path the ERT suite
+  passes, 615 tests with 7 skipped, and `make qa`'s merge, review, notes,
+  since-looked and overlap journeys pass in a GUI frame, 36 steps. The
+  harness now leaves out Magit 3's fringe marks when it reads a window.
+- **Themes.** `make gallery` in modus-vivendi, modus-operandi, doom-one,
+  doom-nord, zenburn, solarized-light and with no theme. With no theme, or
+  one that leaves `shadow` alone, as zenburn does, the grey status shapes
+  did not show: Emacs's name for that colour is one SVG doesn't have.
+  Fixed. In doom-nord the dim text is faint, as that theme's `shadow` is.
+- **Not checked**: a display of twice the density, as a Mac's, where the
+  shapes should be drawn at that density but were only seen at a font
+  twice the size; Emacs 30 and later in a GUI; a real second machine.
+
 ## Offers and a planning conversation, live — 2026-11-11
 
 Claude Code 2.1.322 with Haiku, on Linux, through the helper and an
