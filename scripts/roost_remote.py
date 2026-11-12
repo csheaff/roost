@@ -14,6 +14,7 @@ import fcntl
 import functools
 import hashlib
 import heapq
+import html
 import json
 import locale
 import os
@@ -762,8 +763,10 @@ def claude_hook_settings(store, task):
         # Roost's own tools, which need no asking: an offer only waits in
         # Roost for you to take it or leave it.
         # Nor does an image, which only shows beside the agent's terminal.
-        allow = ["mcp__roost__propose_task", "mcp__roost__list_projects", "mcp__roost__show_image",
-                 "mcp__roost__show_widget"]
+        allow = ["mcp__roost__propose_task", "mcp__roost__list_projects", "mcp__roost__show_image"]
+        # Nor a page it writes, where you let it show one.
+        if task.get("mayShowPages") is True:
+            allow.append("mcp__roost__show_widget")
         if task.get("conversation") is True:
             # A conversation plans work in your projects, which it has to
             # read first: those this host has run tasks in, without asking
@@ -2432,6 +2435,9 @@ def make_task(store, request, create_id):
     # Its agent can offer tasks, if it can be given Roost's tool.
     if request.get("mayOffer") is True and getattr(agent, "offers", False):
         task["mayOffer"] = True
+        # And show you pages it writes, with the same tools, if you let it.
+        if request.get("mayShowPages") is True:
+            task["mayShowPages"] = True
     # It shows in the agent's own app, if the agent has one to show it in.
     if request.get("remoteControl") is True and getattr(agent, "remote_control", False):
         task["remoteControl"] = True
@@ -4551,8 +4557,11 @@ MCP_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
 MCP_SHOWS = (
     " The user reads you in a terminal, which draws no images. When they ask to see one, such as a "
     "screenshot, a chart or a diagram you made, or when a picture says it better than words, show it "
-    "with show_image rather than only naming its file. For something to click or drag, or a diagram "
-    "you would draw yourself, write it with show_widget.")
+    "with show_image rather than only naming its file.")
+# And of showing a page, where the task may (`mayShowPages`).
+MCP_PAGES = (
+    " For something to click or drag, or a diagram you would draw yourself, such as one of what you "
+    "changed and how its parts connect, write a page with show_widget.")
 MCP_INSTRUCTIONS = (
     "Roost runs you in a task of your own: a Git worktree and branch that the user reviews and merges. "
     "When you come across work outside what you were asked to do that is worth a task of its own, such "
@@ -4718,7 +4727,21 @@ class McpServer:
             conversation = self.store.read(self.task_id).get("conversation") is True
         except (RoostError, OSError, ValueError):
             conversation = False
-        return MCP_CONVERSATION_INSTRUCTIONS if conversation else MCP_INSTRUCTIONS
+        return ((MCP_CONVERSATION_INSTRUCTIONS if conversation else MCP_INSTRUCTIONS)
+                + (MCP_PAGES if self.pages() else ""))
+
+    def pages(self):
+        """Whether this task's agent may show pages it writes, which you
+        turn on (`roost-agent-pages`): the tool is not listed otherwise."""
+        try:
+            return self.store.read(self.task_id).get("mayShowPages") is True
+        except (RoostError, OSError, ValueError):
+            return False
+
+    def tools(self):
+        """The tools this task's agent has, by name."""
+        return {name: definition for name, definition in MCP_TOOLS.items()
+                if name != "show_widget" or self.pages()}
 
     def answer(self, method, params):
         if method == "initialize":
@@ -4729,10 +4752,10 @@ class McpServer:
         if method == "ping":
             return {}
         if method == "tools/list":
-            return dict(tools=[dict(definition, name=name) for name, definition in MCP_TOOLS.items()])
+            return dict(tools=[dict(definition, name=name) for name, definition in self.tools().items()])
         if method == "tools/call":
             arguments = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
-            if params.get("name") not in MCP_TOOLS:
+            if params.get("name") not in self.tools():
                 raise McpError(-32602, "Unknown tool: %s" % params.get("name"))
             try:
                 if params.get("name") == "list_projects":
@@ -5001,14 +5024,16 @@ svg text { font-family:var(--font-sans); }
 :root[data-mode=dark] .c-purple>rect,:root[data-mode=dark] .c-purple>circle,:root[data-mode=dark] .c-purple>ellipse,:root[data-mode=dark] rect.c-purple,:root[data-mode=dark] circle.c-purple,:root[data-mode=dark] ellipse.c-purple{fill:#3C3489;stroke:#AFA9EC}:root[data-mode=dark] .c-purple .th,:root[data-mode=dark] .c-purple .t{fill:#CECBF6}:root[data-mode=dark] .c-purple .ts{fill:#AFA9EC}:root[data-mode=dark] .c-teal>rect,:root[data-mode=dark] .c-teal>circle,:root[data-mode=dark] .c-teal>ellipse,:root[data-mode=dark] rect.c-teal,:root[data-mode=dark] circle.c-teal,:root[data-mode=dark] ellipse.c-teal{fill:#085041;stroke:#5DCAA5}:root[data-mode=dark] .c-teal .th,:root[data-mode=dark] .c-teal .t{fill:#9FE1CB}:root[data-mode=dark] .c-teal .ts{fill:#5DCAA5}:root[data-mode=dark] .c-coral>rect,:root[data-mode=dark] .c-coral>circle,:root[data-mode=dark] .c-coral>ellipse,:root[data-mode=dark] rect.c-coral,:root[data-mode=dark] circle.c-coral,:root[data-mode=dark] ellipse.c-coral{fill:#712B13;stroke:#F0997B}:root[data-mode=dark] .c-coral .th,:root[data-mode=dark] .c-coral .t{fill:#F5C4B3}:root[data-mode=dark] .c-coral .ts{fill:#F0997B}:root[data-mode=dark] .c-pink>rect,:root[data-mode=dark] .c-pink>circle,:root[data-mode=dark] .c-pink>ellipse,:root[data-mode=dark] rect.c-pink,:root[data-mode=dark] circle.c-pink,:root[data-mode=dark] ellipse.c-pink{fill:#72243E;stroke:#ED93B1}:root[data-mode=dark] .c-pink .th,:root[data-mode=dark] .c-pink .t{fill:#F4C0D1}:root[data-mode=dark] .c-pink .ts{fill:#ED93B1}:root[data-mode=dark] .c-gray>rect,:root[data-mode=dark] .c-gray>circle,:root[data-mode=dark] .c-gray>ellipse,:root[data-mode=dark] rect.c-gray,:root[data-mode=dark] circle.c-gray,:root[data-mode=dark] ellipse.c-gray{fill:#444441;stroke:#B4B2A9}:root[data-mode=dark] .c-gray .th,:root[data-mode=dark] .c-gray .t{fill:#D3D1C7}:root[data-mode=dark] .c-gray .ts{fill:#B4B2A9}:root[data-mode=dark] .c-blue>rect,:root[data-mode=dark] .c-blue>circle,:root[data-mode=dark] .c-blue>ellipse,:root[data-mode=dark] rect.c-blue,:root[data-mode=dark] circle.c-blue,:root[data-mode=dark] ellipse.c-blue{fill:#0C447C;stroke:#85B7EB}:root[data-mode=dark] .c-blue .th,:root[data-mode=dark] .c-blue .t{fill:#B5D4F4}:root[data-mode=dark] .c-blue .ts{fill:#85B7EB}:root[data-mode=dark] .c-green>rect,:root[data-mode=dark] .c-green>circle,:root[data-mode=dark] .c-green>ellipse,:root[data-mode=dark] rect.c-green,:root[data-mode=dark] circle.c-green,:root[data-mode=dark] ellipse.c-green{fill:#27500A;stroke:#97C459}:root[data-mode=dark] .c-green .th,:root[data-mode=dark] .c-green .t{fill:#C0DD97}:root[data-mode=dark] .c-green .ts{fill:#97C459}:root[data-mode=dark] .c-amber>rect,:root[data-mode=dark] .c-amber>circle,:root[data-mode=dark] .c-amber>ellipse,:root[data-mode=dark] rect.c-amber,:root[data-mode=dark] circle.c-amber,:root[data-mode=dark] ellipse.c-amber{fill:#633806;stroke:#EF9F27}:root[data-mode=dark] .c-amber .th,:root[data-mode=dark] .c-amber .t{fill:#FAC775}:root[data-mode=dark] .c-amber .ts{fill:#EF9F27}:root[data-mode=dark] .c-red>rect,:root[data-mode=dark] .c-red>circle,:root[data-mode=dark] .c-red>ellipse,:root[data-mode=dark] rect.c-red,:root[data-mode=dark] circle.c-red,:root[data-mode=dark] ellipse.c-red{fill:#791F1F;stroke:#F09595}:root[data-mode=dark] .c-red .th,:root[data-mode=dark] .c-red .t{fill:#F7C1C1}:root[data-mode=dark] .c-red .ts{fill:#F09595}
 </style>
 <script>
-function roostPost(message) {
-  if (parent !== window) parent.postMessage(message, '*');
-  else if (message.roost !== 'height') (window.roostOutbox = window.roostOutbox || []).push(message);
-}
+function roostPost(message) { parent.postMessage(message, '*'); }
+addEventListener('message', function (event) {
+  if (event.source === parent && event.data && event.data.roostMode)
+    document.documentElement.dataset.mode = event.data.roostMode === 'dark' ? 'dark' : 'light';
+});
 function sendPrompt(text) { roostPost({roost: 'prompt', kind: 'prompt', text: String(text)}); }
 function openLink(url) { roostPost({roost: 'link', kind: 'link', text: String(url)}); }
 function roostFit() { roostPost({roost: 'height', height: Math.ceil(document.body.getBoundingClientRect().height)}); }
-addEventListener('load', function () { roostFit(); new ResizeObserver(roostFit).observe(document.body); });
+addEventListener('load', function () {
+  roostPost({roost: 'ready'}); roostFit(); new ResizeObserver(roostFit).observe(document.body); });
 document.addEventListener('click', function (e) {
   var a = e.target.closest && e.target.closest('a[href]');
   if (a) { e.preventDefault(); openLink(a.href); } });
@@ -5016,9 +5041,42 @@ document.addEventListener('click', function (e) {
 """
 
 
+# The page Emacs loads: none of the agent's code runs in it. That runs in a
+# frame with no origin of its own, which can run scripts and nothing more:
+# it cannot open a window, send a form, or take the page or itself
+# anywhere, which a policy alone lets a script do. The page passes the frame
+# its mode, makes it as tall as what it holds, and keeps what it asks to
+# send for Emacs to take.
+WIDGET_FRAME = """<!doctype html><meta charset=utf-8>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob:;
+ style-src 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com;
+ font-src https://fonts.gstatic.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com;
+ script-src 'unsafe-inline' https://cdnjs.cloudflare.com https://esm.sh https://cdn.jsdelivr.net https://unpkg.com">
+<style>html, body { margin:0; } iframe { display:block; width:100%%; height:60px; border:0; }</style>
+<iframe id="widget" sandbox="allow-scripts" srcdoc="%s"></iframe>
+<script>
+window.roostOutbox = [];
+var roostFrame = document.getElementById('widget');
+function roostMode(mode) {
+  document.documentElement.dataset.mode = mode;
+  document.documentElement.style.colorScheme = mode;
+  roostFrame.contentWindow.postMessage({roostMode: mode}, '*');
+}
+addEventListener('message', function (event) {
+  var data = event.data || {};
+  if (event.source !== roostFrame.contentWindow) return;
+  if (data.roost === 'height') roostFrame.style.height = Math.max(40, Math.min(20000, data.height | 0)) + 'px';
+  else if (data.roost === 'ready' && document.documentElement.dataset.mode) roostMode(document.documentElement.dataset.mode);
+  else if ((data.roost === 'prompt' || data.roost === 'link') && window.roostOutbox.length < 20)
+    window.roostOutbox.push({kind: data.roost, text: String(data.text).slice(0, 4000)});
+});
+</script>
+"""
+
+
 def widget_page(code):
     """The whole page for CODE, an SVG element or an HTML fragment."""
-    return WIDGET_HEAD + code
+    return WIDGET_FRAME % html.escape(WIDGET_HEAD + code, quote=True)
 
 
 def image_kind(data):

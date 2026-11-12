@@ -290,15 +290,16 @@ goes with the task. The tool for this, `show_image`, comes with
 `roost-agent-offers`, for Claude Code tasks started or resumed since. It
 shows a PNG, JPEG, GIF or WebP of at most 8 MB.
 
-**See a page an agent writes.** The agent can also show a small page of its
-own: a diagram, a mock-up, or controls to try, such as a slider. It opens
-where an image does and takes its place, and what moves in it works there. A
-button in it that asks the agent something opens a draft to the task with its
-words, for you to send: nothing a page does reaches the agent until you do.
-The page's scripts can load libraries from cdnjs.cloudflare.com,
-cdn.jsdelivr.net, unpkg.com and esm.sh, and reach nothing else. It needs a
-graphical Emacs built with xwidgets. The tool is `show_widget`, for a page of
-at most 512 KB.
+**See a page an agent writes.** With `roost-agent-pages` on, the agent can
+also show a small page of its own: a diagram of what it changed, a mock-up,
+or controls to try, such as a slider. Ask for one by what it is, as in "show
+me that as a diagram I can click". It opens where an image does and takes its
+place, and what moves in it works there. A button in it that asks the agent
+something opens a draft to the task with its words, for you to send: nothing
+a page does reaches the agent until you do. The agent doesn't see its page
+drawn, so tell it what looks wrong. It needs a graphical Emacs built with
+xwidgets. The tool is `show_widget`, for a page of at most 512 KB, in Claude
+Code tasks started since you turned the option on.
 
 **Keep them in view.** `b` in the dashboard, or `M-x roost-sidebar-mode`, keeps a
 compact task list at the left of the frame, through `C-x 1`; add
@@ -914,6 +915,12 @@ header line. A failed creation keeps the draft.
   conversation's agent offer tasks in your projects, and either show you
   an image beside its terminal. Claude Code only. Nil
   gives agents no tools of Roost's, for tasks started after you change it.
+- `roost-agent-pages` (nil): with `roost-agent-offers`, let a task's agent
+  show you a page it writes, such as a diagram you can click
+  ([See a page an agent writes](#a-day-with-roost)). Off by default: its
+  tool adds to each request the agent makes, and a page shows only in a
+  graphical Emacs built with xwidgets. Claude Code only, for tasks started
+  after you turn it on.
 - `roost-large-change` (`(:lines 400 :files 10 :directories 3)`): when a
   task's row gets its `±`. Leave one out to mark by the others, as
   `(:lines 400)`; nil marks none.
@@ -1240,7 +1247,16 @@ What runs where:
   and ends it with itself. Its tool `show_image` copies an image file the
   agent names into Roost's state directory, if its first bytes say it is a
   PNG, JPEG, GIF or WebP and it is at most 8 MB, and notes it in the task's
-  record; Emacs draws that copy and nothing else. It can name any file
+  record; Emacs draws that copy and nothing else. With `roost-agent-pages`
+  on, its tool `show_widget` keeps a page the agent writes the same way.
+  None of the agent's code is in the page Emacs loads: it is the text of a
+  frame with no origin of its own, allowed to run scripts and nothing
+  more, under a policy that lets scripts, styles and fonts load from
+  cdnjs.cloudflare.com, cdn.jsdelivr.net, unpkg.com, esm.sh and Google
+  Fonts, and nothing else load or be sent. So a page cannot open a window,
+  send a form, or take itself or the page around it to another address;
+  what it asks to send you goes into a draft to the task, which you send.
+  `show_image` can name any file
   the helper can read, so an agent learns whether a path is such an image,
   and no more: every refusal reads the same. Its tool `propose_task` writes an offer
   into the record of the task whose agent called it, and nothing else, and

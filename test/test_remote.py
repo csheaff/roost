@@ -11,6 +11,7 @@ import importlib.util
 import hashlib
 import io
 import itertools
+import html
 import json
 import os
 import re
@@ -10416,7 +10417,7 @@ print(json.dumps(dict(data=data)))
         settings = json.loads(Path(argv[argv.index("--settings") + 1]).read_text())
         self.assertEqual(settings["permissions"],
                          {"allow": ["mcp__roost__propose_task", "mcp__roost__list_projects",
-                                    "mcp__roost__show_image", "mcp__roost__show_widget"]})
+                                    "mcp__roost__show_image"]})
         # The prompt still comes last, after --.
         self.assertEqual(argv[-2:], ["--", "Look"])
 
@@ -10482,7 +10483,7 @@ print(json.dumps(dict(data=data)))
         # reads: an agent that asks before a tool unless told it changes
         # nothing, as Codex does, needn't ask.
         tools = {tool["name"]: tool for tool in replies[2]["result"]["tools"]}
-        self.assertEqual(sorted(tools), ["list_projects", "propose_task", "show_image", "show_widget"])
+        self.assertEqual(sorted(tools), ["list_projects", "propose_task", "show_image"])
         self.assertIn("show it with show_image", replies[1]["result"]["instructions"])
         for tool in tools.values():
             self.assertFalse(tool["annotations"]["destructiveHint"])
@@ -10497,22 +10498,53 @@ print(json.dumps(dict(data=data)))
             name=tool, arguments=arguments)))["call"]["result"]
 
     def test_an_agent_shows_a_page_it_wrote_which_emacs_fetches(self):
-        task = self.create(name="parent", mayOffer=True)
+        # Only where you let it: the tool is not listed, called or allowed
+        # without asking for a task made without `mayShowPages`.
+        plain = self.create(name="plain", mayOffer=True)
+        listed = self.serve(plain, dict(id=1, method="initialize", params={}),
+                            dict(id=2, method="tools/list"),
+                            dict(id=3, method="tools/call", params=dict(
+                                name="show_widget", arguments=dict(title="t", widget_code="<p>x</p>"))))
+        self.assertNotIn("show_widget", [tool["name"] for tool in listed[2]["result"]["tools"]])
+        self.assertNotIn("show_widget", listed[1]["result"]["instructions"])
+        self.assertEqual(listed[3]["error"]["code"], -32602)
         store = roost.Store(str(self.state))
+        self.assertNotIn("mayShowPages", store.read(plain["id"]))
+        # Nor without the tools it comes with.
+        self.assertNotIn("mayShowPages", store.read(self.create(name="bare", mayShowPages=True)["id"]))
+
+        task = self.create(name="parent", mayOffer=True, mayShowPages=True)
+        listed = self.serve(task, dict(id=1, method="initialize", params={}), dict(id=2, method="tools/list"))
+        self.assertIn("show_widget", [tool["name"] for tool in listed[2]["result"]["tools"]])
+        self.assertIn("write a page with show_widget", listed[1]["result"]["instructions"])
+        argv = roost.ClaudeAgent().launch(store, store.read(task["id"]), False)
+        allowed = json.loads(Path(argv[argv.index("--settings") + 1]).read_text())["permissions"]["allow"]
+        self.assertIn("mcp__roost__show_widget", allowed)
+
         code = "<button onclick=\"sendPrompt('Go on')\">Go on</button>"
         said = self.call(task, "show_widget", title="next\tstep", widget_code=code)
         self.assertNotIn("isError", said)
         self.assertIn("next?step", said["content"][0]["text"])
-        listed = self.request("list")["result"][0]["shown"]
+        listed = next(row for row in self.request("list")["result"] if row["id"] == task["id"])["shown"]
         self.assertEqual((listed["name"], listed["kind"]), ("next?step", "html"))
         fetched = self.request("shown", id=task["id"])["result"]
         page = base64.b64decode(fetched["data"]).decode()
-        # Its own code, after what a page is given of its host: a policy
-        # that reaches nothing but four hosts of libraries, and sendPrompt.
-        self.assertTrue(page.endswith(code))
-        self.assertIn("default-src 'none'", page)
-        self.assertIn("function sendPrompt", page)
-        self.assertEqual([file.name for file in store.shown(task["id"]).iterdir()], [fetched["id"] + ".html"])
+        # None of its code is in the page itself: it is the text of a frame
+        # that can run scripts and no more, under a policy that reaches
+        # nothing but four hosts of libraries.
+        self.assertNotIn(code, page)
+        self.assertIn(html.escape(code, quote=True), page)
+        self.assertIn('<iframe id="widget" sandbox="allow-scripts" srcdoc="', page)
+        self.assertEqual(page.count("<iframe"), 1)
+        self.assertTrue(page.startswith("<!doctype html><meta charset=utf-8>\n<meta http-equiv=\"Content-Security-Policy\" "
+                                        "content=\"default-src 'none'"))
+        self.assertIn("function sendPrompt", html.unescape(page))
+        # Code that tries to end the frame's text early stays inside it.
+        self.call(task, "show_widget", title="out", widget_code='"></iframe><script>top.location="http://x/"</script>')
+        page = base64.b64decode(self.request("shown", id=task["id"])["result"]["data"]).decode()
+        self.assertEqual((page.count("<iframe"), page.count("</iframe>")), (1, 1))
+        self.assertNotIn('top.location="http', page)
+        self.assertEqual([file.suffix for file in store.shown(task["id"]).iterdir()], [".html"])
         # It takes the place of an image, and an image of it.
         png = b"\x89PNG\r\n\x1a\n" + b"pixels"
         (Path(store.read(task["id"])["worktree"]) / "shot.png").write_bytes(png)
@@ -10524,7 +10556,7 @@ print(json.dumps(dict(data=data)))
         self.assertEqual(self.request("shown", id=task["id"])["result"]["kind"], "png")
         # With no title it still has a name to be called by.
         self.call(task, "show_widget", widget_code="<svg></svg>")
-        self.assertEqual(self.request("list")["result"][0]["shown"]["name"], "a page")
+        self.assertEqual(next(row for row in self.request("list")["result"] if row["id"] == task["id"])["shown"]["name"], "a page")
 
     def test_an_agent_shows_an_image_which_emacs_fetches(self):
         task = self.create(name="parent", mayOffer=True)
@@ -10615,7 +10647,7 @@ print(json.dumps(dict(data=data)))
         argv = roost.ClaudeAgent().launch(store, store.read(talk["id"]), False)
         allowed = json.loads(Path(argv[argv.index("--settings") + 1]).read_text())["permissions"]["allow"]
         self.assertEqual(allowed, ["mcp__roost__propose_task", "mcp__roost__list_projects", "mcp__roost__show_image",
-                                   "mcp__roost__show_widget", "Read(/%s/**)" % self.repo.resolve()])
+                                   "Read(/%s/**)" % self.repo.resolve()])
         # Without one, it is told to name it.
         refused = self.call(talk, "propose_task", title="Fix add", brief="Fix add in calc.py.")
         self.assertTrue(refused["isError"])
@@ -10664,7 +10696,7 @@ print(json.dumps(dict(data=data)))
             settings = json.loads(Path(roost.claude_hook_settings(store, task)).read_text())
         self.assertEqual(settings["permissions"]["allow"],
                          ["mcp__roost__propose_task", "mcp__roost__list_projects", "mcp__roost__show_image",
-                          "mcp__roost__show_widget", "Read(//srv/plain/**)"])
+                          "Read(//srv/plain/**)"])
 
     def test_an_offer_names_only_a_repository_of_yours(self):
         parent = self.create(name="parent")

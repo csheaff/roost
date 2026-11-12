@@ -371,6 +371,15 @@ for Claude Code when you press Esc or decline one, which hooks don't
 report.  New tasks, and tasks you resume, follow this."
   :type 'boolean)
 
+(defcustom roost-agent-pages nil
+  "Whether a task's agent can show you a page it writes.
+A diagram, a mock-up or controls to try, beside its terminal, as it
+shows an image.  Off unless you turn it on: the tool for it adds to each
+request the agent makes, and a page shows only in a graphical Emacs built
+with xwidgets.  It comes with Roost's other tools, so it needs
+`roost-agent-offers' too.  Claude Code only.  New tasks follow this."
+  :type 'boolean)
+
 (defcustom roost-agent-offers t
   "Whether a task's agent can offer tasks of their own, for you to start.
 An agent that comes across work outside its task, such as a bug in
@@ -3328,6 +3337,7 @@ EXTRA is an alist of further request fields, such as the issue."
            ,(cons 'branchPrefix roost-branch-prefix)
            ,(cons 'programStatus (if roost-program-status t :false))
            ,(cons 'mayOffer (if roost-agent-offers t :false))
+           ,(cons 'mayShowPages (if (and roost-agent-offers roost-agent-pages) t :false))
            ,(cons 'remoteControl (if roost-remote-control t :false))
            ,(cons 'size (roost--terminal-size))
            ,(cons 'socket (or roost-socket-name
@@ -11113,7 +11123,7 @@ dark.  What the page asks to send becomes a draft to its task."
      (when (equal (nth 3 last-input-event) "load-finished")
        (xwidget-webkit-execute-script
         view (format (concat "document.documentElement.style.background = %S;"
-                             "document.documentElement.dataset.mode = %S")
+                             "window.roostMode && roostMode(%S)")
                      (or (face-background 'default nil t) "white")
                      (if (eq (frame-parameter nil 'background-mode) 'dark) "dark" "light")))))
     ('javascript-callback
