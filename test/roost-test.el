@@ -15335,6 +15335,20 @@ it of the same ID's, or nil for the first."
            (with-current-buffer (roost--shown-buffer key)
              (should (equal roost--shown-page "<p>hi</p>"))
              (should-not (multibyte-string-p roost--shown-page)))
+           ;; Asked for again, the same page is left as you have it: its
+           ;; view is not made anew, which would lose what you set in it.
+           (let ((held (with-current-buffer (roost--shown-buffer key) roost--shown-page)))
+             (with-current-buffer (roost--shown-buffer key)
+               (let ((inhibit-read-only t)) (erase-buffer) (insert "as drawn")))
+             (roost--take-shown key page t)
+             (with-current-buffer (roost--shown-buffer key)
+               (should (eq roost--shown-page held))
+               (should (equal (buffer-string) "as drawn")))
+             ;; A page shown since takes its place.
+             (roost--take-shown key (append '((at . "2026-11-11T10:07:00+00:00") (data . "PHA+eW88L3A+"))
+                                            page))
+             (with-current-buffer (roost--shown-buffer key)
+               (should (equal roost--shown-page "<p>yo</p>"))))
            ;; An image after it takes its place, as an image.
            (cl-letf (((symbol-function 'display-images-p) (lambda (&rest _) t))
                      ((symbol-function 'image-type-available-p) (lambda (&rest _) t)))

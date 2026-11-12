@@ -1643,13 +1643,18 @@ or, when you ASKED for it, beside the window you are in."
              ;; A reply read before the image the buffer holds was shown,
              ;; which can come after that one's.
              (stale (let ((held (buffer-local-value 'roost--shown-image-at buffer)))
-                      (and (stringp held) (string< at held)))))
+                      (and (stringp held) (string< at held))))
+             ;; The page it shows already, as when you ask for it again:
+             ;; left as you have it, with what you set in it.
+             (same (and (equal kind "html")
+                        (equal at (buffer-local-value 'roost--shown-image-at buffer))
+                        (equal data (buffer-local-value 'roost--shown-page buffer)))))
         ;; What a poll named may be older than what its host sent: the next
         ;; poll, naming this one, has no news then.
         (when (string< (gethash key roost--shown-at "") at)
           (puthash key at roost--shown-at))
         (with-current-buffer buffer
-          (unless stale
+          (unless (or stale same)
             (let ((inhibit-read-only t))
               (roost--drop-page)
               (fundamental-mode)

@@ -4212,13 +4212,90 @@ def crashed(qa, repo):
             for name in (first, second)))])
 
 
+@journey("A page an agent shows")
+def show_page(qa, repo):
+    """An agent shows a page it wrote, which opens beside its terminal as
+    an image does. What its button asks to send comes to a draft, which
+    sends nothing. Asked for again it is left as you have it; an image
+    takes its place."""
+    if qa.emacs.eval("(and (roost--pages-p) t)") != "t":
+        qa.notes.add("This Emacs has no web view (xwidgets), so the page journey was not taken")
+        return
+    qa.emacs.eval("(setq roost-agent-offers t roost-agent-pages t)")
+    task = new_task(qa, "page seat plan")
+    qa.status(task, "ready", "idle")
+    open_task(qa, task)
+    name = "*roost image: %s*" % task
+    page = lambda s: next((w for w in s["windows"] if w["mode"] == "roost-shown-page-mode"), None)
+    view = "(with-current-buffer %s (roost--page-view))" % lisp(name)
+    qa.wait("the page", page, timeout=30)
+    qa.step("The agent shows a page, which opens beside its terminal", expect=[
+        ("the page has a window of its own", lambda s: page(s)["buffer"] == name),
+        ("a web view draws it", lambda s: qa.emacs.eval("(and %s t)" % view) == "t"),
+        ("you stay in the terminal", lambda s: selected_terminal(s) is not None),
+        ("the agent says it showed it", lambda s: "SHOWED Shown." in selected_terminal(s)["text"]),
+        ("the panel names it", lambda s: "Page   seat plan" in qa.window(s, "roost-task-info-mode")["text"]),
+        ("no draft is open", lambda s: not qa.window(s, "roost-send-mode"))])
+
+    # Its button, which the page presses itself once its width changes.
+    time.sleep(3)
+    width = int(qa.emacs.eval("(frame-width)"))
+    draft = lambda s: qa.window(s, "roost-send-mode") or {}
+    for narrower in (8, 0, 8, 0):
+        qa.emacs.eval("(progn (set-frame-width nil %d) t)" % (width - narrower))
+        qa.settle(1.2)
+        if "Explain the seat plan" in draft(qa.screen()).get("text", ""):
+            break
+    qa.emacs.eval("(progn (set-frame-width nil %d) t)" % width)
+    qa.wait("the draft", lambda s: "Explain the seat plan" in draft(s).get("text", ""), timeout=20)
+    qa.step("The page's button asks, and its words come to a draft", expect=[
+        ("the draft is to this task", lambda s: draft(s)["buffer"] == "*roost send: %s*" % task),
+        ("the page still shows, beside it", lambda s: page(s) and page(s)["buffer"] == name),
+        ("nothing was sent", lambda s: not any("PROMPT Explain the seat plan" in w["text"] for w in terminals(s)))])
+    qa.keys("C-c C-k")
+    qa.wait("whether to discard it", lambda s: (s["prompt"] or "").startswith("Discard this prompt"))
+    qa.type("y")
+    qa.wait("the draft closed", lambda s: not qa.window(s, "roost-send-mode"))
+
+    # Asked for again while it shows, it is the same view, as you left it.
+    qa.emacs.eval("(progn (setq qa-page-view %s) t)" % view)
+    if qa.emacs.eval("(qa-click-text \"seat plan\" \"roost-task-info-mode\")") != "t":
+        raise Stuck("No seat plan in the panel to click")
+    qa.settle(1.5)
+    qa.step("Asked for again, the page is left as you have it", expect=[
+        ("it is the same view", lambda s: qa.emacs.eval("(and (eq qa-page-view %s) t)" % view) == "t"),
+        ("in one window", lambda s: len([w for w in s["windows"] if w["buffer"] == name]) == 1)])
+
+    qa.emacs.eval("(quit-window nil (get-buffer-window %s))" % lisp(name))
+    qa.wait("the page closed", lambda s: not page(s))
+    if qa.emacs.eval("(qa-click-text \"seat plan\" \"roost-task-info-mode\")") != "t":
+        raise Stuck("No seat plan in the panel to click")
+    qa.settle()
+    qa.wait("the page again", page, timeout=30)
+    qa.step("Closed, the panel's line brings it back", expect=[
+        ("the page shows again", lambda s: page(s)["buffer"] == name),
+        ("the terminal is still on screen", lambda s: any(w.get("terminal") for w in s["windows"]))])
+
+    # An image takes its place, in the same window, and its view goes.
+    qa.keys("C-c r e")
+    qa.wait("the prompt", lambda s: s["prompt"])
+    qa.type("show ../chart.png\r")
+    image = lambda s: next((w for w in s["windows"] if w["mode"] == "image-mode"), None)
+    qa.wait("the image", image, timeout=30)
+    qa.step("An image the agent shows next takes the page's place", expect=[
+        ("the image is in the page's buffer", lambda s: image(s)["buffer"] == name),
+        ("no page shows", lambda s: not page(s)),
+        ("its web view is gone", lambda s: qa.emacs.eval("(and %s t)" % view) != "t"),
+        ("the panel names the image", lambda s: "Image  chart.png" in qa.window(s, "roost-task-info-mode")["text"])])
+
+
 JOURNEYS = [sweep, answer, next_waiting, fold, resize, merge, review, notes, since_looked, panes, window_buffers, reconnect_away, shell,
             dashboard, panel_keys, stop_resume, retire, discard, teardown, send, attach, update, conflicts, restart,
             search, workload, question_left,
             walk_away,
             frames, draft_frames, org, drafts, draft_fields, by_clicks, conversation, clicks, overlap, region, tabs,
             own_workspace,
-            forget, rename, fork, offer, show, other_branch, switched_branch, merged, large, pull_request, merge_request, exits,
+            forget, rename, fork, offer, show, show_page, other_branch, switched_branch, merged, large, pull_request, merge_request, exits,
             include, slow_create,
             unreachable,
             doctor, scrollback,
