@@ -4,6 +4,44 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+## 0.12.0
+
+To upgrade from 0.11:
+
+- Restart Emacs after updating. Keys new in this release, such as `B`, `=`,
+  `C` and `v`, live in keymaps Emacs made when it first loaded Roost.
+- Agents can offer tasks, and do unless you turn it off: each Claude task
+  starts with Roost's two tools, about 560 tokens on each of its requests,
+  which Claude Code caches with the rest of its prompt. Set
+  `roost-agent-offers` to nil to start agents without them.
+- Roost's views are drawn with tints, shapes and hairlines made from your
+  theme's colours. Set `roost-decorate` to nil for the words alone.
+- Colour now means a task needs you, so line counts are no longer green
+  and red. To colour them again, make `roost-diff-added` and
+  `roost-diff-removed` inherit `success` and `error`.
+- Call or bind `roost-dashboard` rather than `roost-status`, an obsolete
+  alias until 1.1. The names 0.9 made obsolete are gone, and
+  `M-x roost-doctor` names any your configuration still sets. If you set
+  `roost-startup-grace`, `roost-request-timeout`,
+  `roost-watch-unfocused-interval` or `roost-note-box-lines` with
+  Customize, set it with `setq`: they are plain variables now.
+- For GitLab, install `glab` and run `glab auth login` on each host with
+  projects there.
+- Stop and resume (`K`, then `s`) running Claude tasks, for the sandbox's
+  requests to say what they ask, and Pi and OpenCode tasks, for their
+  panels to show your latest prompt.
+- If a hook refused a squash merge before, `git status` in the primary
+  checkout may still show that task's work staged. If
+  `git config --get-regexp 'submodule\..*\.url'` there names Roost's state
+  directory, run `git config --remove-section submodule.NAME` for it.
+- With perspective.el, update tmux-control to 0.8.3 and set
+  `tmux-control-window-buffers` to `all` for a task's perspective to list
+  every tmux window of its session.
+- Nothing else: each host gets the new helper with Roost's next request to
+  it, and agents at work carry on.
+
+Changes since 0.11.0:
+
 - `i` on a task whose panel isn't on screen shows the panel from its top.
   It could come up scrolled to its agent's reply, with what is wrong, the
   next step and the changed files out of sight, after its panel had been
