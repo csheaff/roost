@@ -35,6 +35,22 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## Before 0.12.0 — 2026-11-12
+
+- **On a Mac**, the section below: `/code-review high` of #260, the whole
+  `make qa`, the whole `make crash` and `make contract`, on main with #260
+  (ec689c7), and what they found fixed in #261.
+- **`make test compile`** on the release commit: 624 ERT tests (36
+  skipped) and 586 Python tests (8 skipped) passed, with no byte-compile
+  warnings. `test_a_rebase_is_found_in_a_worktree_whose_path_is_not_utf8`
+  passed only when run again alone, as it did once before under load.
+- **Live**, with Claude Code 2.1.322 on Linux, #260's runs below: the
+  manual-mode contract session, an agent offering a task, a conversation
+  planning two tasks, a fork, and six tasks on two hosts reviewed in Magit.
+- **Not by hand this time.** The list above wasn't run on this Mac. A real
+  remote host (claylien was down), Codex in Plan mode, Pi and OpenCode, and
+  Remote Control in the Claude app went unchecked.
+
 ## What #260 left unchecked, on a Mac — 2026-11-11
 
 The checks #260's description listed as not done, on main as it was merged
