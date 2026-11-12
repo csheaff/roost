@@ -15755,7 +15755,12 @@ report.py, and the third alone changes src/totals.py."
                    ((symbol-function 'roost--task-terminal-window) (lambda (_task) terminal))
                    ((symbol-function 'roost--display-shown)
                     (lambda (buffer window) (push (list (buffer-name buffer) window) displayed))))
-           ;; A task made just now, which showed one as it started: fetched.
+           ;; Shown before this Emacs first listed the task's host: left alone.
+           (roost--cache-task "dev" (cons (funcall shown "33333333" "2026-11-11T09:00:00+00:00")
+                                          (append '((name . "earlier")) (roost-test--task "3333333333333333" "ready"))))
+           (should-not asked)
+           ;; A task made since, which showed one as it started: fetched.
+           (puthash "dev" 1 roost--snapshots)
            (roost--cache-task "dev" (cons (funcall shown "22222222" "2999-01-01T00:00:00+00:00")
                                           (append '((name . "fresh")) (roost-test--task "2222222222222222" "ready"))))
            (should (equal asked '(("dev" "shown" ((id . "2222222222222222"))))))
@@ -15763,8 +15768,7 @@ report.py, and the third alone changes src/totals.py."
            (remhash '("dev" "2222222222222222") roost--tasks)
            (roost--forget-shown '("dev" "2222222222222222"))
            (should-not (get-buffer "*roost image: fresh*"))
-           ;; Shown before this Emacs started, by a task it lists for the
-           ;; first time: left alone.
+           (remhash "dev" roost--snapshots)
            (roost--cache-task "dev" (funcall task (funcall shown "00000000" "2026-11-11T10:00:00+00:00")))
            (should-not asked)
            ;; Shown since, with its terminal off screen: fetched, and it waits.

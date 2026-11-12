@@ -10527,13 +10527,15 @@ print(json.dumps(dict(data=data)))
         self.assertEqual([file.name for file in store.shown(task["id"]).iterdir()], [fetched["id"] + ".gif"])
         # Only an image, by what the file holds, and of a size Emacs can take.
         (worktree / "notes.png").write_text("#!/bin/sh\n")
-        for path, why in (("notes.png", "is not a PNG"), ("missing.png", "is no file"), (str(worktree), "is no file"),
-                          ("", "Give the path")):
+        # Refused in the same words whatever is wrong, as the tool needs no
+        # permission: not whether a file is there, nor how large it is.
+        (worktree / "huge.png").write_bytes(png + b"\0" * roost.SHOWN_LIMIT)
+        for path in ("notes.png", "missing.png", str(worktree), "huge.png", "~nosuchuser-roost/shot.png"):
             refused = self.call(task, "show_image", path=path)
             self.assertTrue(refused.get("isError"), refused)
-            self.assertIn(why, refused["content"][0]["text"])
-        (worktree / "huge.png").write_bytes(png + b"\0" * roost.SHOWN_LIMIT)
-        self.assertIn("at most 8 MB", self.call(task, "show_image", path="huge.png")["content"][0]["text"])
+            self.assertEqual(refused["content"][0]["text"], "%s is not an image Roost can show: a PNG, JPEG, GIF "
+                             "or WebP file of at most 8 MB" % path)
+        self.assertIn("Give the path", self.call(task, "show_image", path="")["content"][0]["text"])
         self.assertEqual(self.request("shown", id=task["id"])["result"]["name"], "chart.gif")
         # A record's own word for what was shown is not taken: only what
         # this helper wrote.

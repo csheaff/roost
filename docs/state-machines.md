@@ -2848,6 +2848,8 @@ Invariants:
 - I1. The record names an image only once its copy is there whole: the copy is
   written first, under a name of its own, and older copies go after the record is
   saved (`show_image`). `make crash` kills the helper at each step (`Show`).
+- I0. The tool needs no permission, so it tells the agent nothing of a path but
+  whether Roost showed it: every refusal reads the same (`show_image`).
 - I2. Emacs draws only what the helper wrote and checked: a PNG, JPEG, GIF or WebP by
   its first bytes, of at most 8 MB, under an ID the helper made (`image_kind`,
   `shown_image`). A record edited by hand names nothing.
@@ -2857,8 +2859,8 @@ Invariants:
   `roost--note-shown` fetches only a newer `shown.at`, and `roost--display-shown`
   selects nothing. One that comes while you answer a question in the minibuffer
   waits until you are done (`roost--when-out-of-minibuffer`): the minibuffer puts
-  the windows back as they were, and the image's would go. What a task this Emacs lists for the first time showed before
-  Emacs loaded Roost is not brought up (`roost--shown-since`).
+  the windows back as they were, and the image's would go. What a task showed before this Emacs first listed its host is not brought up
+  (`roost--snapshots`).
 - I5. A frame shows only the image of the task whose terminal it shows
   (`roost--put-away-shown`), and an image goes with its task (`Store.remove`,
   `roost--forget-shown`).
@@ -2867,8 +2869,8 @@ Invariants:
 |---|---|---|---|---|---|
 | any | agent calls `show_image` | an image, small enough; task not stopped | Shown, not taken up | copy written, record saved, older copies removed | `show_image` |
 | any | agent calls `show_image` | otherwise | same | the agent is told why not | `show_image` |
-| Shown, not taken up | a list or reply names it | task known to this Emacs, or shown since it loaded Roost | On screen or Waiting | `shown` requested; beside the terminal if on screen | `roost--note-shown`, `roost--take-shown` |
-| Shown, not taken up | a list names it | task new to this Emacs, shown before it loaded Roost | Closed | noted, not fetched | `roost--note-shown` |
+| Shown, not taken up | a list or reply names it | task known to this Emacs, or its host listed before | On screen or Waiting | `shown` requested; beside the terminal if on screen | `roost--note-shown`, `roost--take-shown` |
+| Shown, not taken up | a list names it | task new to this Emacs, in its host's first list | Closed | noted, not fetched | `roost--note-shown` |
 | Waiting | you open the task | | On screen | beside its terminal | `roost--show-waiting` |
 | On screen | another task's terminal takes the frame | | Closed | its window deleted | `roost--put-away-shown` |
 | On screen | `q` | | Closed | | `quit-window` |

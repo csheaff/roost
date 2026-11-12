@@ -1230,7 +1230,9 @@ What runs where:
   and ends it with itself. Its tool `show_image` copies an image file the
   agent names into Roost's state directory, if its first bytes say it is a
   PNG, JPEG, GIF or WebP and it is at most 8 MB, and notes it in the task's
-  record; Emacs draws that copy and nothing else. Its tool `propose_task` writes an offer
+  record; Emacs draws that copy and nothing else. It can name any file
+  the helper can read, so an agent learns whether a path is such an image,
+  and no more: every refusal reads the same. Its tool `propose_task` writes an offer
   into the record of the task whose agent called it, and nothing else, and
   `list_projects` names the projects that host has run tasks in: none of
   the three runs a program or reaches another task. The task's own Claude

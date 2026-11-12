@@ -4925,23 +4925,25 @@ def show_image(store, task_id, path):
     if not path or "\0" in path:
         raise RoostError("Give the path of an image file")
     task = store.read(task_id)
-    file = Path(path).expanduser()
-    if not file.is_absolute():
-        file = Path(task.get("worktree") or os.getcwd()) / file
+    # One answer whatever is wrong with it: the tool needs no permission, and
+    # must not say of a path the agent may not read whether a file is
+    # there, or how large.
+    refused = RoostError("%s is not an image Roost can show: a PNG, JPEG, GIF or WebP file of at most %d MB"
+                         % (path, SHOWN_LIMIT // (1024 * 1024)))
     try:
+        # An unknown ~user is a RuntimeError.
+        file = Path(path).expanduser()
+        if not file.is_absolute():
+            file = Path(task.get("worktree") or os.getcwd()) / file
         if not file.is_file():
-            raise RoostError("%s is no file" % file)
-        size = file.stat().st_size
-        if size > SHOWN_LIMIT:
-            raise RoostError("%s is %d MB, and Roost shows an image of at most %d MB; make a smaller one"
-                             % (file, -(-size // (1024 * 1024)), SHOWN_LIMIT // (1024 * 1024)))
+            raise refused
         with open(file, "rb") as source:
             data = source.read(SHOWN_LIMIT + 1)
-    except OSError as error:
-        raise RoostError("Can't read %s: %s" % (file, error.strerror or error))
+    except (OSError, RuntimeError):
+        raise refused
     kind = image_kind(data)
     if not kind or len(data) > SHOWN_LIMIT:
-        raise RoostError("%s is not a PNG, JPEG, GIF or WebP image, which is what Roost shows" % file)
+        raise refused
     # Its name is read in Emacs, where what doesn't show would mislead.
     name = "".join("?" if hidden_character(c) or c in "\n\t" else c for c in file.name)[:200]
     ident = uuid.uuid4().hex[:8]
@@ -4949,9 +4951,9 @@ def show_image(store, task_id, path):
     folder.mkdir(mode=0o700, parents=True, exist_ok=True)
     # Written before the lock, which hooks wait on, under a name of its own.
     kept = folder / ("%s.%s" % (ident, kind))
-    with os.fdopen(os.open(kept, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as output:
-        output.write(data)
     try:
+        with os.fdopen(os.open(kept, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as output:
+            output.write(data)
         with store.locked():
             task = store.read(task_id)
             # Its agent may be on its way out, as when you stopped the task.
@@ -8302,7 +8304,7 @@ def outgoing(result):
                 task.pop(field, None)
             if "offers" in task:
                 task["offers"] = task_offers(task)
-            if "shown" in task and "data" not in task and not shown_image(task):
+            if "shown" in task and not shown_image(task):
                 del task["shown"]
     return result
 

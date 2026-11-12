@@ -1545,23 +1545,19 @@ notifies of itself."
   "When each task's agent showed the image this Emacs last took up, by key.")
 (defvar roost--shown-waiting (make-hash-table :test 'equal)
   "The buffer of the image each task has to show once it is opened, by key.")
-(defvar roost--shown-since (format-time-string "%Y-%m-%dT%H:%M:%S" nil t)
-  "When this Emacs loaded Roost, in UTC, as a task's record writes a time.
-An image shown before then, by a task this Emacs lists for the first
-time, is not brought up: only one shown while you were here.")
 (defvar-local roost--shown-task nil
   "The key of the task whose agent showed the image in this buffer.")
 
 (defun roost--note-shown (host task old)
   "Fetch the image TASK's agent on HOST showed, if it is news.
 OLD is the task as it was cached before, or nil when it is new to this
-Emacs: what it showed before this Emacs started is not brought up again,
-but what a task just made showed as it started is."
+Emacs.  What a task showed before this Emacs first listed its host is
+not brought up again; what one made since showed as it started is."
   (let* ((key (roost--key task))
          (at (alist-get 'at (roost--field task 'shown))))
     (when (and (stringp at) (string< (gethash key roost--shown-at "") at))
       (puthash key at roost--shown-at)
-      (when (or old (string< roost--shown-since at))
+      (when (or old (gethash host roost--snapshots))
         (roost--request host "shown" (list (cons 'id (roost--field task 'id)))
                         (lambda (image) (roost--take-shown key image))
                         (lambda (error)
@@ -1586,7 +1582,10 @@ or, when you ASKED for it, beside the window you are in."
             (insert data)
             (set-buffer-modified-p nil))
           (setq roost--shown-task key)
-          (setq buffer-read-only t))
+          (setq buffer-read-only t)
+          ;; A window that shows the image before draws this one, not its bytes.
+          (when-let* ((window (get-buffer-window buffer t)))
+            (roost--draw-shown buffer window)))
         ;; Until then it waits, as for a task off screen.
         (puthash key buffer roost--shown-waiting)
         ;; Not while you answer a question: the minibuffer puts the windows
@@ -10928,19 +10927,26 @@ right, or below a narrow one.  You stay in the window you are in."
   (let* ((wide (>= (window-total-width terminal) 140))
          (window (display-buffer
                   buffer
-                  `((display-buffer-reuse-window display-buffer-in-direction)
+                  ;; Elsewhere in the frame when that window can't be split,
+                  ;; as the docked panel's.
+                  `((display-buffer-reuse-window display-buffer-in-direction
+                                                 display-buffer-pop-up-window display-buffer-use-some-window)
                     (window . ,terminal)
                     (direction . ,(if wide 'right 'below))
                     ,(if wide '(window-width . 0.4) '(window-height . 0.4))
                     (inhibit-same-window . t)))))
     ;; Once it has a window, whose size the image is fitted to.
-    (with-current-buffer buffer
-      (let ((key roost--shown-task))
-        (if window
-            (with-selected-window window (image-mode))
-          (image-mode))
-        (setq roost--shown-task key)))
+    (roost--draw-shown buffer window)
     window))
+
+(defun roost--draw-shown (buffer window)
+  "Draw the image whose bytes BUFFER holds, fitted to WINDOW if it has one."
+  (with-current-buffer buffer
+    (let ((key roost--shown-task))
+      (if (window-live-p window)
+          (with-selected-window window (image-mode))
+        (image-mode))
+      (setq roost--shown-task key))))
 
 (defun roost--show-waiting (task)
   "Show the image TASK's agent showed while its terminal was off screen.
