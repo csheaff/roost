@@ -1997,7 +1997,8 @@ def to_shell(qa):
     what is typed next must not reach the agent."""
     screen = qa.screen()
     if (selected_terminal(screen) or {}).get("pane") == (screen.get("task") or {}).get("pane"):
-        qa.keys("C-c C-o")
+        # In the trial of ghostel-tmux, its own key for the next pane.
+        qa.keys("C-t o" if qa.emacs.eval("(featurep 'ghostel-tmux)") == "t" else "C-c C-o")
 
 
 def answer_yes(qa, name):
