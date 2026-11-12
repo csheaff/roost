@@ -15803,6 +15803,10 @@ report.py, and the third alone changes src/totals.py."
                                       (data . "b2xk")))
              (with-current-buffer "*roost image: budget*"
                (should (equal (buffer-string) "new")))
+             ;; Nor does it wait to show, as after you closed the newer one;
+             ;; and what came is no news to the next poll that names it.
+             (should-not (gethash key roost--shown-waiting))
+             (should (equal (gethash key roost--shown-at) "2026-11-11T10:20:00+00:00"))
              ;; Renamed, the task keeps its buffer, which another task that
              ;; takes its old name doesn't get.
              (puthash key (cons '(name . "ledger") (assq-delete-all 'name (gethash key roost--tasks))) roost--tasks)

@@ -4921,8 +4921,9 @@ def show_image(store, task_id, path):
     the task's record says which, for Emacs to fetch (`fetch_shown`). By what the
     file holds, not its name: Emacs draws only an image. The agent's status
     and `updatedAt` stay as they were, as showing is no event of its own."""
-    path = (text(path) or "").strip()
-    if not path or "\0" in path:
+    # As given: a file's name can end in a space.
+    path = text(path) or ""
+    if not path.strip() or "\0" in path:
         raise RoostError("Give the path of an image file")
     task = store.read(task_id)
     # One answer whatever is wrong with it: the tool needs no permission, and

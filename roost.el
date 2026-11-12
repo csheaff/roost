@@ -1596,13 +1596,19 @@ or, when you ASKED for it, beside the window you are in."
               ((stringp kind)))
     (if (not (and (display-images-p) (image-type-available-p (intern kind))))
         (message "%s shows %s, which this Emacs can't draw" (roost--field task 'name) (alist-get 'name image))
-      (let ((buffer (or (roost--shown-buffer key)
-                        (generate-new-buffer (format "*roost image: %s*" (roost--task-label task)))))
-            (at (or (alist-get 'at image) "")))
+      (let* ((buffer (or (roost--shown-buffer key)
+                         (generate-new-buffer (format "*roost image: %s*" (roost--task-label task)))))
+             (at (or (alist-get 'at image) ""))
+             ;; A reply read before the image the buffer holds was shown,
+             ;; which can come after that one's.
+             (stale (let ((held (buffer-local-value 'roost--shown-image-at buffer)))
+                      (and (stringp held) (string< at held)))))
+        ;; What a poll named may be older than what its host sent: the next
+        ;; poll, naming this one, has no news then.
+        (when (string< (gethash key roost--shown-at "") at)
+          (puthash key at roost--shown-at))
         (with-current-buffer buffer
-          ;; Not a reply read before the image the buffer holds was shown,
-          ;; which can come after that one's.
-          (unless (and (stringp roost--shown-image-at) (string< at roost--shown-image-at))
+          (unless stale
             (let ((inhibit-read-only t))
               (fundamental-mode)
               (erase-buffer)
@@ -1614,8 +1620,10 @@ or, when you ASKED for it, beside the window you are in."
             ;; A window that shows the image before draws this one, not its bytes.
             (when-let* ((window (get-buffer-window buffer t)))
               (roost--draw-shown buffer window))))
-        ;; Until then it waits, as for a task off screen.
-        (puthash key buffer roost--shown-waiting)
+        ;; Until then it waits, as for a task off screen.  Not an older
+        ;; one you didn't ask for, which would bring back an image you closed.
+        (when (or asked (not stale))
+          (puthash key buffer roost--shown-waiting))
         ;; Not while you answer a question: the minibuffer puts the windows
         ;; back as they were when it is done, and the image would go.
         (roost--when-out-of-minibuffer
@@ -10983,7 +10991,8 @@ Beside the selected window, which shows the terminal as TASK is opened."
          (buffer (gethash key roost--shown-waiting)))
     (remhash key roost--shown-waiting)
     (when (buffer-live-p buffer)
-      (roost--display-shown buffer (selected-window)))))
+      ;; Beside its grid, if its panes are tiled.
+      (roost--display-shown buffer (or (roost--shown-beside task) (selected-window))))))
 
 (defun roost--put-away-shown (task)
   "Close the windows of the selected frame that show another task's image.

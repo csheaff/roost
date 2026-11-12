@@ -10518,6 +10518,11 @@ print(json.dumps(dict(data=data)))
         self.assertTrue(fetched["ok"], fetched)
         fetched = fetched["result"]
         self.assertEqual((fetched["id"], base64.b64decode(fetched["data"])), (listed["id"], png))
+        # A name is taken as given, to its last space.
+        (worktree / "shot.png ").write_bytes(png + b"spaced")
+        (worktree / "shot.png").write_text("not this one")
+        self.assertNotIn("isError", self.call(task, "show_image", path="shot.png "))
+        self.assertEqual(base64.b64decode(self.request("shown", id=task["id"])["result"]["data"]), png + b"spaced")
         # The next takes its place, and its copy the other's.
         outside = self.root / "chart.gif"
         outside.write_bytes(b"GIF89a" + b"frames")
