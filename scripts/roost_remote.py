@@ -760,9 +760,11 @@ def claude_hook_settings(store, task):
             # A conversation plans work in your projects, which it has to
             # read first: those this host has run tasks in, without asking
             # at each file. Reading only: a change or a command there asks
-            # as ever. Not one whose name a rule can't hold.
+            # as ever. Not one whose name a rule can't hold, nor one with
+            # what a rule takes for a pattern, which would match folders
+            # other than the one named: that project asks at each read.
             allow += ["Read(/%s/**)" % repo for repo in known_projects(store)
-                      if repo.startswith("/") and not re.search(r"[()\n*]", repo)]
+                      if repo.startswith("/") and not re.search(r"[()\n*?\[\]\\]", repo)]
         settings["permissions"] = {"allow": allow}
     path = store.tasks_dir / (task["id"] + ".settings")
     atomic_json(path, settings)
@@ -1358,8 +1360,11 @@ class CodexAgent:
 
     @staticmethod
     def said(entry, role):
-        """The text of rollout ENTRY if it is a message of ROLE's, or None."""
-        payload = entry.get("payload") if isinstance(entry, dict) else None
+        """The text of rollout ENTRY if it is a message of ROLE's, or None:
+        also for a line that is JSON but no entry."""
+        if not isinstance(entry, dict):
+            return None
+        payload = entry.get("payload")
         if (entry.get("type") == "response_item" and isinstance(payload, dict)
                 and payload.get("type") == "message" and payload.get("role") == role):
             return message_text(payload.get("content"), ("output_text", "input_text", "text")) or ""
@@ -4732,9 +4737,13 @@ def known_projects(store):
     """The projects this host has run tasks in, by their primary checkouts,
     newest first: not the repository Roost keeps for conversations."""
     own = os.path.realpath(store.root / CONVERSATIONS)
+    dated = []
+    for marker in (store.root / "worktrees").glob("*/" + REPOSITORY_MARKER):
+        # Gone since it was found, as when its task is retired meanwhile.
+        with contextlib.suppress(OSError):
+            dated.append((marker.stat().st_mtime, marker))
     found = []
-    for marker in sorted((store.root / "worktrees").glob("*/" + REPOSITORY_MARKER),
-                         key=lambda path: path.stat().st_mtime, reverse=True):
+    for _, marker in sorted(dated, key=lambda pair: pair[0], reverse=True):
         with contextlib.suppress(OSError):
             repo = read_repository(marker)
             if repo and repo not in found and os.path.realpath(repo) != own and os.path.isdir(repo):

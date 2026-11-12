@@ -10538,6 +10538,28 @@ print(json.dumps(dict(data=data)))
         full = self.call(talk, "propose_task", title="One more", brief="And this.", project=str(self.repo))
         self.assertIn("%d offers" % roost.CONVERSATION_OFFER_LIMIT, full["content"][0]["text"])
 
+    def test_the_projects_listed_leave_out_a_task_retired_meanwhile(self):
+        # Its marker, found as the list is read, is gone by the time it is
+        # dated: a conversation started then still starts, and the list
+        # still answers its agent.
+        self.create(name="earlier")
+        store = roost.Store(str(self.state))
+        found = Path.glob
+        gone = store.root / "worktrees" / "retired meanwhile" / roost.REPOSITORY_MARKER
+        with patch.object(Path, "glob", lambda path, pattern: [*found(path, pattern), gone]):
+            self.assertEqual(roost.known_projects(store), [str(self.repo.resolve())])
+
+    def test_a_conversation_reads_without_asking_only_where_its_rule_says_so(self):
+        # A rule for a folder is a pattern, where [ ] ? and \ match other
+        # folders than the one named: such a project asks at each read.
+        store = roost.Store(str(self.state))
+        task = dict(id="0123456789abcdef", runId="r", mayOffer=True, conversation=True)
+        projects = ["/srv/plain", "/srv/app[2]", "/srv/what?", "/srv/back\\slash"]
+        with patch.object(roost, "known_projects", lambda _store: projects):
+            settings = json.loads(Path(roost.claude_hook_settings(store, task)).read_text())
+        self.assertEqual(settings["permissions"]["allow"],
+                         ["mcp__roost__propose_task", "mcp__roost__list_projects", "Read(//srv/plain/**)"])
+
     def test_an_offer_names_only_a_repository_of_yours(self):
         parent = self.create(name="parent")
         other = self.root / "other project"
@@ -11792,6 +11814,12 @@ class LastMessage(unittest.TestCase):
                              "ready")
         (self.home / rollout).write_text("not json\n")
         self.assertEqual(stop()["status"], "ready")
+        # Nor does a line that is JSON but no entry end the hook: the plan
+        # after it is still found.
+        (self.home / rollout).write_text("null\n[1]\n\"text\"\n" + json.dumps(message("user", "Plan")) + "\n"
+                                         + json.dumps(message("assistant", plan)) + "\n")
+        self.assertEqual(stop(last_assistant_message="Here it is.")["status"], "permission")
+        self.assertIn("# Plan", agent.last_message(dict(agentSession="abc-123")))
         # What Codex says to its terminal, done and then idle as after any
         # turn, leaves the task asking; that it works again ends it.
         task = dict(agent="codex", status="permission", lastEvent="Plan", runId="r",

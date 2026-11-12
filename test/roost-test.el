@@ -2473,6 +2473,27 @@ terminal's, on a pty.  Skips the test where it can't be made."
                                        (buffer-string)))))
          (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
 
+(ert-deftest roost-a-conversation-is-no-task-to-fork ()
+  ;; It has no work of its own, in no project of yours: C-u c on it
+  ;; drafts a task, as c does, not a fork of it that no host would make.
+  (roost-test--isolated
+   (roost--cache-task "dev" (append '((name . "Conversation 10:30") (conversation . t) (agentSession . "s1")
+                                      (repo . "/home/user/.local/share/roost/conversations"))
+                                    (roost-test--task)))
+   (setq roost--current-task '("dev" "0123456789abcdef"))
+   (let ((default-directory "/tmp/"))
+     (save-window-excursion
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--git-in) #'ignore))
+             (roost--compose t)
+             (with-current-buffer roost--compose-buffer
+               (should-not (plist-get roost--compose-fields :source))
+               (should-not (plist-get roost--compose-fields :source-id))
+               (should-not (plist-get roost--compose-fields :base))
+               (should-not (string-search "Conversation 10:30" (buffer-string)))
+               (should-not (string-search "fork" (buffer-string)))))
+         (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
+
 (ert-deftest roost-a-fork-goes-on-with-its-tasks-conversation ()
   (roost-test--isolated
    (roost--cache-task "dev" (append '((repo . "/home/user/repo") (integrationBranch . "release")
@@ -12238,6 +12259,32 @@ ssh: connect to host dev port 22: Operation timed out"
              (should-not (local-variable-p 'cursor-type))))
        (kill-buffer sidebar)
        (when (get-buffer " *elsewhere*") (kill-buffer " *elsewhere*"))))))
+
+(ert-deftest roost-a-panel-brought-up-shows-its-top ()
+  ;; Brought up where it wasn't on screen, as `i' on another task's row
+  ;; does, it showed where point was left: drawn narrow beside its
+  ;; terminal, then wide below another's, that was in the agent's reply,
+  ;; and its title, next step and changed files were out of sight.
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (append `((lastMessage . ,(string-join (make-list 40 "A reply.") "\n")))
+                                                (roost-test--task "1111111111111111" "ready")))))
+     (save-window-excursion
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--refresh-host) #'ignore))
+             (with-current-buffer (roost--task-info-buffer task)
+               (goto-char (point-max)))
+             (roost-task-info task)
+             (should (derived-mode-p 'roost-task-info-mode))
+             (should (= (point) (point-min)))
+             (should (= (window-start) (point-min)))
+             ;; On screen already, it stays where you are in it.
+             (forward-line 3)
+             (let ((there (point)))
+               (other-window 1)
+               (roost-task-info task)
+               (should (= (point) there))))
+         (when-let* ((panel (roost--task-info-buffer task)))
+           (kill-buffer panel)))))))
 
 (ert-deftest roost-a-task-panel-highlights-the-line-you-are-on-while-you-are-in-it ()
   (roost-test--isolated

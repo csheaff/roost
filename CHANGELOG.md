@@ -4,6 +4,21 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- `i` on a task whose panel isn't on screen shows the panel from its top.
+  It could come up scrolled to its agent's reply, with what is wrong, the
+  next step and the changed files out of sight, after its panel had been
+  drawn narrower beside its terminal. Nothing to do when upgrading.
+- `C-u c` on a conversation drafts a task, as `c` does. Before, it drafted
+  a fork of the conversation in another project, which its host refused,
+  or which started from that project's work while it said it was a fork.
+  A Codex task whose rollout holds a line that is JSON but no entry ends
+  its turns as before, where its Stop hook failed and the task read
+  running. A conversation reads without asking only in projects whose
+  folder names no `[`, `]`, `?` or `\`, which a permission rule takes as
+  a pattern for other folders; those ask at each read. A task retired just
+  as a conversation starts no longer fails its start. `roost-copy-attach-command`
+  says that the terminal you attach sizes the agent's window, in Emacs too,
+  while it is attached. Nothing to do when upgrading.
 - Roost's views are drawn with more than their text. A status that wants
   you sits on a quiet tint of its colour: in a task panel's title, where it
   is now at the right edge, in the dashboard's counts and rows, and in the
