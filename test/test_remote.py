@@ -10416,7 +10416,7 @@ print(json.dumps(dict(data=data)))
         settings = json.loads(Path(argv[argv.index("--settings") + 1]).read_text())
         self.assertEqual(settings["permissions"],
                          {"allow": ["mcp__roost__propose_task", "mcp__roost__list_projects",
-                                    "mcp__roost__show_image"]})
+                                    "mcp__roost__show_image", "mcp__roost__show_widget"]})
         # The prompt still comes last, after --.
         self.assertEqual(argv[-2:], ["--", "Look"])
 
@@ -10482,7 +10482,7 @@ print(json.dumps(dict(data=data)))
         # reads: an agent that asks before a tool unless told it changes
         # nothing, as Codex does, needn't ask.
         tools = {tool["name"]: tool for tool in replies[2]["result"]["tools"]}
-        self.assertEqual(sorted(tools), ["list_projects", "propose_task", "show_image"])
+        self.assertEqual(sorted(tools), ["list_projects", "propose_task", "show_image", "show_widget"])
         self.assertIn("show it with show_image", replies[1]["result"]["instructions"])
         for tool in tools.values():
             self.assertFalse(tool["annotations"]["destructiveHint"])
@@ -10495,6 +10495,36 @@ print(json.dumps(dict(data=data)))
         """What TASK's agent is told as it calls TOOL of Roost's with ARGUMENTS."""
         return self.serve(task, dict(id="call", method="tools/call", params=dict(
             name=tool, arguments=arguments)))["call"]["result"]
+
+    def test_an_agent_shows_a_page_it_wrote_which_emacs_fetches(self):
+        task = self.create(name="parent", mayOffer=True)
+        store = roost.Store(str(self.state))
+        code = "<button onclick=\"sendPrompt('Go on')\">Go on</button>"
+        said = self.call(task, "show_widget", title="next\tstep", widget_code=code)
+        self.assertNotIn("isError", said)
+        self.assertIn("next?step", said["content"][0]["text"])
+        listed = self.request("list")["result"][0]["shown"]
+        self.assertEqual((listed["name"], listed["kind"]), ("next?step", "html"))
+        fetched = self.request("shown", id=task["id"])["result"]
+        page = base64.b64decode(fetched["data"]).decode()
+        # Its own code, after what a page is given of its host: a policy
+        # that reaches nothing but four hosts of libraries, and sendPrompt.
+        self.assertTrue(page.endswith(code))
+        self.assertIn("default-src 'none'", page)
+        self.assertIn("function sendPrompt", page)
+        self.assertEqual([file.name for file in store.shown(task["id"]).iterdir()], [fetched["id"] + ".html"])
+        # It takes the place of an image, and an image of it.
+        png = b"\x89PNG\r\n\x1a\n" + b"pixels"
+        (Path(store.read(task["id"])["worktree"]) / "shot.png").write_bytes(png)
+        self.assertNotIn("isError", self.call(task, "show_image", path="shot.png"))
+        self.assertEqual([file.suffix for file in store.shown(task["id"]).iterdir()], [".png"])
+        # Nothing, or more than Roost shows, is refused and changes nothing.
+        for bad in ("", "  ", None, "x" * (roost.PAGE_LIMIT + 1)):
+            self.assertTrue(self.call(task, "show_widget", title="t", widget_code=bad)["isError"])
+        self.assertEqual(self.request("shown", id=task["id"])["result"]["kind"], "png")
+        # With no title it still has a name to be called by.
+        self.call(task, "show_widget", widget_code="<svg></svg>")
+        self.assertEqual(self.request("list")["result"][0]["shown"]["name"], "a page")
 
     def test_an_agent_shows_an_image_which_emacs_fetches(self):
         task = self.create(name="parent", mayOffer=True)
@@ -10585,7 +10615,7 @@ print(json.dumps(dict(data=data)))
         argv = roost.ClaudeAgent().launch(store, store.read(talk["id"]), False)
         allowed = json.loads(Path(argv[argv.index("--settings") + 1]).read_text())["permissions"]["allow"]
         self.assertEqual(allowed, ["mcp__roost__propose_task", "mcp__roost__list_projects", "mcp__roost__show_image",
-                                   "Read(/%s/**)" % self.repo.resolve()])
+                                   "mcp__roost__show_widget", "Read(/%s/**)" % self.repo.resolve()])
         # Without one, it is told to name it.
         refused = self.call(talk, "propose_task", title="Fix add", brief="Fix add in calc.py.")
         self.assertTrue(refused["isError"])
@@ -10634,7 +10664,7 @@ print(json.dumps(dict(data=data)))
             settings = json.loads(Path(roost.claude_hook_settings(store, task)).read_text())
         self.assertEqual(settings["permissions"]["allow"],
                          ["mcp__roost__propose_task", "mcp__roost__list_projects", "mcp__roost__show_image",
-                          "Read(//srv/plain/**)"])
+                          "mcp__roost__show_widget", "Read(//srv/plain/**)"])
 
     def test_an_offer_names_only_a_repository_of_yours(self):
         parent = self.create(name="parent")
