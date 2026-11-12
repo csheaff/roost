@@ -35,6 +35,51 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## What #260 left unchecked, on a Mac — 2026-11-11
+
+The checks #260's description listed as not done, on main as it was merged
+(ec689c7) and with the fixes after it. Run on macOS 27.2 with a Retina
+display, Emacs 32.0.50 in a GUI, tmux 3.6a, Git 2.54.0 and Python 3.9.6.
+
+- **A review of #260's `roost.el` and helper** (`/code-review high`): six
+  findings, five fixed, each with a test that failed first. `C-u c` on a
+  conversation drafted a fork no host would make. A line of a Codex rollout
+  that is JSON but no entry made its Stop hook raise. A task retired as a
+  conversation started could fail that start. A project whose path holds
+  `[`, `]`, `?` or `\` gave a conversation a Read rule for other folders.
+  `roost-copy-attach-command` said it left Emacs's view alone, but the
+  terminal you attach sizes the agent's window, and now the command says so.
+  Left for a decision: a narrow sidebar's `!` stands both for a task whose
+  worktree is on another branch and for one that went wrong.
+- **`make qa`**, the whole run on ec689c7: 414 steps, 10 with problems.
+  Seven were one starter of the walk-away grid, a click on a file in
+  another task's panel, after anything left the frame on another task.
+  There `i` showed that task's panel scrolled to its agent's reply: its
+  point, kept by position, came from the narrower drawing beside its
+  terminal. Fixed: a panel brought up where it wasn't on screen shows its
+  top. The other three were Emacs pausing for 1 to 1.4 s, mostly
+  collecting garbage, late in the run (panes, region, crashed). Those four
+  journeys again with the fix: 167 steps, 2 with problems, both such
+  pauses as region opened a draft. Region alone, twice on this branch and
+  twice on main before #260, had none.
+- **The look**, which #260 saw only on Linux: in the screenshots, the
+  shapes, the tints and the hairlines read as intended at this display's
+  density.
+- **`make test compile`**: 624 ERT tests (36 skipped, those of Magit, Evil
+  and perspective.el) and 586 Python tests (8 skipped) passed, in 2 min 20 s
+  on 18 cores; no byte-compile warnings.
+- **`make crash`**, the whole run: 44 tests passed, the sweep of every line
+  skipped as by default, in 57 min. Nothing flagged.
+- **`make contract`** with Claude Code 2.1.317, Codex 0.163.0 and Pi 1.3.0:
+  every check as expected, Codex's Plan menu included. OpenCode isn't
+  installed here.
+- **Offers on by default** cost each Claude request about 560 tokens,
+  Roost's instructions and its two tools, which Claude Code caches with the
+  rest of its prompt.
+- **Not checked**: a real remote host (claylien was down), Codex's Plan
+  mode live, Pi and OpenCode with real agents, a task with Remote Control
+  in the Claude app, and `make contract-live`.
+
 ## The models, brought in line with what is new — 2026-11-11
 
 Each section of `test/formal` against the code as it is, for offers,
