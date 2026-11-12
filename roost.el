@@ -370,6 +370,8 @@ it as a new task draft, have that agent do it there, or dismiss it.
 An agent in a conversation, which has no project, offers tasks in your
 projects: ask it to plan a piece of work, and each task it would split
 it into waits under the conversation for you to start.
+An agent can also show you an image, such as a screenshot: it opens in
+a window beside the task's terminal, or once you open the task.
 Roost gives the agent tools for this, from an MCP server of its own,
 with a few sentences on when to use them, which cost tokens on each of
 its requests.  Only Claude Code takes them so far.  Tasks you start
@@ -1361,6 +1363,7 @@ A reply to create read before then can come after.")
         (puthash key task roost--tasks)
       (remhash key roost--tasks)
       (puthash key t roost--went)
+      (roost--forget-shown key)
       (roost--remove-notes (lambda (note) (equal (roost--note-key note) key))))
     ;; Renamed, here or from another Emacs: its workspace and the panels
     ;; follow, before the views are drawn.
@@ -1412,7 +1415,8 @@ A reply to create read before then can come after.")
     (when (and previous (not (equal previous status)))
       (roost--run-task-hook 'roost-task-status-functions task previous status))
     (when (gethash key roost--tasks)
-      (roost--report-turn task))
+      (roost--report-turn task)
+      (roost--note-shown host task old))
     ;; Another pull request merged, as a second one on the task, is another
     ;; merge, at another head or into another branch.
     (dolist (merge (roost--pr-merges task))
@@ -1528,6 +1532,99 @@ notifies of itself."
                     label)))
        (lambda (_error) (funcall send task label))))))
 
+;;;; Images an agent shows
+
+;; An agent's terminal draws no images.  With Roost's tools
+;; (`roost-agent-offers'), an agent can show one: its host keeps a copy
+;; and its record says which, and Emacs fetches it and shows it in a window
+;; beside the task's terminal, without selecting it.  A task shows one
+;; image, in one buffer: the next takes its place.  While the task's
+;; terminal isn't on screen the image waits, and shows when you open it.
+
+(defvar roost--shown-at (make-hash-table :test 'equal)
+  "When each task's agent showed the image this Emacs last took up, by key.")
+(defvar roost--shown-waiting (make-hash-table :test 'equal)
+  "The buffer of the image each task has to show once it is opened, by key.")
+(defvar roost--shown-since (format-time-string "%Y-%m-%dT%H:%M:%S" nil t)
+  "When this Emacs loaded Roost, in UTC, as a task's record writes a time.
+An image shown before then, by a task this Emacs lists for the first
+time, is not brought up: only one shown while you were here.")
+(defvar-local roost--shown-task nil
+  "The key of the task whose agent showed the image in this buffer.")
+
+(defun roost--note-shown (host task old)
+  "Fetch the image TASK's agent on HOST showed, if it is news.
+OLD is the task as it was cached before, or nil when it is new to this
+Emacs: what it showed before this Emacs started is not brought up again,
+but what a task just made showed as it started is."
+  (let* ((key (roost--key task))
+         (at (alist-get 'at (roost--field task 'shown))))
+    (when (and (stringp at) (string< (gethash key roost--shown-at "") at))
+      (puthash key at roost--shown-at)
+      (when (or old (string< roost--shown-since at))
+        (roost--request host "shown" (list (cons 'id (roost--field task 'id)))
+                        (lambda (image) (roost--take-shown key image))
+                        (lambda (error)
+                          (message "Roost: can't show %s's image: %s" (roost--field task 'name) error)))))))
+
+(defun roost--take-shown (key image &optional asked)
+  "Show IMAGE, as its host sent it, for the task with KEY.
+Beside its terminal if that is on screen, and else once it is opened;
+or, when you ASKED for it, beside the window you are in."
+  (when-let* ((task (gethash key roost--tasks))
+              (data (ignore-errors (base64-decode-string (alist-get 'data image))))
+              (kind (alist-get 'kind image))
+              ((stringp kind)))
+    (if (not (and (display-images-p) (image-type-available-p (intern kind))))
+        (message "%s shows %s, which this Emacs can't draw" (roost--field task 'name) (alist-get 'name image))
+      (let ((buffer (get-buffer-create (format "*roost image: %s*" (roost--task-label task)))))
+        (with-current-buffer buffer
+          (let ((inhibit-read-only t))
+            (fundamental-mode)
+            (erase-buffer)
+            (set-buffer-multibyte nil)
+            (insert data)
+            (set-buffer-modified-p nil))
+          (setq roost--shown-task key)
+          (setq buffer-read-only t))
+        ;; Until then it waits, as for a task off screen.
+        (puthash key buffer roost--shown-waiting)
+        ;; Not while you answer a question: the minibuffer puts the windows
+        ;; back as they were when it is done, and the image would go.
+        (roost--when-out-of-minibuffer
+         (lambda ()
+           (when (and (buffer-live-p buffer) (eq (gethash key roost--shown-waiting) buffer))
+             (if-let* ((beside (or (roost--task-terminal-window task)
+                                   (and asked (roost--window-you-are-in)))))
+                 (progn (remhash key roost--shown-waiting)
+                        (roost--display-shown buffer beside)
+                        (unless asked
+                          (message "%s shows %s" (roost--field task 'name) (alist-get 'name image))))
+               (message "%s has %s to show you: open it to see"
+                        (roost--field task 'name) (alist-get 'name image))))))))))
+
+(defun roost-show-image (task)
+  "Show the image TASK's agent last showed you, beside the window you are in.
+As when it has been closed, or was shown before this Emacs started."
+  (interactive (list (roost--read-task "Show the image of task: ")))
+  (unless (roost--field task 'shown)
+    (user-error "%s has shown no image" (roost--field task 'name)))
+  (let ((key (roost--key task))
+        (stay (roost--while-you-stay task)))
+    (roost--request (roost--field task 'host) "shown" (list (cons 'id (roost--field task 'id)))
+                    (lambda (image)
+                      (funcall stay (lambda () (roost--take-shown key image t))))
+                    (lambda (error)
+                      (message "Roost: can't show %s's image: %s" (roost--field task 'name) error)))))
+
+(defun roost--forget-shown (key)
+  "Forget the image of the task with KEY, which went, and kill its buffer."
+  (remhash key roost--shown-at)
+  (remhash key roost--shown-waiting)
+  (dolist (buffer (buffer-list))
+    (when (equal (buffer-local-value 'roost--shown-task buffer) key)
+      (kill-buffer buffer))))
+
 ;;;; Notifications held to go together
 
 ;; A permission request notifies at once: its agent can do nothing until
@@ -1641,6 +1738,7 @@ in `roost--list-requests'; without one, TASKS count as asked for now."
                  (remhash key roost--seen)
                  (remhash key roost--turns-sent)
                  (remhash key roost--merges-reported)
+                 (roost--forget-shown key)
                  (roost--remove-notes (lambda (note) (equal (roost--note-key note) key)))))
              roost--tasks)
     (mapc (lambda (task) (roost--cache-task host task)) tasks)
@@ -2582,6 +2680,8 @@ not another task's: they keep their grid."
   (roost--watch-layout)
   (roost--sync-side-windows)
   (roost--mark-in-sidebar)
+  (roost--put-away-shown task)
+  (roost--show-waiting task)
   (when (roost--task-panel-window)
     (roost--refresh-host (roost--field task 'host) nil)))
 
@@ -10797,6 +10897,7 @@ Windows showing the panel keep their scroll position, and the mark stays."
         (save-excursion (goto-char start) (insert roost--gap))))
     (roost--insert-agent-work task)
     (roost--insert-status-notes task)
+    (roost--insert-shown task)
     (roost--insert-evidence task width beside)
     (roost--insert-issue task)
     (roost--insert-pull-request task)
@@ -10808,6 +10909,55 @@ Windows showing the panel keep their scroll position, and the mark stays."
       (roost--insert-panel-keys task width)
       (roost--insert-folded-prompts task width)
       (roost--insert-folded-details task width))))
+
+(defun roost--insert-shown (task)
+  "Insert a quiet line naming the image TASK's agent last showed, to open it."
+  (when-let* ((name (alist-get 'name (roost--field task 'shown)))
+              ((stringp name)))
+    (insert roost--gap
+            (propertize "Image  " 'face 'roost-dim)
+            (make-text-button (copy-sequence name) nil 'face 'roost-field 'follow-link t
+                              'help-echo "Show this image beside the window you are in"
+                              'action (lambda (_button) (roost-show-image task)))
+            "\n")))
+
+(defun roost--display-shown (buffer terminal)
+  "Show BUFFER, an image a task's agent showed, beside its TERMINAL window.
+In the window that shows it already, or else a new one to the terminal's
+right, or below a narrow one.  You stay in the window you are in."
+  (let* ((wide (>= (window-total-width terminal) 140))
+         (window (display-buffer
+                  buffer
+                  `((display-buffer-reuse-window display-buffer-in-direction)
+                    (window . ,terminal)
+                    (direction . ,(if wide 'right 'below))
+                    ,(if wide '(window-width . 0.4) '(window-height . 0.4))
+                    (inhibit-same-window . t)))))
+    ;; Once it has a window, whose size the image is fitted to.
+    (with-current-buffer buffer
+      (let ((key roost--shown-task))
+        (if window
+            (with-selected-window window (image-mode))
+          (image-mode))
+        (setq roost--shown-task key)))
+    window))
+
+(defun roost--show-waiting (task)
+  "Show the image TASK's agent showed while its terminal was off screen.
+Beside the selected window, which shows the terminal as TASK is opened."
+  (let* ((key (roost--key task))
+         (buffer (gethash key roost--shown-waiting)))
+    (remhash key roost--shown-waiting)
+    (when (buffer-live-p buffer)
+      (roost--display-shown buffer (selected-window)))))
+
+(defun roost--put-away-shown (task)
+  "Close the windows of the selected frame that show another task's image.
+As TASK's terminal takes the place of theirs."
+  (dolist (window (window-list))
+    (when-let* ((key (buffer-local-value 'roost--shown-task (window-buffer window))))
+      (unless (or (equal key (roost--key task)) (one-window-p))
+        (delete-window window)))))
 
 (defun roost--insert-wrong (task next)
   "Insert what is wrong with TASK and wants you to act, under its title.

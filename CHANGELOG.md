@@ -4,6 +4,17 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- An agent can show you an image: ask a Claude task to show you a
+  screenshot or a chart, and it opens in a window beside the task's
+  terminal, which draws no images itself. You stay where you are; the next
+  image takes the first one's place, and `q` there closes it. Shown while
+  the task is off screen, it waits until you open the task. The task's
+  panel names the image it last showed: click the name, or
+  `M-x roost-show-image`, to bring it back. It comes with
+  `roost-agent-offers`, as a third tool, `show_image`, and works on a
+  remote host too. Tasks started before the update don't have it: stop and
+  resume one to give it the tool.
+
 ## 0.12.0
 
 To upgrade from 0.11:

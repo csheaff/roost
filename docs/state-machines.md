@@ -2827,6 +2827,60 @@ Attaching during Sending isn't refused, and goes with the draft: text typed afte
 sending again.
 Open: none of its own.
 
+### An image shown
+
+Kind: implicit. Lives in: the task's record (`shown`: an ID, the file's name, its
+kind and when) and the copy `shown/TASK/ID.KIND` on its host; in Emacs,
+`roost--shown-at`, `roost--shown-waiting` and the buffer whose `roost--shown-task`
+is the task's key.
+An agent's terminal draws no images, so its agent asks Roost to show one
+(`show_image`, a tool of the helper's MCP server).
+
+| State | Meaning | How you can tell |
+|---|---|---|
+| None | The agent has shown nothing | no `shown` in the record |
+| Shown, not taken up | The record names one this Emacs hasn't fetched | `shown.at` newer than `roost--shown-at` |
+| Waiting | Fetched, the task's terminal off screen | its buffer in `roost--shown-waiting` |
+| On screen | In a window beside the terminal | its buffer has a window |
+| Closed | Fetched and shown, its window closed since | its buffer has none, and isn't waiting |
+
+Invariants:
+- I1. The record names an image only once its copy is there whole: the copy is
+  written first, under a name of its own, and older copies go after the record is
+  saved (`show_image`). `make crash` kills the helper at each step (`Show`).
+- I2. Emacs draws only what the helper wrote and checked: a PNG, JPEG, GIF or WebP by
+  its first bytes, of at most 8 MB, under an ID the helper made (`image_kind`,
+  `shown_image`). A record edited by hand names nothing.
+- I3. Showing is no event of the agent's: the task's status, `updatedAt` and whether
+  you have seen it stay (`show_image` saves only `shown`).
+- I4. An image is brought up once, and never takes you from the window you are in:
+  `roost--note-shown` fetches only a newer `shown.at`, and `roost--display-shown`
+  selects nothing. One that comes while you answer a question in the minibuffer
+  waits until you are done (`roost--when-out-of-minibuffer`): the minibuffer puts
+  the windows back as they were, and the image's would go. What a task this Emacs lists for the first time showed before
+  Emacs loaded Roost is not brought up (`roost--shown-since`).
+- I5. A frame shows only the image of the task whose terminal it shows
+  (`roost--put-away-shown`), and an image goes with its task (`Store.remove`,
+  `roost--forget-shown`).
+
+| From | Event | Guard | To | Effect | Code |
+|---|---|---|---|---|---|
+| any | agent calls `show_image` | an image, small enough; task not stopped | Shown, not taken up | copy written, record saved, older copies removed | `show_image` |
+| any | agent calls `show_image` | otherwise | same | the agent is told why not | `show_image` |
+| Shown, not taken up | a list or reply names it | task known to this Emacs, or shown since it loaded Roost | On screen or Waiting | `shown` requested; beside the terminal if on screen | `roost--note-shown`, `roost--take-shown` |
+| Shown, not taken up | a list names it | task new to this Emacs, shown before it loaded Roost | Closed | noted, not fetched | `roost--note-shown` |
+| Waiting | you open the task | | On screen | beside its terminal | `roost--show-waiting` |
+| On screen | another task's terminal takes the frame | | Closed | its window deleted | `roost--put-away-shown` |
+| On screen | `q` | | Closed | | `quit-window` |
+| Closed, Waiting | the panel's Image line, `roost-show-image` | you stayed | On screen | fetched again, beside the window you are in | `roost-show-image` |
+| any | task retired, discarded, forgotten or gone from a list | | None | copy, buffer and both tables' entries go | `Store.remove`, `roost--forget-shown` |
+
+Open: a reply its host read before the agent showed an image, with the same
+`updatedAt`, can come after a list that names the image, and the panel's Image line
+then names the one before, or goes, until the next poll. Nothing is fetched twice
+(I4), and the line fetches what the host has now. A helper killed between writing a
+copy and saving the record leaves the copy until the next image or the task's end.
+
 ### Opening a task
 
 Kind: implicit. Lives in: the closure of `roost--open` (`generation`, `window`,

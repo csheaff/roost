@@ -162,6 +162,7 @@ what its host said when it read it.")
                       (cons '(alreadyMade . t) (copy-tree (cdr made)))
                     (roost-sweep-late--record "cccccc0000000000" "made" `(createId . ,asked)))))
       ("attach" (if record '((paths "/home/user/.roost/attachments/a.png")) gone))
+      ("shown" (if record '((id . "0a1b2c3d") (name . "shot.png") (kind . "png") (data . "iVBORw0KGgo=")) gone))
       ((guard (null record)) gone)
       ("stop" (roost-sweep-late--became record "stopped"))
       ("resume" (roost-sweep-late--became record "starting" '(live . t)))
@@ -808,6 +809,10 @@ dashboard the command starts from."
      :origin dashboard :fields ((offers ,roost-sweep-late--offer))
      :start ,(lambda () (roost-sweep-late--at-offer) (roost-offer-dismiss))
      :action "take-offer" :refusals ((,roost-sweep-late--retired)))
+    (show-image
+     :fields ((shown (id . "0a1b2c3d") (name . "shot.png") (kind . "png") (at . "2026-11-01T10:00:00+00:00")))
+     :start ,(lambda () (roost-show-image (roost-sweep-late--mine)))
+     :action "shown" :refusals (("This task's agent has shown nothing")))
     (note-send
      :start ,(lambda ()
                (setq roost--notes (list (roost-test--note "n1" roost-sweep-late--mine '(file . "a.py") '(line . 3)

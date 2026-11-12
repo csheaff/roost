@@ -141,8 +141,8 @@ These work in the dashboard, the sidebar and a task's panel, and on the menu.
 - Claude Code 2.1.284 and later start in auto mode unless a permission mode
   is set, and rarely ask. To be asked before each command, add
   `"--permission-mode" "manual"` to its entry in `roost-agent-commands`.
-- A Claude task's agent has two tools of Roost's, to offer you tasks and to
-  name your projects; `(setq roost-agent-offers nil)` starts tasks without
+- A Claude task's agent has three tools of Roost's, to offer you tasks, to
+  name your projects and to show you an image beside its terminal; `(setq roost-agent-offers nil)` starts tasks without
   them. `(setq roost-remote-control t)` shows each Claude task in the Claude
   app, which notifies your phone when its agent needs a decision.
 
