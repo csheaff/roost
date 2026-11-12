@@ -278,6 +278,18 @@ of its requests. Only Claude Code takes it so far, and only tasks you start
 after turning the option on have it. How often an agent offers rests on the
 model. This is an experiment: it may change or go.
 
+**See an image an agent shows.** A terminal draws no images, so ask the agent
+to show you one, such as a screenshot or a chart it made: it opens in a window
+beside the task's terminal, fitted to it, and you stay where you are. The next
+image takes its place, and `q` there closes it. Shown while the task is off
+screen, it waits until you open the task; another task's terminal takes it off
+the screen. The task's panel names the image it last showed: click the name,
+or `M-x roost-show-image`, to bring it back. Roost keeps a copy on the task's
+host, so it works on a remote host and after the file has gone, and the copy
+goes with the task. The tool for this, `show_image`, comes with
+`roost-agent-offers`, for Claude Code tasks started or resumed since. It
+shows a PNG, JPEG, GIF or WebP of at most 8 MB.
+
 **Keep them in view.** `b` in the dashboard, or `M-x roost-sidebar-mode`, keeps a
 compact task list at the left of the frame, through `C-x 1`; add
 `(roost-sidebar-mode 1)` to your configuration to have it from the start. With
@@ -889,7 +901,8 @@ header line. A failed creation keeps the draft.
 - `roost-agent-offers` (t): let a task's agent offer tasks of their own,
   which wait under its task for you to take
   ([Take the tasks an agent offers](#a-day-with-roost)), and a
-  conversation's agent offer tasks in your projects. Claude Code only. Nil
+  conversation's agent offer tasks in your projects, and either show you
+  an image beside its terminal. Claude Code only. Nil
   gives agents no tools of Roost's, for tasks started after you change it.
 - `roost-large-change` (`(:lines 400 :files 10 :directories 3)`): when a
   task's row gets its `±`. Leave one out to mark by the others, as
@@ -1214,11 +1227,16 @@ What runs where:
   `roost-teardown-command`.
 - With `roost-agent-offers` on, Claude Code starts the helper as an MCP
   server of its own (`--mcp-config`), over its standard input and output,
-  and ends it with itself. Its tool `propose_task` writes an offer
+  and ends it with itself. Its tool `show_image` copies an image file the
+  agent names into Roost's state directory, if its first bytes say it is a
+  PNG, JPEG, GIF or WebP and it is at most 8 MB, and notes it in the task's
+  record; Emacs draws that copy and nothing else. It can name any file
+  the helper can read, so an agent learns whether a path is such an image,
+  and no more: every refusal reads the same. Its tool `propose_task` writes an offer
   into the record of the task whose agent called it, and nothing else, and
-  `list_projects` names the projects that host has run tasks in: neither
-  runs a program or reaches another task. The task's own Claude
-  settings allow both without asking. An offer may name another project,
+  `list_projects` names the projects that host has run tasks in: none of
+  the three runs a program or reaches another task. The task's own Claude
+  settings allow them without asking. An offer may name another project,
   by the folder of a Git repository there, which you read in its draft; a
   conversation's must, and its Claude settings also let it read, and only
   read, the files of the projects `list_projects` names without asking. An offer's title and brief can

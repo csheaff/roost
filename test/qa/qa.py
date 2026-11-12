@@ -3439,6 +3439,41 @@ def fork(qa, repo):
                                               "roost/%s-*" % fork_name)))])
 
 
+@journey("An image an agent shows")
+def show(qa, repo):
+    """An agent shows an image, which opens beside its terminal while you
+    stay in it. Closed, the panel's line brings it back; another task's
+    terminal takes it off the screen."""
+    qa.emacs.eval("(setq roost-agent-offers t)")
+    # Beside its worktree, so the panel names it once: not among its changes.
+    task = new_task(qa, "show ../chart.png")
+    qa.status(task, "ready", "idle")
+    open_task(qa, task)
+    image = lambda s: next((w for w in s["windows"] if w["mode"] == "image-mode"), None)
+    qa.wait("the image", image, timeout=30)
+    qa.step("The agent shows an image, which opens beside its terminal", expect=[
+        ("the image has a window of its own", lambda s: image(s)["buffer"] == "*roost image: %s*" % task),
+        ("you stay in the terminal", lambda s: selected_terminal(s) is not None),
+        ("the agent says it showed it", lambda s: "SHOWED Shown." in selected_terminal(s)["text"]),
+        ("the panel names it", lambda s: "Image  chart.png" in qa.window(s, "roost-task-info-mode")["text"])])
+
+    qa.emacs.eval("(quit-window nil (get-buffer-window %s))" % lisp("*roost image: %s*" % task))
+    qa.wait("the image closed", lambda s: not image(s))
+    if qa.emacs.eval("(qa-click-text \"chart.png\" \"roost-task-info-mode\")") != "t":
+        raise Stuck("No chart.png in the panel to click")
+    qa.settle()
+    qa.wait("the image again", image, timeout=30)
+    qa.step("Closed, the panel's line brings it back", expect=[
+        ("the image shows again", lambda s: image(s)["buffer"] == "*roost image: %s*" % task),
+        ("the terminal is still on screen", lambda s: any(w.get("terminal") for w in s["windows"]))])
+
+    other = start_task(qa, "Sort the charts")
+    open_task(qa, other)
+    qa.step("Another task's terminal takes the image off the screen", expect=[
+        ("no image shows", lambda s: not image(s)),
+        ("the other task's terminal does", lambda s: (s.get("task") or {}).get("name") == other)])
+
+
 @journey("A task an agent offers")
 def offer(qa, repo):
     """An agent offers a task of its own, which waits under the task that
@@ -4183,7 +4218,7 @@ JOURNEYS = [sweep, answer, next_waiting, fold, resize, merge, review, notes, sin
             walk_away,
             frames, draft_frames, org, drafts, draft_fields, by_clicks, conversation, clicks, overlap, region, tabs,
             own_workspace,
-            forget, rename, fork, offer, other_branch, switched_branch, merged, large, pull_request, merge_request, exits,
+            forget, rename, fork, offer, show, other_branch, switched_branch, merged, large, pull_request, merge_request, exits,
             include, slow_create,
             unreachable,
             doctor, scrollback,

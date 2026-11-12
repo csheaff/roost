@@ -120,21 +120,38 @@ status("idle")
 print("FAKE_CLAUDE_READY " + session, flush=True)
 
 
-def offer(title):
-    """Offer TITLE as a task through Roost's MCP server, as Claude Code
+def call(tool, **arguments):
+    """Call TOOL of Roost's MCP server with ARGUMENTS, as Claude Code
     does, and return what the server said."""
     if SERVER is None:
-        return "No tool offers tasks here"
+        return "Roost gave no tools here"
     lines = [dict(id=1, method="initialize", params=dict(protocolVersion="2025-11-25", capabilities={})),
              dict(method="notifications/initialized"),
-             dict(id=2, method="tools/call", params=dict(name="propose_task", arguments=dict(
-                 title=title, brief="Brief for " + title)))]
+             dict(id=2, method="tools/call", params=dict(name=tool, arguments=arguments))]
     ran = subprocess.run([SERVER["command"], *SERVER["args"]], capture_output=True, text=True,
                          input="".join(json.dumps(dict(line, jsonrpc="2.0")) + "\n" for line in lines))
     for reply in map(json.loads, ran.stdout.splitlines()):
         if reply.get("id") == 2:
             return reply["result"]["content"][0]["text"]
     return "Roost's MCP server ended"
+
+
+def offer(title):
+    """Offer TITLE as a task, and return what the server said."""
+    return call("propose_task", title=title, brief="Brief for " + title)
+
+
+def png(width=320, height=200):
+    """A PNG of WIDTH by HEIGHT pixels, blue above and paler below."""
+    import struct
+    import zlib
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+    rows = b"".join(b"\0" + bytes((70 + 150 * y // height, 130 + 100 * y // height, 180 + 60 * y // height)) * width
+                    for y in range(height))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
 
 
 def lines():
@@ -183,6 +200,18 @@ for line in lines():
         said = offer(line[len("offer "):].strip())
         event("PostToolUse", tool_name="mcp__roost__propose_task")
         print("OFFERED " + said, flush=True)
+        record("assistant", said)
+        event("Stop", last_assistant_message=said)
+        status("done")
+    elif line.startswith("show "):
+        # Make an image in the worktree, and show it to you in Roost.
+        name = line[len("show "):].strip()
+        with open(name, "wb") as image:
+            image.write(png())
+        event("PreToolUse", tool_name="mcp__roost__show_image")
+        said = call("show_image", path=name)
+        event("PostToolUse", tool_name="mcp__roost__show_image")
+        print("SHOWED " + said, flush=True)
         record("assistant", said)
         event("Stop", last_assistant_message=said)
         status("done")

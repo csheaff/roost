@@ -308,12 +308,13 @@ class PullRequestPush(PullRequest):
         box.commit(self.task, "more", "more\n")
 
 
-def offer(box, task, mode=None, at=None):
+def offer(box, task, mode=None, at=None, tool="propose_task", arguments=None):
     """Have TASK's agent offer a task through its MCP server, as Claude Code
     runs it, and return the reply as a request's, or None if it died. With
-    MODE `line', the server dies at the ATth line of the helper it reaches."""
+    MODE `line', the server dies at the ATth line of the helper it reaches.
+    Or have it call another TOOL of the server's, with ARGUMENTS."""
     call = dict(jsonrpc="2.0", id=1, method="tools/call",
-                params=dict(name="propose_task", arguments=dict(title="Fix add", brief="add() subtracts.")))
+                params=dict(name=tool, arguments=arguments or dict(title="Fix add", brief="add() subtracts.")))
     argv = [sys.executable, "-I", str(HELPER), "mcp", str(box.state), task["id"]]
     if mode == "line":
         argv = [sys.executable, "-c", LINES, str(HELPER), str(at), str(box.inject / "lines"),
@@ -351,6 +352,36 @@ class Propose(KeepsTask):
         # Offered again, it replaces itself, under its ID.
         if self.final and self.final.get("ok") and [o.get("title") for o in offers] != ["Fix add"]:
             problems.append("offered, and its task's record has %s" % offers)
+
+
+class Show(KeepsTask):
+    """An agent shows an image: whenever the helper stops, the task's
+    record names none, or one whose copy is there whole."""
+    action = "show_image"
+    png = b"\x89PNG\r\n\x1a\n" + b"pixels"
+
+    def prepare(self, box):
+        super().prepare(box)
+        (Path(self.task["worktree"]) / "shot.png").write_bytes(self.png)
+
+    def show(self, box, mode=None, at=None):
+        return offer(box, self.task, mode, at, tool="show_image", arguments=dict(path="shot.png"))
+
+    def ask(self, box):
+        return self.show(box, box.mode, box.at)
+
+    def again(self, box):
+        return self.show(box)
+
+    def holds(self, box, problems):
+        super().holds(box, problems)
+        shown = (box.record(self.task["id"]) or {}).get("shown")
+        if self.final and self.final.get("ok") and not shown:
+            problems.append("said shown, and its task's record names no image")
+        if shown:
+            copy = box.state / "shown" / self.task["id"] / ("%s.%s" % (shown["id"], shown["kind"]))
+            if not copy.exists() or copy.read_bytes() != self.png:
+                problems.append("its record names an image whose copy is not there whole")
 
 
 class TakeOffer(KeepsTask):
@@ -481,4 +512,4 @@ ALL = [Merge, MergeSquash, MergeAway, SquashAway, MergeTeardown, MergeSubmodule,
        RetireDead, RetireSquashedOnGitHub, Update, UpdateConflict, Discard, DiscardDirty, DiscardTeardown, Forget, Rename,
        Retarget,
        Stop, Resume, Seen, Turn, Send, Shell, Attach, Inspect, Look, PullRequest, PullRequestPush, Create, CreateFromRemote,
-       Propose, TakeOffer, CreateFromOffer, CreateFork, CreateConversation]
+       Propose, Show, TakeOffer, CreateFromOffer, CreateFork, CreateConversation]

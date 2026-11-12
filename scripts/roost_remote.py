@@ -449,6 +449,11 @@ class Store:
         self.path(task_id)
         return self.root / "attachments" / task_id
 
+    def shown(self, task_id):
+        """The folder of the image the task's agent last showed you."""
+        self.path(task_id)
+        return self.root / "shown" / task_id
+
     def read(self, task_id):
         path = self.path(task_id)
         try:
@@ -502,6 +507,7 @@ class Store:
         also for tasks created before Roost noted it."""
         path = self.path(task_id)
         shutil.rmtree(self.attachments(task_id), ignore_errors=True)
+        shutil.rmtree(self.shown(task_id), ignore_errors=True)
         before = self.recorded(task_id)
         if before and isinstance(before.get("repo"), str):
             with contextlib.suppress(OSError, ValueError):
@@ -755,7 +761,8 @@ def claude_hook_settings(store, task):
     if task.get("mayOffer") is True:
         # Roost's own tools, which need no asking: an offer only waits in
         # Roost for you to take it or leave it.
-        allow = ["mcp__roost__propose_task", "mcp__roost__list_projects"]
+        # Nor does an image, which only shows beside the agent's terminal.
+        allow = ["mcp__roost__propose_task", "mcp__roost__list_projects", "mcp__roost__show_image"]
         if task.get("conversation") is True:
             # A conversation plans work in your projects, which it has to
             # read first: those this host has run tasks in, without asking
@@ -4539,6 +4546,11 @@ def numbered(folder, stem, number, suffix):
 # touches neither Git nor tmux.
 
 MCP_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
+# What either is told of showing an image.
+MCP_SHOWS = (
+    " The user reads you in a terminal, which draws no images. When they ask to see one, such as a "
+    "screenshot, a chart or a diagram you made, or when a picture says it better than words, show it "
+    "with show_image rather than only naming its file.")
 MCP_INSTRUCTIONS = (
     "Roost runs you in a task of your own: a Git worktree and branch that the user reviews and merges. "
     "When you come across work outside what you were asked to do that is worth a task of its own, such "
@@ -4547,7 +4559,8 @@ MCP_INSTRUCTIONS = (
     "what to do next, offer each step that is a task of its own. Offer real work, not a one-line tweak "
     "or a guess, and never work the user turned down. A piece of what you were asked to do stays here, "
     "without an offer. A task you offer starts from the branch this task merges into, without this "
-    "task's changes, so offer only work that doesn't need them. Say in your reply what you offered.")
+    "task's changes, so offer only work that doesn't need them. Say in your reply what you offered."
+    + MCP_SHOWS)
 # What a conversation's agent is told instead: it is in no project, so the
 # work it finds is always for a task of its own, in a project it names.
 MCP_CONVERSATION_INSTRUCTIONS = (
@@ -4561,7 +4574,8 @@ MCP_CONVERSATION_INSTRUCTIONS = (
     "under this conversation in Roost until the user starts it, as a task with its own agent, worktree "
     "and branch, which they review and merge; you can't start one yourself, nor do it here. Split a larger piece of "
     "work into tasks that can go on at the same time without changing the same files, and say in each "
-    "brief what the others cover. Say in your reply what you offered.")
+    "brief what the others cover. Say in your reply what you offered."
+    + MCP_SHOWS)
 MCP_TOOLS = {
     "list_projects": dict(
         description=(
@@ -4587,7 +4601,20 @@ MCP_TOOLS = {
         # It only records the offer, so an agent that asks before a tool
         # that says nothing of itself, as Codex does, needn't ask.
         annotations=dict(readOnlyHint=False, destructiveHint=False, openWorldHint=False)),
+    "show_image": dict(
+        description=(
+            "Show the user an image file beside this terminal, in Roost: a PNG, JPEG, GIF or WebP on "
+            "this machine, such as a screenshot or a chart you made. The terminal itself draws no "
+            "images. It returns at once; the image takes the place of the one you showed before, and "
+            "Roost keeps a copy, so the file can change or go afterwards."),
+        inputSchema=dict(type="object", required=["path"], properties=dict(
+            path=dict(type="string", description="The image file, by its whole path or relative to the task's worktree"))),
+        annotations=dict(readOnlyHint=False, destructiveHint=False, openWorldHint=False)),
 }
+# The largest image an agent can show, which Emacs reads whole in one
+# reply, and the kinds, each by the bytes a file of it starts with.
+SHOWN_LIMIT = 8 * 1024 * 1024
+IMAGE_STARTS = ((b"\x89PNG\r\n\x1a\n", "png"), (b"\xff\xd8\xff", "jpeg"), (b"GIF87a", "gif"), (b"GIF89a", "gif"))
 # The most offers a task keeps waiting for you at once, and the longest
 # title one can have: it names a task, and tmux takes no command as long
 # as one that names thousands of characters.
@@ -4687,6 +4714,8 @@ class McpServer:
             try:
                 if params.get("name") == "list_projects":
                     said = "\n".join(known_projects(self.store)) or "Roost has run no task in a project here yet."
+                elif params.get("name") == "show_image":
+                    said = show_image(self.store, self.task_id, arguments.get("path"))
                 else:
                     said = propose_task(self.store, self.task_id, arguments.get("title"), arguments.get("brief"),
                                         arguments.get("project"))
@@ -4877,6 +4906,99 @@ def require_offers_named(task, named, doing):
     if unnamed:
         raise RoostError("Its agent has offered %s since you were asked: %s. Look at it again before %s"
                          % ("a task" if len(unnamed) == 1 else "%d tasks" % len(unnamed), "; ".join(unnamed), doing))
+
+
+def image_kind(data):
+    """The kind of image DATA, a file's bytes, starts as, or None."""
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp"
+    return next((kind for start, kind in IMAGE_STARTS if data.startswith(start)), None)
+
+
+def show_image(store, task_id, path):
+    """Show you the image at PATH, as TASK_ID's agent asks: a copy of it is
+    kept as the one image the task shows, in place of the one before, and
+    the task's record says which, for Emacs to fetch (`fetch_shown`). By what the
+    file holds, not its name: Emacs draws only an image. The agent's status
+    and `updatedAt` stay as they were, as showing is no event of its own."""
+    # As given: a file's name can end in a space.
+    path = text(path) or ""
+    if not path.strip() or "\0" in path:
+        raise RoostError("Give the path of an image file")
+    task = store.read(task_id)
+    # One answer whatever is wrong with it: the tool needs no permission, and
+    # must not say of a path the agent may not read whether a file is
+    # there, or how large.
+    refused = RoostError("%s is not an image Roost can show: a PNG, JPEG, GIF or WebP file of at most %d MB"
+                         % (path, SHOWN_LIMIT // (1024 * 1024)))
+    try:
+        # An unknown ~user is a RuntimeError.
+        file = Path(path).expanduser()
+        if not file.is_absolute():
+            file = Path(task.get("worktree") or os.getcwd()) / file
+        if not file.is_file():
+            raise refused
+        with open(file, "rb") as source:
+            data = source.read(SHOWN_LIMIT + 1)
+    except (OSError, RuntimeError):
+        raise refused
+    kind = image_kind(data)
+    if not kind or len(data) > SHOWN_LIMIT:
+        raise refused
+    # Its name is read in Emacs, where what doesn't show would mislead.
+    name = "".join("?" if hidden_character(c) or c in "\n\t" else c for c in file.name)[:200]
+    ident = uuid.uuid4().hex[:8]
+    folder = store.shown(task_id)
+    kept = folder / ("%s.%s" % (ident, kind))
+    # All under the lock: two images shown at once would each take the
+    # other's copy for an older one, and remove it. A copy is at most a
+    # few megabytes, read already, so hooks wait a moment.
+    with store.locked():
+        task = store.read(task_id)
+        # Its agent may be on its way out, as when you stopped the task.
+        if task.get("status") in ("stopped", "retired"):
+            raise RoostError("This task is %s, so it shows nothing" % task["status"])
+        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            with os.fdopen(os.open(kept, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as output:
+                output.write(data)
+            task["shown"] = dict(id=ident, name=name, kind=kind, at=now())
+            store.save(task)
+        except BaseException:
+            # Not once the record names it.
+            with contextlib.suppress(OSError):
+                kept.unlink()
+            raise
+        # The record names the new copy: the older ones go if they can.
+        with contextlib.suppress(OSError):
+            for other in folder.iterdir():
+                if other != kept:
+                    with contextlib.suppress(OSError):
+                        other.unlink()
+    return "Shown. Roost shows %s beside this terminal, or when the user next opens this task." % name
+
+
+def shown_image(task):
+    """What TASK's agent last showed, as its record says and only if this
+    helper wrote it: {"id", "name", "kind", "at"}, or None."""
+    shown = task.get("shown")
+    if (isinstance(shown, dict) and all(text(shown.get(key)) for key in ("id", "name", "kind", "at"))
+            and re.fullmatch(r"[a-f0-9]{8}", shown["id"]) and shown["kind"] in ("png", "jpeg", "gif", "webp")):
+        return shown
+    return None
+
+
+def fetch_shown(store, task):
+    """The image TASK's agent last showed, for Emacs to draw: what its
+    record says of it, and its bytes in base64."""
+    image = shown_image(task)
+    if not image:
+        raise RoostError("This task's agent has shown nothing")
+    try:
+        data = (store.shown(task["id"]) / ("%s.%s" % (image["id"], image["kind"]))).read_bytes()
+    except OSError:
+        raise RoostError("The image this task's agent showed is gone")
+    return dict(image, data=base64.b64encode(data).decode("ascii"))
 
 
 def attach(store, task, files):
@@ -8188,6 +8310,8 @@ def outgoing(result):
                 task.pop(field, None)
             if "offers" in task:
                 task["offers"] = task_offers(task)
+            if "shown" in task and not shown_image(task):
+                del task["shown"]
     return result
 
 
@@ -8222,6 +8346,7 @@ TASK_ACTIONS = {
                                                     request.get("offers")),
     "update": lambda store, task, request: update(store, task),
     "take-offer": lambda store, task, request: take_offer(store, task, text(request.get("offer"))),
+    "shown": lambda store, task, request: fetch_shown(store, task),
 }
 
 

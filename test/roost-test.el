@@ -104,6 +104,8 @@ ROOST_TEST_MATCH, a regexp, keeps to the tests whose names match it."
          (roost--refreshing (make-hash-table :test 'equal))
          (roost--revisions (make-hash-table :test 'equal))
          (roost--went (make-hash-table :test 'equal))
+         (roost--shown-at (make-hash-table :test 'equal))
+         (roost--shown-waiting (make-hash-table :test 'equal))
          (roost--snapshots (make-hash-table :test 'equal))
          (roost--list-requests (make-hash-table :test 'equal))
          (roost--pull-requests-asked (make-hash-table :test 'equal))
@@ -15731,3 +15733,95 @@ report.py, and the third alone changes src/totals.py."
        (should (equal (car said)
                       (concat "Merged fix-auth 3 into main, and removed its worktree and branch; "
                               "fix-auth remains: x discards it")))))))
+
+;; Images an agent shows.
+
+(ert-deftest roost-shows-an-image-beside-its-terminal-or-once-opened ()
+  ;; What an agent shows is fetched once, as news; what it showed before
+  ;; this Emacs knew the task is not.  It shows beside the task's terminal,
+  ;; or waits until the task is opened.
+  (roost-test--isolated
+   (let* (asked displayed terminal
+          (shown (lambda (id at) `(shown . ((id . ,id) (name . "shot.png") (kind . "png") (at . ,at)))))
+          (task (lambda (&rest more) (append more '((name . "budget")) (roost-test--task "1111111111111111" "ready")))))
+     (unwind-protect
+         (cl-letf (((symbol-function 'roost--request)
+                    (lambda (host action parameters success &rest _)
+                      (push (list host action parameters) asked)
+                      (funcall success '((id . "0a1b2c3d") (name . "shot.png") (kind . "png")
+                                         (data . "iVBORw0KGgo=")))))
+                   ((symbol-function 'display-images-p) (lambda (&rest _) t))
+                   ((symbol-function 'image-type-available-p) (lambda (&rest _) t))
+                   ((symbol-function 'roost--task-terminal-window) (lambda (_task) terminal))
+                   ((symbol-function 'roost--display-shown)
+                    (lambda (buffer window) (push (list (buffer-name buffer) window) displayed))))
+           ;; Shown before this Emacs first listed the task's host: left alone.
+           (roost--cache-task "dev" (cons (funcall shown "33333333" "2026-11-11T09:00:00+00:00")
+                                          (append '((name . "earlier")) (roost-test--task "3333333333333333" "ready"))))
+           (should-not asked)
+           ;; A task made since, which showed one as it started: fetched.
+           (puthash "dev" 1 roost--snapshots)
+           (roost--cache-task "dev" (cons (funcall shown "22222222" "2999-01-01T00:00:00+00:00")
+                                          (append '((name . "fresh")) (roost-test--task "2222222222222222" "ready"))))
+           (should (equal asked '(("dev" "shown" ((id . "2222222222222222"))))))
+           (setq asked nil displayed nil)
+           (remhash '("dev" "2222222222222222") roost--tasks)
+           (roost--forget-shown '("dev" "2222222222222222"))
+           (should-not (get-buffer "*roost image: fresh*"))
+           (remhash "dev" roost--snapshots)
+           (roost--cache-task "dev" (funcall task (funcall shown "00000000" "2026-11-11T10:00:00+00:00")))
+           (should-not asked)
+           ;; Shown since, with its terminal off screen: fetched, and it waits.
+           (roost--cache-task "dev" (funcall task (funcall shown "0a1b2c3d" "2026-11-11T10:05:00+00:00")))
+           (should (equal asked '(("dev" "shown" ((id . "1111111111111111"))))))
+           (should-not displayed)
+           (let ((buffer (gethash '("dev" "1111111111111111") roost--shown-waiting)))
+             (should (equal (buffer-name buffer) "*roost image: budget*"))
+             (with-current-buffer buffer
+               (should (equal (buffer-string) "\211PNG\r\n\032\n"))
+               (should (equal roost--shown-task '("dev" "1111111111111111")))))
+           ;; The same again, as each poll says it, or an older reply: not news.
+           (roost--cache-task "dev" (funcall task (funcall shown "0a1b2c3d" "2026-11-11T10:05:00+00:00")))
+           (roost--cache-task "dev" (funcall task (funcall shown "00000000" "2026-11-11T10:00:00+00:00")))
+           (should (= (length asked) 1))
+           ;; Opened, it shows beside the terminal, once.
+           (roost--show-waiting (gethash '("dev" "1111111111111111") roost--tasks))
+           (should (equal displayed (list (list "*roost image: budget*" (selected-window)))))
+           (roost--show-waiting (gethash '("dev" "1111111111111111") roost--tasks))
+           (should (= (length displayed) 1))
+           ;; The next, with the terminal on screen, takes its place there.
+           (setq terminal (selected-window) displayed nil)
+           (roost--cache-task "dev" (funcall task (funcall shown "11111111" "2026-11-11T10:09:00+00:00")))
+           (should (equal displayed (list (list "*roost image: budget*" terminal))))
+           (should-not (gethash '("dev" "1111111111111111") roost--shown-waiting))
+           ;; A reply read before the image the buffer holds was shown, which
+           ;; came after that one's, doesn't take its place.
+           (let ((key '("dev" "1111111111111111")))
+             (roost--take-shown key '((name . "new.png") (kind . "png") (at . "2026-11-11T10:20:00+00:00")
+                                      (data . "bmV3")))
+             (roost--take-shown key '((name . "old.png") (kind . "png") (at . "2026-11-11T10:15:00+00:00")
+                                      (data . "b2xk")))
+             (with-current-buffer "*roost image: budget*"
+               (should (equal (buffer-string) "new")))
+             ;; Nor does it wait to show, as after you closed the newer one;
+             ;; and what came is no news to the next poll that names it.
+             (should-not (gethash key roost--shown-waiting))
+             (should (equal (gethash key roost--shown-at) "2026-11-11T10:20:00+00:00"))
+             ;; Renamed, the task keeps its buffer, which another task that
+             ;; takes its old name doesn't get.
+             (puthash key (cons '(name . "ledger") (assq-delete-all 'name (gethash key roost--tasks))) roost--tasks)
+             (roost--take-shown key '((name . "newer.png") (kind . "png") (at . "2026-11-11T10:25:00+00:00")
+                                      (data . "bmV3ZXI=")))
+             (with-current-buffer "*roost image: budget*"
+               (should (equal (buffer-string) "newer")))
+             (should (eq (roost--shown-buffer key) (get-buffer "*roost image: budget*")))
+             (roost--cache-task "dev" (append '((name . "budget")) (roost-test--task "4444444444444444" "ready")))
+             (roost--take-shown '("dev" "4444444444444444")
+                                '((name . "other.png") (kind . "png") (at . "2026-11-11T10:30:00+00:00")
+                                  (data . "b3RoZXI=")))
+             (with-current-buffer "*roost image: budget*"
+               (should (equal (buffer-string) "newer")))
+             (with-current-buffer (roost--shown-buffer '("dev" "4444444444444444"))
+               (should (equal (buffer-string) "other")))
+             (roost--forget-shown '("dev" "4444444444444444"))))
+       (when (get-buffer "*roost image: budget*") (kill-buffer "*roost image: budget*"))))))

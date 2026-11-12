@@ -10415,7 +10415,8 @@ print(json.dumps(dict(data=data)))
         # An offer only waits in Roost, so it needs no asking.
         settings = json.loads(Path(argv[argv.index("--settings") + 1]).read_text())
         self.assertEqual(settings["permissions"],
-                         {"allow": ["mcp__roost__propose_task", "mcp__roost__list_projects"]})
+                         {"allow": ["mcp__roost__propose_task", "mcp__roost__list_projects",
+                                    "mcp__roost__show_image"]})
         # The prompt still comes last, after --.
         self.assertEqual(argv[-2:], ["--", "Look"])
 
@@ -10481,7 +10482,8 @@ print(json.dumps(dict(data=data)))
         # reads: an agent that asks before a tool unless told it changes
         # nothing, as Codex does, needn't ask.
         tools = {tool["name"]: tool for tool in replies[2]["result"]["tools"]}
-        self.assertEqual(sorted(tools), ["list_projects", "propose_task"])
+        self.assertEqual(sorted(tools), ["list_projects", "propose_task", "show_image"])
+        self.assertIn("show it with show_image", replies[1]["result"]["instructions"])
         for tool in tools.values():
             self.assertFalse(tool["annotations"]["destructiveHint"])
             self.assertFalse(tool["annotations"]["openWorldHint"])
@@ -10493,6 +10495,79 @@ print(json.dumps(dict(data=data)))
         """What TASK's agent is told as it calls TOOL of Roost's with ARGUMENTS."""
         return self.serve(task, dict(id="call", method="tools/call", params=dict(
             name=tool, arguments=arguments)))["call"]["result"]
+
+    def test_an_agent_shows_an_image_which_emacs_fetches(self):
+        task = self.create(name="parent", mayOffer=True)
+        store = roost.Store(str(self.state))
+        worktree = Path(store.read(task["id"])["worktree"])
+        png = b"\x89PNG\r\n\x1a\n" + b"pixels"
+        (worktree / "shot.png").write_bytes(png)
+        before = store.read(task["id"])
+        # By a path in its worktree, or a whole one.
+        said = self.call(task, "show_image", path="shot.png")
+        self.assertNotIn("isError", said, said)
+        self.assertIn("Shown.", said["content"][0]["text"])
+        # No event of the agent's: its status and what you have seen stay.
+        after = store.read(task["id"])
+        self.assertEqual((after["status"], after.get("updatedAt")), (before["status"], before.get("updatedAt")))
+        listed = self.request("list")["result"][0]["shown"]
+        self.assertEqual((listed["name"], listed["kind"]), ("shot.png", "png"))
+        # Emacs fetches Roost's copy, which stays as the file changes or goes.
+        (worktree / "shot.png").unlink()
+        fetched = self.request("shown", id=task["id"])
+        self.assertTrue(fetched["ok"], fetched)
+        fetched = fetched["result"]
+        self.assertEqual((fetched["id"], base64.b64decode(fetched["data"])), (listed["id"], png))
+        # A name is taken as given, to its last space.
+        (worktree / "shot.png ").write_bytes(png + b"spaced")
+        (worktree / "shot.png").write_text("not this one")
+        self.assertNotIn("isError", self.call(task, "show_image", path="shot.png "))
+        self.assertEqual(base64.b64decode(self.request("shown", id=task["id"])["result"]["data"]), png + b"spaced")
+        # The next takes its place, and its copy the other's.
+        outside = self.root / "chart.gif"
+        outside.write_bytes(b"GIF89a" + b"frames")
+        self.assertNotIn("isError", self.call(task, "show_image", path=str(outside)))
+        fetched = self.request("shown", id=task["id"])["result"]
+        self.assertEqual((fetched["name"], base64.b64decode(fetched["data"])), ("chart.gif", b"GIF89a" + b"frames"))
+        self.assertEqual([file.name for file in store.shown(task["id"]).iterdir()], [fetched["id"] + ".gif"])
+        # Shown at once, as by two of its subagents, the record names one
+        # whose copy is there: neither removes the other's as an older one.
+        def show(n):
+            ran = subprocess.run([sys.executable, str(SOURCE), "mcp", str(self.state), task["id"]], timeout=60,
+                                 input=json.dumps(dict(jsonrpc="2.0", id=1, method="tools/call", params=dict(
+                                     name="show_image", arguments=dict(path=str(outside))))) + "\n",
+                                 capture_output=True, text=True)
+            return json.loads(ran.stdout.splitlines()[0])["result"]
+        with concurrent.futures.ThreadPoolExecutor(8) as pool:
+            for said in pool.map(show, range(16)):
+                self.assertNotIn("isError", said, said)
+        fetched = self.request("shown", id=task["id"])
+        self.assertTrue(fetched["ok"], fetched)
+        self.assertEqual([file.name for file in store.shown(task["id"]).iterdir()], [fetched["result"]["id"] + ".gif"])
+        # Only an image, by what the file holds, and of a size Emacs can take.
+        (worktree / "notes.png").write_text("#!/bin/sh\n")
+        # Refused in the same words whatever is wrong, as the tool needs no
+        # permission: not whether a file is there, nor how large it is.
+        (worktree / "huge.png").write_bytes(png + b"\0" * roost.SHOWN_LIMIT)
+        for path in ("notes.png", "missing.png", str(worktree), "huge.png", "~nosuchuser-roost/shot.png"):
+            refused = self.call(task, "show_image", path=path)
+            self.assertTrue(refused.get("isError"), refused)
+            self.assertEqual(refused["content"][0]["text"], "%s is not an image Roost can show: a PNG, JPEG, GIF "
+                             "or WebP file of at most 8 MB" % path)
+        self.assertIn("Give the path", self.call(task, "show_image", path="")["content"][0]["text"])
+        self.assertEqual(self.request("shown", id=task["id"])["result"]["name"], "chart.gif")
+        # A record's own word for what was shown is not taken: only what
+        # this helper wrote.
+        record = store.read(task["id"])
+        record["shown"] = dict(id="../../x", name="x", kind="png", at="now")
+        store.save(record)
+        self.assertNotIn("shown", self.request("list")["result"][0])
+        self.assertFalse(self.request("shown", id=task["id"])["ok"])
+        # It goes with the task.
+        self.assertNotIn("isError", self.call(task, "show_image", path=str(outside)))
+        told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
+        self.assertTrue(self.request("discard", id=task["id"], expect=told["commit"])["ok"])
+        self.assertFalse(store.shown(task["id"]).exists())
 
     def test_a_conversation_offers_tasks_in_your_projects(self):
         # It has no project of its own, so it plans: each task it would
@@ -10509,7 +10584,7 @@ print(json.dumps(dict(data=data)))
         store = roost.Store(str(self.state))
         argv = roost.ClaudeAgent().launch(store, store.read(talk["id"]), False)
         allowed = json.loads(Path(argv[argv.index("--settings") + 1]).read_text())["permissions"]["allow"]
-        self.assertEqual(allowed, ["mcp__roost__propose_task", "mcp__roost__list_projects",
+        self.assertEqual(allowed, ["mcp__roost__propose_task", "mcp__roost__list_projects", "mcp__roost__show_image",
                                    "Read(/%s/**)" % self.repo.resolve()])
         # Without one, it is told to name it.
         refused = self.call(talk, "propose_task", title="Fix add", brief="Fix add in calc.py.")
@@ -10558,7 +10633,8 @@ print(json.dumps(dict(data=data)))
         with patch.object(roost, "known_projects", lambda _store: projects):
             settings = json.loads(Path(roost.claude_hook_settings(store, task)).read_text())
         self.assertEqual(settings["permissions"]["allow"],
-                         ["mcp__roost__propose_task", "mcp__roost__list_projects", "Read(//srv/plain/**)"])
+                         ["mcp__roost__propose_task", "mcp__roost__list_projects", "mcp__roost__show_image",
+                          "Read(//srv/plain/**)"])
 
     def test_an_offer_names_only_a_repository_of_yours(self):
         parent = self.create(name="parent")
