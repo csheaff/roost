@@ -234,6 +234,9 @@ KIND is `committed', `uncommitted', `untracked' or `binary'."
     ;; Its agent showed you an image, which its panel names.
     ("shows an image" (status . "ready") (live . t)
      (shown (id . "0a1b2c3d") (name . "shot.png") (kind . "png") (at . "2026-10-03T19:58:00+00:00")))
+    ;; Or a page it wrote, named the same way.
+    ("shows a page" (status . "ready") (live . t)
+     (shown (id . "1b2c3d4e") (name . "what changed") (kind . "html") (at . "2026-10-03T19:58:00+00:00")))
     ;; Offered by the agent of the state named, and started by you.
     ("started from another task" (status . "running") (live . t) (parentState . "offers a task"))
     ("started from a task since retired" (status . "ready") (live . t) (parent . "ffffffffffffffff"))
