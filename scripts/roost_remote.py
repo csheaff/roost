@@ -4957,9 +4957,11 @@ def require_offers_named(task, named, doing):
                          % ("a task" if len(unnamed) == 1 else "%d tasks" % len(unnamed), "; ".join(unnamed), doing))
 
 
-# What a page an agent shows is given of its host: the colours and classes
-# its tool names, sendPrompt and openLink, and a policy that lets its
-# scripts load from four hosts of libraries and reach nothing else.
+# What an agent's code is given of its host, in the frame it runs in
+# (WIDGET_FRAME): the colours and classes its tool names, sendPrompt and
+# openLink, and a policy that lets scripts, styles and fonts load from a
+# few hosts of libraries. The policy alone confines nothing: a script can
+# still take a page elsewhere, which the frame is there to stop.
 WIDGET_HEAD = """<!doctype html><meta charset=utf-8>
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob:;
  style-src 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com;
@@ -5159,8 +5161,9 @@ def show_widget(store, task_id, title, code):
     """Show you the page CODE, an SVG element or an HTML fragment the agent
     of TASK_ID wrote, under TITLE: kept whole, with what it needs of its
     host around it (`widget_page`), as the one thing the task shows.
-    Emacs draws it in a web view that reaches only what the page's own
-    policy allows; what it asks to send is yours to send."""
+    Emacs draws that page in a web view. The agent's code runs in a frame
+    of it that reaches nothing but a few hosts of libraries; what it asks
+    to send is yours to send."""
     code = text(code) or ""
     if not code.strip():
         raise RoostError("Give widget_code: one SVG element, or an HTML fragment")

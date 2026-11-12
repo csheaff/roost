@@ -15333,7 +15333,8 @@ it of the same ID's, or nil for the first."
            (roost--take-shown key page)
            (should (equal displayed (list (list "*roost image: budget*" (selected-window)))))
            (with-current-buffer (roost--shown-buffer key)
-             (should (equal roost--shown-page "<p>hi</p>")))
+             (should (equal roost--shown-page "<p>hi</p>"))
+             (should-not (multibyte-string-p roost--shown-page)))
            ;; An image after it takes its place, as an image.
            (cl-letf (((symbol-function 'display-images-p) (lambda (&rest _) t))
                      ((symbol-function 'image-type-available-p) (lambda (&rest _) t)))
@@ -15377,18 +15378,38 @@ it of the same ID's, or nil for the first."
            (should (equal drafts '(("budget" "Explain list_notes"))))
            (should (equal said '("budget's page links to https://example.com/")))
            (should-not sent)
+           ;; A page that asks again at once, as a script can, opens no
+           ;; other draft; after a while it can.
+           (let ((again (list 'xwidget-event 'javascript-callback 'view #'ignore
+                              (json-encode [((kind . "prompt") (text . "And again"))
+                                            ((kind . "prompt") (text . "And again"))]))))
+             (let ((last-input-event again))
+               (roost--page-event 'view 'javascript-callback))
+             (should (= (length drafts) 1))
+             (with-current-buffer buffer
+               (setcdr (car roost--shown-page-asked) (- (float-time) roost--page-draft-pause 1)))
+             (let ((last-input-event again))
+               (roost--page-event 'view 'javascript-callback))
+             (should (equal (car drafts) '("budget" "And again")))
+             (should (= (length drafts) 2))
+             ;; The same words, not for longer still.
+             (with-current-buffer buffer
+               (setcdr (car roost--shown-page-asked) (- (float-time) roost--page-draft-pause 1)))
+             (let ((last-input-event again))
+               (roost--page-event 'view 'javascript-callback))
+             (should (= (length drafts) 2)))
            ;; What isn't a list of what was asked does nothing.
            (dolist (reply '("not json" "{}" nil 3))
              (let ((last-input-event (list 'xwidget-event 'javascript-callback 'view #'ignore reply)))
                (roost--page-event 'view 'javascript-callback)))
-           (should (= (length drafts) 1))
+           (should (= (length drafts) 2))
            ;; Nor what a page says once its task has gone.
            (remhash key roost--tasks)
            (let ((last-input-event
                   (list 'xwidget-event 'javascript-callback 'view #'ignore
                         (json-encode [((kind . "prompt") (text . "Still there?"))]))))
              (roost--page-event 'view 'javascript-callback))
-           (should (= (length drafts) 1)))
+           (should (= (length drafts) 2)))
        (kill-buffer buffer)))))
 
 ;;;; Several attempts at one prompt

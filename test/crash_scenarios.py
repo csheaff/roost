@@ -1,4 +1,5 @@
 """The helper's actions, each on a task in the state it acts on, for `crash_harness`."""
+import html
 import json
 from pathlib import Path
 import signal
@@ -384,6 +385,33 @@ class Show(KeepsTask):
                 problems.append("its record names an image whose copy is not there whole")
 
 
+class ShowPage(Show):
+    """An agent shows a page it wrote, which is kept as an image is."""
+    action = "show_widget"
+    code = "<button onclick=\"sendPrompt('Go on')\">Go on</button>"
+
+    def prepare(self, box):
+        super().prepare(box)
+        # As a task made with `roost-agent-pages' on.
+        path = box.state / "tasks" / (self.task["id"] + ".json")
+        path.write_text(json.dumps(dict(json.loads(path.read_text()), mayShowPages=True)))
+
+    def show(self, box, mode=None, at=None):
+        return offer(box, self.task, mode, at, tool="show_widget",
+                     arguments=dict(title="next step", widget_code=self.code))
+
+    def holds(self, box, problems):
+        KeepsTask.holds(self, box, problems)
+        shown = (box.record(self.task["id"]) or {}).get("shown")
+        if self.final and self.final.get("ok") and not shown:
+            problems.append("said shown, and its task's record names no page")
+        if shown:
+            copy = box.state / "shown" / self.task["id"] / ("%s.%s" % (shown["id"], shown["kind"]))
+            page = copy.read_text() if copy.exists() else ""
+            if html.escape(self.code, quote=True) not in page or not page.endswith("</script>\n"):
+                problems.append("its record names a page whose copy is not there whole")
+
+
 class TakeOffer(KeepsTask):
     """Opening an offer, having its agent do it, or dismissing it."""
     action = "take-offer"
@@ -512,4 +540,4 @@ ALL = [Merge, MergeSquash, MergeAway, SquashAway, MergeTeardown, MergeSubmodule,
        RetireDead, RetireSquashedOnGitHub, Update, UpdateConflict, Discard, DiscardDirty, DiscardTeardown, Forget, Rename,
        Retarget,
        Stop, Resume, Seen, Turn, Send, Shell, Attach, Inspect, Look, PullRequest, PullRequestPush, Create, CreateFromRemote,
-       Propose, Show, TakeOffer, CreateFromOffer, CreateFork, CreateConversation]
+       Propose, Show, ShowPage, TakeOffer, CreateFromOffer, CreateFork, CreateConversation]
