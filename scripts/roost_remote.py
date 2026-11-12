@@ -4948,27 +4948,32 @@ def show_image(store, task_id, path):
     name = "".join("?" if hidden_character(c) or c in "\n\t" else c for c in file.name)[:200]
     ident = uuid.uuid4().hex[:8]
     folder = store.shown(task_id)
-    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
-    # Written before the lock, which hooks wait on, under a name of its own.
     kept = folder / ("%s.%s" % (ident, kind))
-    try:
-        with os.fdopen(os.open(kept, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as output:
-            output.write(data)
-        with store.locked():
-            task = store.read(task_id)
-            # Its agent may be on its way out, as when you stopped the task.
-            if task.get("status") in ("stopped", "retired"):
-                raise RoostError("This task is %s, so it shows nothing" % task["status"])
+    # All under the lock: two images shown at once would each take the
+    # other's copy for an older one, and remove it. A copy is at most a
+    # few megabytes, read already, so hooks wait a moment.
+    with store.locked():
+        task = store.read(task_id)
+        # Its agent may be on its way out, as when you stopped the task.
+        if task.get("status") in ("stopped", "retired"):
+            raise RoostError("This task is %s, so it shows nothing" % task["status"])
+        folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            with os.fdopen(os.open(kept, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as output:
+                output.write(data)
             task["shown"] = dict(id=ident, name=name, kind=kind, at=now())
             store.save(task)
+        except BaseException:
+            # Not once the record names it.
+            with contextlib.suppress(OSError):
+                kept.unlink()
+            raise
+        # The record names the new copy: the older ones go if they can.
+        with contextlib.suppress(OSError):
             for other in folder.iterdir():
                 if other != kept:
                     with contextlib.suppress(OSError):
                         other.unlink()
-    except BaseException:
-        with contextlib.suppress(OSError):
-            kept.unlink()
-        raise
     return "Shown. Roost shows %s beside this terminal, or when the user next opens this task." % name
 
 

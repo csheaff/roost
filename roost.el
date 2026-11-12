@@ -1547,6 +1547,29 @@ notifies of itself."
   "The buffer of the image each task has to show once it is opened, by key.")
 (defvar-local roost--shown-task nil
   "The key of the task whose agent showed the image in this buffer.")
+(defvar-local roost--shown-image-at nil
+  "When its agent showed the image in this buffer, as its record says.")
+;; Kept as the buffer goes from the image's bytes to the image drawn.
+(put 'roost--shown-task 'permanent-local t)
+(put 'roost--shown-image-at 'permanent-local t)
+
+(defun roost--shown-buffer (key)
+  "The buffer of the image the task with KEY showed, or nil.
+By the task, not its name, which a rename changes and another task may take."
+  (seq-find (lambda (buffer) (equal (buffer-local-value 'roost--shown-task buffer) key))
+            (buffer-list)))
+
+(defun roost--shown-beside (task)
+  "What to show TASK's image beside, if its terminal is on screen, or nil.
+The terminal's window, or `main' when its panes are tiled, as with a
+shell beside its agent: the image goes beside the grid, which a window
+split out of it would break."
+  (or (roost--task-terminal-window task)
+      (and (seq-some (lambda (window)
+                       (when-let* ((shown (roost--terminal-task (window-buffer window))))
+                         (equal (roost--key shown) (roost--key task))))
+                     (window-list))
+           'main)))
 
 (defun roost--note-shown (host task old)
   "Fetch the image TASK's agent on HOST showed, if it is news.
@@ -1573,19 +1596,24 @@ or, when you ASKED for it, beside the window you are in."
               ((stringp kind)))
     (if (not (and (display-images-p) (image-type-available-p (intern kind))))
         (message "%s shows %s, which this Emacs can't draw" (roost--field task 'name) (alist-get 'name image))
-      (let ((buffer (get-buffer-create (format "*roost image: %s*" (roost--task-label task)))))
+      (let ((buffer (or (roost--shown-buffer key)
+                        (generate-new-buffer (format "*roost image: %s*" (roost--task-label task)))))
+            (at (or (alist-get 'at image) "")))
         (with-current-buffer buffer
-          (let ((inhibit-read-only t))
-            (fundamental-mode)
-            (erase-buffer)
-            (set-buffer-multibyte nil)
-            (insert data)
-            (set-buffer-modified-p nil))
-          (setq roost--shown-task key)
-          (setq buffer-read-only t)
-          ;; A window that shows the image before draws this one, not its bytes.
-          (when-let* ((window (get-buffer-window buffer t)))
-            (roost--draw-shown buffer window)))
+          ;; Not a reply read before the image the buffer holds was shown,
+          ;; which can come after that one's.
+          (unless (and (stringp roost--shown-image-at) (string< at roost--shown-image-at))
+            (let ((inhibit-read-only t))
+              (fundamental-mode)
+              (erase-buffer)
+              (set-buffer-multibyte nil)
+              (insert data)
+              (set-buffer-modified-p nil))
+            (setq roost--shown-task key roost--shown-image-at at)
+            (setq buffer-read-only t)
+            ;; A window that shows the image before draws this one, not its bytes.
+            (when-let* ((window (get-buffer-window buffer t)))
+              (roost--draw-shown buffer window))))
         ;; Until then it waits, as for a task off screen.
         (puthash key buffer roost--shown-waiting)
         ;; Not while you answer a question: the minibuffer puts the windows
@@ -1593,7 +1621,7 @@ or, when you ASKED for it, beside the window you are in."
         (roost--when-out-of-minibuffer
          (lambda ()
            (when (and (buffer-live-p buffer) (eq (gethash key roost--shown-waiting) buffer))
-             (if-let* ((beside (or (roost--task-terminal-window task)
+             (if-let* ((beside (or (roost--shown-beside task)
                                    (and asked (roost--window-you-are-in)))))
                  (progn (remhash key roost--shown-waiting)
                         (roost--display-shown buffer beside)
@@ -1620,9 +1648,9 @@ As when it has been closed, or was shown before this Emacs started."
   "Forget the image of the task with KEY, which went, and kill its buffer."
   (remhash key roost--shown-at)
   (remhash key roost--shown-waiting)
-  (dolist (buffer (buffer-list))
-    (when (equal (buffer-local-value 'roost--shown-task buffer) key)
-      (kill-buffer buffer))))
+  (when-let* ((buffer (roost--shown-buffer key)))
+    ;; With its window, and once you are out of the minibuffer.
+    (roost--close-buffer buffer)))
 
 ;;;; Notifications held to go together
 
@@ -10923,8 +10951,10 @@ Windows showing the panel keep their scroll position, and the mark stays."
 (defun roost--display-shown (buffer terminal)
   "Show BUFFER, an image a task's agent showed, beside its TERMINAL window.
 In the window that shows it already, or else a new one to the terminal's
-right, or below a narrow one.  You stay in the window you are in."
-  (let* ((wide (>= (window-total-width terminal) 140))
+right, or below a narrow one.  You stay in the window you are in.
+TERMINAL can be `main', for beside all the frame's windows but those at
+its sides, as `roost--shown-beside' says."
+  (let* ((wide (>= (window-total-width (if (windowp terminal) terminal (window-main-window))) 140))
          (window (display-buffer
                   buffer
                   ;; Elsewhere in the frame when that window can't be split,
@@ -10942,11 +10972,9 @@ right, or below a narrow one.  You stay in the window you are in."
 (defun roost--draw-shown (buffer window)
   "Draw the image whose bytes BUFFER holds, fitted to WINDOW if it has one."
   (with-current-buffer buffer
-    (let ((key roost--shown-task))
-      (if (window-live-p window)
-          (with-selected-window window (image-mode))
-        (image-mode))
-      (setq roost--shown-task key))))
+    (if (window-live-p window)
+        (with-selected-window window (image-mode))
+      (image-mode))))
 
 (defun roost--show-waiting (task)
   "Show the image TASK's agent showed while its terminal was off screen.

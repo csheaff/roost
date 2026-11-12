@@ -15793,5 +15793,31 @@ report.py, and the third alone changes src/totals.py."
            (setq terminal (selected-window) displayed nil)
            (roost--cache-task "dev" (funcall task (funcall shown "11111111" "2026-11-11T10:09:00+00:00")))
            (should (equal displayed (list (list "*roost image: budget*" terminal))))
-           (should-not (gethash '("dev" "1111111111111111") roost--shown-waiting)))
+           (should-not (gethash '("dev" "1111111111111111") roost--shown-waiting))
+           ;; A reply read before the image the buffer holds was shown, which
+           ;; came after that one's, doesn't take its place.
+           (let ((key '("dev" "1111111111111111")))
+             (roost--take-shown key '((name . "new.png") (kind . "png") (at . "2026-11-11T10:20:00+00:00")
+                                      (data . "bmV3")))
+             (roost--take-shown key '((name . "old.png") (kind . "png") (at . "2026-11-11T10:15:00+00:00")
+                                      (data . "b2xk")))
+             (with-current-buffer "*roost image: budget*"
+               (should (equal (buffer-string) "new")))
+             ;; Renamed, the task keeps its buffer, which another task that
+             ;; takes its old name doesn't get.
+             (puthash key (cons '(name . "ledger") (assq-delete-all 'name (gethash key roost--tasks))) roost--tasks)
+             (roost--take-shown key '((name . "newer.png") (kind . "png") (at . "2026-11-11T10:25:00+00:00")
+                                      (data . "bmV3ZXI=")))
+             (with-current-buffer "*roost image: budget*"
+               (should (equal (buffer-string) "newer")))
+             (should (eq (roost--shown-buffer key) (get-buffer "*roost image: budget*")))
+             (roost--cache-task "dev" (append '((name . "budget")) (roost-test--task "4444444444444444" "ready")))
+             (roost--take-shown '("dev" "4444444444444444")
+                                '((name . "other.png") (kind . "png") (at . "2026-11-11T10:30:00+00:00")
+                                  (data . "b3RoZXI=")))
+             (with-current-buffer "*roost image: budget*"
+               (should (equal (buffer-string) "newer")))
+             (with-current-buffer (roost--shown-buffer '("dev" "4444444444444444"))
+               (should (equal (buffer-string) "other")))
+             (roost--forget-shown '("dev" "4444444444444444"))))
        (when (get-buffer "*roost image: budget*") (kill-buffer "*roost image: budget*"))))))

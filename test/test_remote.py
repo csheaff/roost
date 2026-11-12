@@ -10525,6 +10525,20 @@ print(json.dumps(dict(data=data)))
         fetched = self.request("shown", id=task["id"])["result"]
         self.assertEqual((fetched["name"], base64.b64decode(fetched["data"])), ("chart.gif", b"GIF89a" + b"frames"))
         self.assertEqual([file.name for file in store.shown(task["id"]).iterdir()], [fetched["id"] + ".gif"])
+        # Shown at once, as by two of its subagents, the record names one
+        # whose copy is there: neither removes the other's as an older one.
+        def show(n):
+            ran = subprocess.run([sys.executable, str(SOURCE), "mcp", str(self.state), task["id"]], timeout=60,
+                                 input=json.dumps(dict(jsonrpc="2.0", id=1, method="tools/call", params=dict(
+                                     name="show_image", arguments=dict(path=str(outside))))) + "\n",
+                                 capture_output=True, text=True)
+            return json.loads(ran.stdout.splitlines()[0])["result"]
+        with concurrent.futures.ThreadPoolExecutor(8) as pool:
+            for said in pool.map(show, range(16)):
+                self.assertNotIn("isError", said, said)
+        fetched = self.request("shown", id=task["id"])
+        self.assertTrue(fetched["ok"], fetched)
+        self.assertEqual([file.name for file in store.shown(task["id"]).iterdir()], [fetched["result"]["id"] + ".gif"])
         # Only an image, by what the file holds, and of a size Emacs can take.
         (worktree / "notes.png").write_text("#!/bin/sh\n")
         # Refused in the same words whatever is wrong, as the tool needs no
