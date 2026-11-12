@@ -3467,7 +3467,7 @@ def show(qa, repo):
         ("the image shows again", lambda s: image(s)["buffer"] == "*roost image: %s*" % task),
         ("the terminal is still on screen", lambda s: any(w.get("terminal") for w in s["windows"]))])
 
-    other = start_task(qa, "Tidy the notes")
+    other = start_task(qa, "Sort the charts")
     open_task(qa, other)
     qa.step("Another task's terminal takes the image off the screen", expect=[
         ("no image shows", lambda s: not image(s)),
