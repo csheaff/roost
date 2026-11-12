@@ -3682,7 +3682,9 @@ what is at point, and DIRECTORY is its project in place of where you are.
 Given with no SEED, DIRECTORY moves a written draft there too, unless
 `roost--compose-tied' says otherwise."
   (let* ((task (roost--task-at-point))
-         (fork (and fork task))
+         ;; Not a conversation, which has no work of its own to fork, in
+         ;; no project of yours: a draft as for any other task.
+         (fork (and fork task (not (roost--conversation-p task))))
          (given seed)
          (project directory)
          (seed (or seed (roost--compose-seed)))
@@ -8265,7 +8267,10 @@ is headed so, and the task's own, if any, named below it."
 Run it in another terminal, as a phone's SSH app or another machine,
 to see and answer the agent in its real terminal, whichever agent it
 is.  It attaches to the task's tmux session, over SSH for a task on
-another host, and leaves Emacs's view of it as it is."
+another host.  While it is attached, the window takes that terminal's
+size, as tmux gives a window to the client used last, and Emacs shows
+the agent at that size too; it has its own back once the other
+terminal detaches, or at once with \\[tmux-control-adopt-window-size]."
   (interactive)
   (setq task (roost--choose task))
   (unless (roost--field task 'live)
@@ -8280,7 +8285,7 @@ another host, and leaves Emacs's view of it as it is."
                       (format "ssh -t %s %s" (shell-quote-argument host) (shell-quote-argument attach))
                     attach)))
     (kill-new command)
-    (message "Copied: %s" command)))
+    (message "Copied: %s (attached, that terminal sizes the agent's window)" command)))
 
 ;;;###autoload
 (defun roost-stop (&optional task)
@@ -11151,6 +11156,11 @@ same name keep drafts of their own."
   (let ((buffer (roost--task-info-buffer task)))
     (if-let* ((window (get-buffer-window buffer)))
         (select-window window)
+      ;; From its top, which says what is wrong and what to do next.
+      ;; Where point was left counts for nothing here: drawn at another
+      ;; width, as beside its terminal, the panel was laid out otherwise.
+      (with-current-buffer buffer
+        (goto-char (point-min)))
       (pop-to-buffer buffer))
     ;; Changes come from a full refresh; fetch them for this host now.
     (roost--refresh-host (roost--field task 'host) nil)))
