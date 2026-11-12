@@ -4,6 +4,15 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- An agent can show you a page it writes: ask a Claude task for a diagram,
+  a mock-up or something to try, and it opens beside the task's terminal as
+  an image does, in place of what the task showed before. Sliders and
+  buttons in it work there. A button that asks the agent something opens a
+  draft to the task with its words, which you send. It needs a graphical
+  Emacs built with xwidgets; in another, Roost says the task has a page it
+  can't draw. The tool, `show_widget`, comes with `roost-agent-offers` and
+  adds about 300 tokens to each Claude request. Tasks started before the
+  update don't have it: stop and resume one to give it the tool.
 - An agent can show you an image: ask a Claude task to show you a
   screenshot or a chart, and it opens in a window beside the task's
   terminal, which draws no images itself. You stay where you are; the next

@@ -2834,7 +2834,10 @@ kind and when) and the copy `shown/TASK/ID.KIND` on its host; in Emacs,
 `roost--shown-at`, `roost--shown-waiting` and the buffer whose `roost--shown-task`
 is the task's key.
 An agent's terminal draws no images, so its agent asks Roost to show one
-(`show_image`, a tool of the helper's MCP server).
+(`show_image`, a tool of the helper's MCP server). A page the agent writes
+(`show_widget`) is shown the same way, as kind `html`, through the same
+states: `keep_shown` keeps either, and Emacs draws a page in a web view
+(`roost--draw-page`) where it draws an image with `image-mode`.
 
 | State | Meaning | How you can tell |
 |---|---|---|

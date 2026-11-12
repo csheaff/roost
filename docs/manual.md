@@ -290,6 +290,16 @@ goes with the task. The tool for this, `show_image`, comes with
 `roost-agent-offers`, for Claude Code tasks started or resumed since. It
 shows a PNG, JPEG, GIF or WebP of at most 8 MB.
 
+**See a page an agent writes.** The agent can also show a small page of its
+own: a diagram, a mock-up, or controls to try, such as a slider. It opens
+where an image does and takes its place, and what moves in it works there. A
+button in it that asks the agent something opens a draft to the task with its
+words, for you to send: nothing a page does reaches the agent until you do.
+The page's scripts can load libraries from cdnjs.cloudflare.com,
+cdn.jsdelivr.net, unpkg.com and esm.sh, and reach nothing else. It needs a
+graphical Emacs built with xwidgets. The tool is `show_widget`, for a page of
+at most 512 KB.
+
 **Keep them in view.** `b` in the dashboard, or `M-x roost-sidebar-mode`, keeps a
 compact task list at the left of the frame, through `C-x 1`; add
 `(roost-sidebar-mode 1)` to your configuration to have it from the start. With
