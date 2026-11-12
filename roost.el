@@ -85,6 +85,16 @@
 (declare-function persp-forget-buffer "perspective" (buffer))
 (declare-function persp-scratch-buffer "perspective" (&optional name))
 (declare-function persp-add-buffer "perspective" (buffer-or-name))
+(declare-function make-xwidget "xwidget.c" (type title width height &optional arguments buffer related))
+(declare-function kill-xwidget "xwidget.c" (xwidget))
+(declare-function xwidget-live-p "xwidget.c" (object))
+(declare-function xwidget-buffer "xwidget.c" (xwidget))
+(declare-function xwidget-put "xwidget.c" (xwidget propname value))
+(declare-function xwidget-resize "xwidget.c" (xwidget new-width new-height))
+(declare-function set-xwidget-query-on-exit-flag "xwidget.c" (xwidget flag))
+(declare-function get-buffer-xwidgets "xwidget.c" (buffer))
+(declare-function xwidget-webkit-goto-uri "xwidget.c" (xwidget uri))
+(declare-function xwidget-webkit-execute-script "xwidget.c" (xwidget script &optional fun))
 (declare-function persp-is-current-buffer "perspective" (buf &optional include-global))
 (declare-function persp-current-name "perspective" ())
 (declare-function persp-names "perspective" ())
@@ -359,6 +369,15 @@ agent gets a terminal of its own, relayed to its tmux pane, that
 answers.  Its status then shows at once when you approve a request, and
 for Claude Code when you press Esc or decline one, which hooks don't
 report.  New tasks, and tasks you resume, follow this."
+  :type 'boolean)
+
+(defcustom roost-agent-pages nil
+  "Whether a task's agent can show you a page it writes.
+A diagram, a mock-up or controls to try, beside its terminal, as it
+shows an image.  Off unless you turn it on: the tool for it adds to each
+request the agent makes, and a page shows only in a graphical Emacs built
+with xwidgets.  It comes with Roost's other tools, so it needs
+`roost-agent-offers' too.  Claude Code only.  New tasks follow this."
   :type 'boolean)
 
 (defcustom roost-agent-offers t
@@ -1552,6 +1571,26 @@ notifies of itself."
 ;; Kept as the buffer goes from the image's bytes to the image drawn.
 (put 'roost--shown-task 'permanent-local t)
 (put 'roost--shown-image-at 'permanent-local t)
+(defvar-local roost--shown-page nil
+  "The page in this buffer, if its agent showed a page and not an image.
+Its bytes, as its host sent them.")
+(defvar-local roost--shown-page-drawn nil
+  "The page this buffer's web view shows, as `roost--shown-page' held it.")
+(defvar-local roost--shown-page-waiting nil
+  "Whether a draft for what this buffer's page asked waits on a question.")
+(defvar-local roost--shown-page-asked nil
+  "What this buffer's page had a draft opened for, newest first.
+An alist of each prompt and when, as `float-time' gives it.")
+(defvar-local roost--shown-page-file nil
+  "The file this buffer's web view reads its page from.")
+(defvar-local roost--shown-page-timer nil
+  "The timer that asks this buffer's page what you clicked in it.")
+(put 'roost--shown-page 'permanent-local t)
+(put 'roost--shown-page-file 'permanent-local t)
+(put 'roost--shown-page-timer 'permanent-local t)
+(put 'roost--shown-page-drawn 'permanent-local t)
+(put 'roost--shown-page-asked 'permanent-local t)
+(put 'roost--shown-page-waiting 'permanent-local t)
 
 (defun roost--shown-buffer (key)
   "The buffer of the image the task with KEY showed, or nil.
@@ -1594,7 +1633,9 @@ or, when you ASKED for it, beside the window you are in."
               (data (ignore-errors (base64-decode-string (alist-get 'data image))))
               (kind (alist-get 'kind image))
               ((stringp kind)))
-    (if (not (and (display-images-p) (image-type-available-p (intern kind))))
+    (if (not (if (equal kind "html")
+                 (roost--pages-p)
+               (and (display-images-p) (image-type-available-p (intern kind)))))
         (message "%s shows %s, which this Emacs can't draw" (roost--field task 'name) (alist-get 'name image))
       (let* ((buffer (or (roost--shown-buffer key)
                          (generate-new-buffer (format "*roost image: %s*" (roost--task-label task)))))
@@ -1602,20 +1643,27 @@ or, when you ASKED for it, beside the window you are in."
              ;; A reply read before the image the buffer holds was shown,
              ;; which can come after that one's.
              (stale (let ((held (buffer-local-value 'roost--shown-image-at buffer)))
-                      (and (stringp held) (string< at held)))))
+                      (and (stringp held) (string< at held))))
+             ;; The page it shows already, as when you ask for it again:
+             ;; left as you have it, with what you set in it.
+             (same (and (equal kind "html")
+                        (equal at (buffer-local-value 'roost--shown-image-at buffer))
+                        (equal data (buffer-local-value 'roost--shown-page buffer)))))
         ;; What a poll named may be older than what its host sent: the next
         ;; poll, naming this one, has no news then.
         (when (string< (gethash key roost--shown-at "") at)
           (puthash key at roost--shown-at))
         (with-current-buffer buffer
-          (unless stale
+          (unless (or stale same)
             (let ((inhibit-read-only t))
+              (roost--drop-page)
               (fundamental-mode)
               (erase-buffer)
               (set-buffer-multibyte nil)
               (insert data)
               (set-buffer-modified-p nil))
-            (setq roost--shown-task key roost--shown-image-at at)
+            (setq roost--shown-task key roost--shown-image-at at
+                  roost--shown-page (and (equal kind "html") data))
             (setq buffer-read-only t)
             ;; A window that shows the image before draws this one, not its bytes.
             (when-let* ((window (get-buffer-window buffer t)))
@@ -3304,6 +3352,7 @@ EXTRA is an alist of further request fields, such as the issue."
            ,(cons 'branchPrefix roost-branch-prefix)
            ,(cons 'programStatus (if roost-program-status t :false))
            ,(cons 'mayOffer (if roost-agent-offers t :false))
+           ,(cons 'mayShowPages (if (and roost-agent-offers roost-agent-pages) t :false))
            ,(cons 'remoteControl (if roost-remote-control t :false))
            ,(cons 'size (roost--terminal-size))
            ,(cons 'socket (or roost-socket-name
@@ -10950,9 +10999,10 @@ Windows showing the panel keep their scroll position, and the mark stays."
   (when-let* ((name (alist-get 'name (roost--field task 'shown)))
               ((stringp name)))
     (insert roost--gap
-            (propertize "Image  " 'face 'roost-dim)
+            (propertize (if (equal (alist-get 'kind (roost--field task 'shown)) "html") "Page   " "Image  ")
+                        'face 'roost-dim)
             (make-text-button (copy-sequence name) nil 'face 'roost-field 'follow-link t
-                              'help-echo "Show this image beside the window you are in"
+                              'help-echo "Show this beside the window you are in"
                               'action (lambda (_button) (roost-show-image task)))
             "\n")))
 
@@ -10978,11 +11028,200 @@ its sides, as `roost--shown-beside' says."
     window))
 
 (defun roost--draw-shown (buffer window)
-  "Draw the image whose bytes BUFFER holds, fitted to WINDOW if it has one."
+  "Draw the image whose bytes BUFFER holds, fitted to WINDOW if it has one.
+Or the page BUFFER holds, if its agent showed one."
   (with-current-buffer buffer
-    (if (window-live-p window)
-        (with-selected-window window (image-mode))
-      (image-mode))))
+    (cond (roost--shown-page (roost--draw-page window))
+          ((window-live-p window)
+           ;; No longer a page's own, if it was.
+           (set-window-dedicated-p window nil)
+           (with-selected-window window (image-mode)))
+          (t (image-mode)))))
+
+;;;; Pages an agent shows
+
+;; With `show_widget' an agent shows a page it wrote: a diagram, a mock-up,
+;; controls to try.  It is shown as an image is, in the same buffer and
+;; window, by an embedded WebKit view the size of the window, where Emacs
+;; has one (a graphical Emacs built with xwidgets).  None of the agent's
+;; code is in the page Emacs loads: its host put it in a frame that can run
+;; scripts and load libraries from four hosts, and reach nothing else (see
+;; WIDGET_FRAME in the helper).  What it asks to send you, as when you click
+;; a button in it, becomes a draft to the task, which you send: a page's
+;; script can ask unclicked, so it is asked for at most one draft in a
+;; while, and what else it asked meanwhile is dropped.
+
+(defun roost--pages-p ()
+  "Whether this Emacs can show a page an agent wrote."
+  (and (featurep 'xwidget-internal) (display-graphic-p)))
+
+(defvar-keymap roost-shown-page-mode-map
+  :doc "Keymap for a page a task's agent showed."
+  :parent special-mode-map)
+
+(define-derived-mode roost-shown-page-mode special-mode "Roost-Page"
+  "A page a task's agent showed you, in a web view.
+\\{roost-shown-page-mode-map}"
+  (setq-local cursor-type nil
+              ;; Its view goes with it, without asking.
+              kill-buffer-query-functions
+              (remq 'xwidget-kill-buffer-query-function
+                    (default-value 'kill-buffer-query-functions)))
+  (add-hook 'window-size-change-functions #'roost--fit-page nil t)
+  (add-hook 'kill-buffer-hook #'roost--drop-page nil t))
+
+(defun roost--page-view ()
+  "This buffer's live web view, or nil."
+  (and (fboundp 'get-buffer-xwidgets)
+       (seq-find #'xwidget-live-p (get-buffer-xwidgets (current-buffer)))))
+
+(defun roost--drop-page ()
+  "Close this buffer's web view, and remove the page's file and timer."
+  (when (timerp roost--shown-page-timer)
+    (cancel-timer roost--shown-page-timer))
+  (when (fboundp 'get-buffer-xwidgets)
+    (mapc #'kill-xwidget (get-buffer-xwidgets (current-buffer))))
+  (when (and roost--shown-page-file (file-exists-p roost--shown-page-file))
+    (ignore-errors (delete-file roost--shown-page-file)))
+  (setq roost--shown-page-timer nil roost--shown-page-file nil roost--shown-page-drawn nil))
+
+(defun roost--drop-pages ()
+  "Remove the file of each page shown, as Emacs goes.
+A page says what its agent wrote of your code, and Emacs runs no
+buffer's `kill-buffer-hook' on its way out."
+  (dolist (buffer (buffer-list))
+    (when-let* ((file (buffer-local-value 'roost--shown-page-file buffer)))
+      (ignore-errors (delete-file file)))))
+
+(add-hook 'kill-emacs-hook #'roost--drop-pages)
+
+(defun roost--draw-page (window)
+  "Draw this buffer's page in a web view fitted to WINDOW, if it has one.
+A page its view shows already is left as you have it."
+  ;; xwidget.el hands a view's events to its callback, and nothing loads
+  ;; it but a command of its own.
+  (when (and (roost--pages-p) (require 'xwidget nil t))
+    (unless (and (roost--page-view) (eq roost--shown-page-drawn roost--shown-page))
+      (let ((inhibit-read-only t)
+            (inhibit-message t)
+            (page roost--shown-page))
+        (roost--drop-page)
+        (roost-shown-page-mode)
+        (set-buffer-multibyte t)
+        (erase-buffer)
+        ;; Its bytes as they came, whatever this Emacs would write text as.
+        (setq roost--shown-page-file (make-temp-file "roost-page-" nil ".html"))
+        (let ((coding-system-for-write 'no-conversion))
+          (write-region page nil roost--shown-page-file nil 'silent))
+        (insert " ")
+        (let ((view (make-xwidget 'webkit "Roost page" 400 300 nil (current-buffer))))
+          (set-xwidget-query-on-exit-flag view nil)
+          (xwidget-put view 'callback #'roost--page-event)
+          (put-text-property (point-min) (point-max) 'display (list 'xwidget :xwidget view))
+          (xwidget-webkit-goto-uri view (concat "file://" roost--shown-page-file)))
+        (set-buffer-modified-p nil)
+        (setq roost--shown-page-drawn page
+              roost--shown-page-asked nil
+              roost--shown-page-waiting nil
+              roost--shown-page-timer
+              (run-at-time 1 1 #'roost--ask-page (current-buffer)))))
+    ;; Its window is its own, loosely: a draft to the task, which a click
+    ;; in the page opens, goes beside it and not in its place, and you can
+    ;; still show another buffer there.
+    (when (window-live-p window)
+      (set-window-dedicated-p window 'roost-page))
+    (roost--fit-page window)))
+
+(defun roost--fit-page (&optional window)
+  "Make this buffer's web view the size of WINDOW, which shows it.
+No larger: on macOS a view larger than its window draws outside it."
+  (let* ((buffer (if (windowp window) (window-buffer window) (current-buffer)))
+         (window (if (window-live-p window) window (get-buffer-window buffer t))))
+    (when (window-live-p window)
+      (with-current-buffer buffer
+        (when-let* ((view (roost--page-view)))
+          ;; A view shows in one window: the others that show its buffer
+          ;; would draw it over what is beside them.
+          (dolist (other (get-buffer-window-list buffer nil t))
+            (unless (eq other window)
+              (ignore-errors (delete-window other))))
+          (xwidget-resize view (max 40 (window-body-width window t))
+                          (max 40 (window-body-height window t))))))))
+
+(defconst roost--page-draft-pause 3
+  "Seconds after a page's draft opens in which it can open no other.")
+
+(defconst roost--page-draft-repeat 30
+  "Seconds after a page's draft opens in which the same words open no other.")
+
+(defconst roost--page-asked
+  "JSON.stringify((window.roostOutbox || []).splice(0))"
+  "The script that takes what you clicked in a page since it was last asked.")
+
+(defun roost--ask-page (buffer)
+  "Ask the page in BUFFER what you clicked in it, while it is on screen."
+  (when (and (buffer-live-p buffer) (get-buffer-window buffer t))
+    (with-current-buffer buffer
+      (when-let* ((view (roost--page-view)))
+        ;; The reply comes to `roost--page-event'.  Emacs holds no reference
+        ;; to a callback while the script runs, so one made here could be
+        ;; collected before its reply: `ignore' cannot.
+        (xwidget-webkit-execute-script view roost--page-asked #'ignore)))))
+
+(defun roost--page-event (view type)
+  "Handle the event of TYPE from VIEW, a page a task's agent showed.
+Once loaded, the page takes this Emacs's background and whether it is
+dark.  What the page asks to send becomes a draft to its task."
+  (pcase type
+    ('load-changed
+     (when (equal (nth 3 last-input-event) "load-finished")
+       (xwidget-webkit-execute-script
+        view (format (concat "document.documentElement.style.background = %S;"
+                             "window.roostMode && roostMode(%S)")
+                     (or (face-background 'default nil t) "white")
+                     (if (eq (frame-parameter nil 'background-mode) 'dark) "dark" "light")))))
+    ('javascript-callback
+     (let* ((reply (nth 4 last-input-event))
+            (asked (and (stringp reply)
+                        (ignore-errors (json-parse-string reply :object-type 'alist
+                                                          :array-type 'list :null-object nil))))
+            (buffer (xwidget-buffer view))
+            (task (and (buffer-live-p buffer)
+                       (gethash (buffer-local-value 'roost--shown-task buffer) roost--tasks))))
+       (dolist (item asked)
+         (let ((text (alist-get 'text item)))
+           (when (and task (stringp text) (not (string-blank-p text)))
+             (if (equal (alist-get 'kind item) "prompt")
+                 (roost--page-asks buffer text)
+               (message "%s's page links to %s" (roost--field task 'name) text)))))))))
+
+(defun roost--page-asks (buffer text)
+  "Open a draft with TEXT to the task whose page BUFFER shows, which asked.
+One draft in a while, and the same words not again for longer: a page
+that asks again and again, as a script can, would keep taking you to the
+draft.  While you answer a question the draft waits, and what else the
+page asks meanwhile is dropped; whether it may open, and for which task,
+is decided once the question is done, as the task may have gone by then."
+  (unless (buffer-local-value 'roost--shown-page-waiting buffer)
+    (with-current-buffer buffer
+      (setq roost--shown-page-waiting t))
+    (roost--when-out-of-minibuffer
+     (lambda ()
+       (when (buffer-live-p buffer)
+         (let* ((task (gethash (buffer-local-value 'roost--shown-task buffer) roost--tasks))
+                (asked (buffer-local-value 'roost--shown-page-asked buffer))
+                (now (float-time))
+                (same (cdr (assoc text asked))))
+           (with-current-buffer buffer
+             (setq roost--shown-page-waiting nil))
+           (when (and task
+                      (not (and asked (< (- now (cdar asked)) roost--page-draft-pause)))
+                      (not (and same (< (- now same) roost--page-draft-repeat))))
+             (with-current-buffer buffer
+               (setq roost--shown-page-asked
+                     (cons (cons text now)
+                           (seq-take (assoc-delete-all text roost--shown-page-asked) 30))))
+             (roost--send-draft task text))))))))
 
 (defun roost--show-waiting (task)
   "Show the image TASK's agent showed while its terminal was off screen.

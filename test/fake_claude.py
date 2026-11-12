@@ -215,6 +215,25 @@ for line in lines():
         record("assistant", said)
         event("Stop", last_assistant_message=said)
         status("done")
+    elif line.startswith("page "):
+        # Show a page of its own writing in Roost. Its button asks you to
+        # send its words. No test can press a button in the page's frame
+        # from outside it, so the page presses its own, once, when it is
+        # next made wider or narrower after its first moments.
+        name = line[len("page "):].strip()
+        code = ('<button id="go" onclick="sendPrompt(\'Explain the %s\')">Explain the %s</button>'
+                '<input type="range" id="level" min="1" max="9" value="1">'
+                '<script>var born = Date.now(), pressed = false;'
+                'addEventListener("resize", function () {'
+                ' if (!pressed && Date.now() - born > 2500) {'
+                ' pressed = true; document.getElementById("go").click(); } });</script>' % (name, name))
+        event("PreToolUse", tool_name="mcp__roost__show_widget")
+        said = call("show_widget", title=name, widget_code=code)
+        event("PostToolUse", tool_name="mcp__roost__show_widget")
+        print("SHOWED " + said, flush=True)
+        record("assistant", said)
+        event("Stop", last_assistant_message=said)
+        status("done")
     elif line.strip() == "interrupt":
         # Esc: Claude stops the turn, and runs no hook.
         status("idle")

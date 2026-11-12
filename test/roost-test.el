@@ -15299,7 +15299,165 @@ it of the same ID's, or nil for the first."
                (roost-remote-control (not setting)))
            (roost--create-task "/tmp/repo/" "task" nil "Look" "claude")
            (should (eq (alist-get 'mayOffer asked) (if setting t :false)))
+           ;; Pages come with the offers' tools, and only once you ask.
+           (should (eq (alist-get 'mayShowPages asked) :false))
+           (let ((roost-agent-pages t))
+             (roost--create-task "/tmp/repo/" "task" nil "Look" "claude")
+             (should (eq (alist-get 'mayShowPages asked) (if setting t :false))))
            (should (eq (alist-get 'remoteControl asked) (if setting :false t)))))))))
+
+(ert-deftest roost-shows-a-page-where-emacs-can-draw-one ()
+  ;; A page an agent wrote is shown as an image is, in the same buffer,
+  ;; where this Emacs has a web view; elsewhere Roost says it can't.
+  (roost-test--isolated
+   (let* ((key '("dev" "1111111111111111"))
+          (page '((id . "0a1b2c3d") (name . "what changed") (kind . "html")
+                  (at . "2026-11-11T10:05:00+00:00") (data . "PHA+aGk8L3A+")))
+          can drawn displayed said)
+     (unwind-protect
+         (cl-letf (((symbol-function 'roost--pages-p) (lambda () can))
+                   ((symbol-function 'roost--draw-page) (lambda (window) (push window drawn)))
+                   ((symbol-function 'roost--display-shown)
+                    (lambda (buffer window) (push (list (buffer-name buffer) window) displayed)))
+                   ((symbol-function 'roost--task-terminal-window) (lambda (_task) (selected-window)))
+                   ((symbol-function 'message)
+                    (lambda (format &rest arguments) (push (apply #'format-message format arguments) said))))
+           (roost--cache-task "dev" (append '((name . "budget")) (roost-test--task "1111111111111111" "ready")))
+           ;; No web view: nothing is made of it, and you are told.
+           (roost--take-shown key page)
+           (should (string-match-p "\\`budget shows what changed, which this Emacs can.t draw\\'" (car said)))
+           (should (= (length said) 1))
+           (should-not (roost--shown-buffer key))
+           ;; With one, it shows beside the terminal, as a page.
+           (setq can t said nil)
+           (roost--take-shown key page)
+           (should (equal displayed (list (list "*roost image: budget*" (selected-window)))))
+           (with-current-buffer (roost--shown-buffer key)
+             (should (equal roost--shown-page "<p>hi</p>"))
+             (should-not (multibyte-string-p roost--shown-page)))
+           ;; Asked for again, the same page is left as you have it: its
+           ;; view is not made anew, which would lose what you set in it.
+           (let ((held (with-current-buffer (roost--shown-buffer key) roost--shown-page)))
+             (with-current-buffer (roost--shown-buffer key)
+               (let ((inhibit-read-only t)) (erase-buffer) (insert "as drawn")))
+             (roost--take-shown key page t)
+             (with-current-buffer (roost--shown-buffer key)
+               (should (eq roost--shown-page held))
+               (should (equal (buffer-string) "as drawn")))
+             ;; A page shown since takes its place.
+             (roost--take-shown key (append '((at . "2026-11-11T10:07:00+00:00") (data . "PHA+eW88L3A+"))
+                                            page))
+             (with-current-buffer (roost--shown-buffer key)
+               (should (equal roost--shown-page "<p>yo</p>"))))
+           ;; An image after it takes its place, as an image.
+           (cl-letf (((symbol-function 'display-images-p) (lambda (&rest _) t))
+                     ((symbol-function 'image-type-available-p) (lambda (&rest _) t)))
+             (roost--take-shown key '((name . "shot.png") (kind . "png") (at . "2026-11-11T10:09:00+00:00")
+                                      (data . "bmV3"))))
+           (with-current-buffer (roost--shown-buffer key)
+             (should-not roost--shown-page)
+             (should (equal (buffer-string) "new")))
+           ;; The panel names what it shows by its kind.
+           (dolist (kind '(("html" . "Page") ("png" . "Image")))
+             (with-temp-buffer
+               (roost--insert-shown `((shown . ((name . "x") (kind . ,(car kind))))))
+               (should (string-match-p (cdr kind) (buffer-string))))))
+       (when (get-buffer "*roost image: budget*") (kill-buffer "*roost image: budget*"))))))
+
+(ert-deftest roost-a-page-asks-and-you-send ()
+  ;; What a page asks to send, as when you click a button in it, opens a
+  ;; draft to its task with those words: a page's script can ask unclicked,
+  ;; so nothing goes to the agent but what you send.
+  (roost-test--isolated
+   (let* ((key '("dev" "1111111111111111"))
+          (buffer (generate-new-buffer "*roost image: budget*"))
+          drafts sent said)
+     (unwind-protect
+         (cl-letf (((symbol-function 'xwidget-buffer) (lambda (_view) buffer))
+                   ((symbol-function 'roost--send-draft)
+                    (lambda (task initial) (push (list (roost--field task 'name) initial) drafts)))
+                   ((symbol-function 'roost--send-text) (lambda (&rest _) (setq sent t)))
+                   ((symbol-function 'roost--act) (lambda (&rest _) (setq sent t)))
+                   ((symbol-function 'message)
+                    (lambda (format &rest arguments) (push (apply #'format format arguments) said))))
+           (roost--cache-task "dev" (append '((name . "budget")) (roost-test--task "1111111111111111" "ready")))
+           (with-current-buffer buffer (setq roost--shown-task key))
+           (let ((last-input-event
+                  (list 'xwidget-event 'javascript-callback 'view #'ignore
+                        (json-encode [((kind . "prompt") (text . "Explain list_notes"))
+                                      ((kind . "link") (text . "https://example.com/"))
+                                      ((kind . "prompt") (text . "  "))
+                                      ((kind . "prompt") (text . 7))]))))
+             (roost--page-event 'view 'javascript-callback))
+           (should (equal drafts '(("budget" "Explain list_notes"))))
+           (should (equal said '("budget's page links to https://example.com/")))
+           (should-not sent)
+           ;; A page that asks again at once, as a script can, opens no
+           ;; other draft; after a while it can.
+           (let ((again (list 'xwidget-event 'javascript-callback 'view #'ignore
+                              (json-encode [((kind . "prompt") (text . "And again"))
+                                            ((kind . "prompt") (text . "And again"))]))))
+             (let ((last-input-event again))
+               (roost--page-event 'view 'javascript-callback))
+             (should (= (length drafts) 1))
+             (with-current-buffer buffer
+               (setcdr (car roost--shown-page-asked) (- (float-time) roost--page-draft-pause 1)))
+             (let ((last-input-event again))
+               (roost--page-event 'view 'javascript-callback))
+             (should (equal (car drafts) '("budget" "And again")))
+             (should (= (length drafts) 2))
+             ;; The same words, not for longer still.
+             (with-current-buffer buffer
+               (setcdr (car roost--shown-page-asked) (- (float-time) roost--page-draft-pause 1)))
+             (let ((last-input-event again))
+               (roost--page-event 'view 'javascript-callback))
+             (should (= (length drafts) 2)))
+           ;; What isn't a list of what was asked does nothing.
+           (dolist (reply '("not json" "{}" nil 3))
+             (let ((last-input-event (list 'xwidget-event 'javascript-callback 'view #'ignore reply)))
+               (roost--page-event 'view 'javascript-callback)))
+           (should (= (length drafts) 2))
+           ;; While you answer a question, one draft waits and what else
+           ;; the page asks is dropped; when the question is done the pause
+           ;; still holds, and a task that went meanwhile gets no draft.
+           (let (held)
+             (cl-letf (((symbol-function 'roost--when-out-of-minibuffer)
+                        (lambda (function) (push function held))))
+               (with-current-buffer buffer (setq roost--shown-page-asked nil))
+               (dolist (text '("One" "Two" "Three"))
+                 (roost--page-asks buffer text))
+               (should (= (length held) 1))
+               (funcall (car held))
+               (should (equal (car drafts) '("budget" "One")))
+               (should (= (length drafts) 3))
+               ;; Asked again in the pause, behind another question.
+               (setq held nil)
+               (roost--page-asks buffer "Four")
+               (funcall (car held))
+               (should (= (length drafts) 3))
+               (with-current-buffer buffer (setq roost--shown-page-asked nil))
+               (setq held nil)
+               (roost--page-asks buffer "Five")
+               (let ((task (gethash key roost--tasks)))
+                 (remhash key roost--tasks)
+                 (funcall (car held))
+                 (should (= (length drafts) 3))
+                 (puthash key task roost--tasks))
+               ;; And it can ask again afterwards.
+               (setq held nil)
+               (roost--page-asks buffer "Six")
+               (funcall (car held))
+               (should (equal (car drafts) '("budget" "Six")))
+               (with-current-buffer buffer (setq roost--shown-page-asked nil))))
+           (setq drafts (last drafts 2))
+           ;; Nor what a page says once its task has gone.
+           (remhash key roost--tasks)
+           (let ((last-input-event
+                  (list 'xwidget-event 'javascript-callback 'view #'ignore
+                        (json-encode [((kind . "prompt") (text . "Still there?"))]))))
+             (roost--page-event 'view 'javascript-callback))
+           (should (= (length drafts) 2)))
+       (kill-buffer buffer)))))
 
 ;;;; Several attempts at one prompt
 

@@ -11,6 +11,7 @@ import importlib.util
 import hashlib
 import io
 import itertools
+import html
 import json
 import os
 import re
@@ -10495,6 +10496,67 @@ print(json.dumps(dict(data=data)))
         """What TASK's agent is told as it calls TOOL of Roost's with ARGUMENTS."""
         return self.serve(task, dict(id="call", method="tools/call", params=dict(
             name=tool, arguments=arguments)))["call"]["result"]
+
+    def test_an_agent_shows_a_page_it_wrote_which_emacs_fetches(self):
+        # Only where you let it: the tool is not listed, called or allowed
+        # without asking for a task made without `mayShowPages`.
+        plain = self.create(name="plain", mayOffer=True)
+        listed = self.serve(plain, dict(id=1, method="initialize", params={}),
+                            dict(id=2, method="tools/list"),
+                            dict(id=3, method="tools/call", params=dict(
+                                name="show_widget", arguments=dict(title="t", widget_code="<p>x</p>"))))
+        self.assertNotIn("show_widget", [tool["name"] for tool in listed[2]["result"]["tools"]])
+        self.assertNotIn("show_widget", listed[1]["result"]["instructions"])
+        self.assertEqual(listed[3]["error"]["code"], -32602)
+        store = roost.Store(str(self.state))
+        self.assertNotIn("mayShowPages", store.read(plain["id"]))
+        # Nor without the tools it comes with.
+        self.assertNotIn("mayShowPages", store.read(self.create(name="bare", mayShowPages=True)["id"]))
+
+        task = self.create(name="parent", mayOffer=True, mayShowPages=True)
+        listed = self.serve(task, dict(id=1, method="initialize", params={}), dict(id=2, method="tools/list"))
+        self.assertIn("show_widget", [tool["name"] for tool in listed[2]["result"]["tools"]])
+        self.assertIn("write a page with show_widget", listed[1]["result"]["instructions"])
+        argv = roost.ClaudeAgent().launch(store, store.read(task["id"]), False)
+        allowed = json.loads(Path(argv[argv.index("--settings") + 1]).read_text())["permissions"]["allow"]
+        self.assertIn("mcp__roost__show_widget", allowed)
+
+        code = "<button onclick=\"sendPrompt('Go on')\">Go on</button>"
+        said = self.call(task, "show_widget", title="next\tstep", widget_code=code)
+        self.assertNotIn("isError", said)
+        self.assertIn("next?step", said["content"][0]["text"])
+        listed = next(row for row in self.request("list")["result"] if row["id"] == task["id"])["shown"]
+        self.assertEqual((listed["name"], listed["kind"]), ("next?step", "html"))
+        fetched = self.request("shown", id=task["id"])["result"]
+        page = base64.b64decode(fetched["data"]).decode()
+        # None of its code is in the page itself: it is the text of a frame
+        # that can run scripts and no more, under a policy that reaches
+        # nothing but four hosts of libraries.
+        self.assertNotIn(code, page)
+        self.assertIn(html.escape(code, quote=True), page)
+        self.assertIn('<iframe id="widget" sandbox="allow-scripts" srcdoc="', page)
+        self.assertEqual(page.count("<iframe"), 1)
+        self.assertTrue(page.startswith("<!doctype html><meta charset=utf-8>\n<meta http-equiv=\"Content-Security-Policy\" "
+                                        "content=\"default-src 'none'"))
+        self.assertIn("function sendPrompt", html.unescape(page))
+        # Code that tries to end the frame's text early stays inside it.
+        self.call(task, "show_widget", title="out", widget_code='"></iframe><script>top.location="http://x/"</script>')
+        page = base64.b64decode(self.request("shown", id=task["id"])["result"]["data"]).decode()
+        self.assertEqual((page.count("<iframe"), page.count("</iframe>")), (1, 1))
+        self.assertNotIn('top.location="http', page)
+        self.assertEqual([file.suffix for file in store.shown(task["id"]).iterdir()], [".html"])
+        # It takes the place of an image, and an image of it.
+        png = b"\x89PNG\r\n\x1a\n" + b"pixels"
+        (Path(store.read(task["id"])["worktree"]) / "shot.png").write_bytes(png)
+        self.assertNotIn("isError", self.call(task, "show_image", path="shot.png"))
+        self.assertEqual([file.suffix for file in store.shown(task["id"]).iterdir()], [".png"])
+        # Nothing, or more than Roost shows, is refused and changes nothing.
+        for bad in ("", "  ", None, "x" * (roost.PAGE_LIMIT + 1)):
+            self.assertTrue(self.call(task, "show_widget", title="t", widget_code=bad)["isError"])
+        self.assertEqual(self.request("shown", id=task["id"])["result"]["kind"], "png")
+        # With no title it still has a name to be called by.
+        self.call(task, "show_widget", widget_code="<svg></svg>")
+        self.assertEqual(next(row for row in self.request("list")["result"] if row["id"] == task["id"])["shown"]["name"], "a page")
 
     def test_an_agent_shows_an_image_which_emacs_fetches(self):
         task = self.create(name="parent", mayOffer=True)

@@ -14,6 +14,7 @@ import fcntl
 import functools
 import hashlib
 import heapq
+import html
 import json
 import locale
 import os
@@ -763,6 +764,9 @@ def claude_hook_settings(store, task):
         # Roost for you to take it or leave it.
         # Nor does an image, which only shows beside the agent's terminal.
         allow = ["mcp__roost__propose_task", "mcp__roost__list_projects", "mcp__roost__show_image"]
+        # Nor a page it writes, where you let it show one.
+        if task.get("mayShowPages") is True:
+            allow.append("mcp__roost__show_widget")
         if task.get("conversation") is True:
             # A conversation plans work in your projects, which it has to
             # read first: those this host has run tasks in, without asking
@@ -2431,6 +2435,9 @@ def make_task(store, request, create_id):
     # Its agent can offer tasks, if it can be given Roost's tool.
     if request.get("mayOffer") is True and getattr(agent, "offers", False):
         task["mayOffer"] = True
+        # And show you pages it writes, with the same tools, if you let it.
+        if request.get("mayShowPages") is True:
+            task["mayShowPages"] = True
     # It shows in the agent's own app, if the agent has one to show it in.
     if request.get("remoteControl") is True and getattr(agent, "remote_control", False):
         task["remoteControl"] = True
@@ -4551,6 +4558,10 @@ MCP_SHOWS = (
     " The user reads you in a terminal, which draws no images. When they ask to see one, such as a "
     "screenshot, a chart or a diagram you made, or when a picture says it better than words, show it "
     "with show_image rather than only naming its file.")
+# And of showing a page, where the task may (`mayShowPages`).
+MCP_PAGES = (
+    " For something to click or drag, or a diagram you would draw yourself, such as one of what you "
+    "changed and how its parts connect, write a page with show_widget.")
 MCP_INSTRUCTIONS = (
     "Roost runs you in a task of your own: a Git worktree and branch that the user reviews and merges. "
     "When you come across work outside what you were asked to do that is worth a task of its own, such "
@@ -4610,7 +4621,28 @@ MCP_TOOLS = {
         inputSchema=dict(type="object", required=["path"], properties=dict(
             path=dict(type="string", description="The image file, by its whole path or relative to the task's worktree"))),
         annotations=dict(readOnlyHint=False, destructiveHint=False, openWorldHint=False)),
+    "show_widget": dict(
+        description=(
+            "Show the user a small page you write, beside this terminal, in Roost: a diagram, a mock-up, a "
+            "chart, or controls to try. It takes the place of what you showed before. widget_code is one "
+            "SVG element, or an HTML fragment with no doctype, html, head or body: style first, content "
+            "next, script last. It is drawn about 680px wide in light or dark mode, so colour it only with "
+            "these CSS variables: --text-primary, --text-secondary, --text-muted, --surface-1, --surface-2, "
+            "--border, --border-strong, --text-accent, --text-danger, --text-success, --text-warning, "
+            "--radius, --font-sans, --font-mono. Buttons, inputs and sliders are styled already. In SVG "
+            "use viewBox=\"0 0 680 H\", give text class t, th (bold) or ts (small), and colour a group or "
+            "shape with class c-purple, c-teal, c-coral, c-pink, c-gray, c-blue, c-green, c-amber or "
+            "c-red. Do sliders, toggles and sums in the page's own script. Call sendPrompt(text) from a "
+            "click when the user's next step needs you: Roost puts text in a draft to you for them to "
+            "send. Scripts load libraries only from cdnjs.cloudflare.com, cdn.jsdelivr.net, unpkg.com or "
+            "esm.sh, and reach nothing else."),
+        inputSchema=dict(type="object", required=["title", "widget_code"], properties=dict(
+            title=dict(type="string", description="A few words naming it"),
+            widget_code=dict(type="string", description="One SVG element, or an HTML fragment"))),
+        annotations=dict(readOnlyHint=False, destructiveHint=False, openWorldHint=False)),
 }
+# The largest page an agent can show.
+PAGE_LIMIT = 512 * 1024
 # The largest image an agent can show, which Emacs reads whole in one
 # reply, and the kinds, each by the bytes a file of it starts with.
 SHOWN_LIMIT = 8 * 1024 * 1024
@@ -4695,7 +4727,21 @@ class McpServer:
             conversation = self.store.read(self.task_id).get("conversation") is True
         except (RoostError, OSError, ValueError):
             conversation = False
-        return MCP_CONVERSATION_INSTRUCTIONS if conversation else MCP_INSTRUCTIONS
+        return ((MCP_CONVERSATION_INSTRUCTIONS if conversation else MCP_INSTRUCTIONS)
+                + (MCP_PAGES if self.pages() else ""))
+
+    def pages(self):
+        """Whether this task's agent may show pages it writes, which you
+        turn on (`roost-agent-pages`): the tool is not listed otherwise."""
+        try:
+            return self.store.read(self.task_id).get("mayShowPages") is True
+        except (RoostError, OSError, ValueError):
+            return False
+
+    def tools(self):
+        """The tools this task's agent has, by name."""
+        return {name: definition for name, definition in MCP_TOOLS.items()
+                if name != "show_widget" or self.pages()}
 
     def answer(self, method, params):
         if method == "initialize":
@@ -4706,16 +4752,19 @@ class McpServer:
         if method == "ping":
             return {}
         if method == "tools/list":
-            return dict(tools=[dict(definition, name=name) for name, definition in MCP_TOOLS.items()])
+            return dict(tools=[dict(definition, name=name) for name, definition in self.tools().items()])
         if method == "tools/call":
             arguments = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
-            if params.get("name") not in MCP_TOOLS:
+            if params.get("name") not in self.tools():
                 raise McpError(-32602, "Unknown tool: %s" % params.get("name"))
             try:
                 if params.get("name") == "list_projects":
                     said = "\n".join(known_projects(self.store)) or "Roost has run no task in a project here yet."
                 elif params.get("name") == "show_image":
                     said = show_image(self.store, self.task_id, arguments.get("path"))
+                elif params.get("name") == "show_widget":
+                    said = show_widget(self.store, self.task_id, arguments.get("title"),
+                                       arguments.get("widget_code"))
                 else:
                     said = propose_task(self.store, self.task_id, arguments.get("title"), arguments.get("brief"),
                                         arguments.get("project"))
@@ -4908,6 +4957,130 @@ def require_offers_named(task, named, doing):
                          % ("a task" if len(unnamed) == 1 else "%d tasks" % len(unnamed), "; ".join(unnamed), doing))
 
 
+# What an agent's code is given of its host, in the frame it runs in
+# (WIDGET_FRAME): the colours and classes its tool names, sendPrompt and
+# openLink, and a policy that lets scripts, styles and fonts load from a
+# few hosts of libraries. The policy alone confines nothing: a script can
+# still take a page elsewhere, which the frame is there to stop.
+WIDGET_HEAD = """<!doctype html><meta charset=utf-8>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob:;
+ style-src 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com;
+ font-src https://fonts.gstatic.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com;
+ script-src 'unsafe-inline' https://cdnjs.cloudflare.com https://esm.sh https://cdn.jsdelivr.net https://unpkg.com">
+<style>
+:root { color-scheme: light dark;
+  --surface-0:#fbf9f5; --surface-1:#f4f1ea; --surface-2:#ffffff; --surface-3:#ffffff;
+  --text-primary:#1d1b19; --text-secondary:#5f5b55; --text-muted:#8c877f;
+  --text-accent:#185FA5; --text-danger:#A32D2D; --text-success:#3B6D11; --text-warning:#854F0B;
+  --bg-accent:#E6F1FB; --bg-danger:#FCEBEB; --bg-success:#EAF3DE; --bg-warning:#FAEEDA;
+  --border:rgba(0,0,0,.13); --border-strong:rgba(0,0,0,.24); --border-stronger:rgba(0,0,0,.4);
+  --border-accent:#85B7EB; --border-danger:#F09595; --border-success:#97C459; --border-warning:#EF9F27;
+  --font-sans:-apple-system,"Helvetica Neue",sans-serif; --font-voice:Charter,Georgia,serif;
+  --font-mono:"SF Mono",Menlo,monospace; --radius:8px;
+  --pad-sm:6px; --pad-md:10px; --pad-lg:16px; --pad-xl:24px;
+  --gap-xs:4px; --gap-sm:8px; --gap-md:12px; --gap-lg:16px; --gap-xl:24px;
+  --p:var(--text-primary); --s:var(--text-secondary); --t:var(--text-muted);
+  --bg2:var(--surface-1); --b:var(--border); }
+@media (prefers-color-scheme: dark) { :root {
+  --surface-0:#1b1a1d; --surface-1:#26242b; --surface-2:#2e2c34; --surface-3:#36343d;
+  --text-primary:#e6e1d8; --text-secondary:#b3aea5; --text-muted:#8f897f;
+  --text-accent:#85B7EB; --text-danger:#F09595; --text-success:#97C459; --text-warning:#EF9F27;
+  --bg-accent:#0C447C; --bg-danger:#791F1F; --bg-success:#27500A; --bg-warning:#633806;
+  --border:rgba(255,255,255,.14); --border-strong:rgba(255,255,255,.26);
+  --border-stronger:rgba(255,255,255,.42); } }
+:root[data-mode=light] { color-scheme: light;
+  --surface-0:#fbf9f5; --surface-1:#f4f1ea; --surface-2:#ffffff; --surface-3:#ffffff;
+  --text-primary:#1d1b19; --text-secondary:#5f5b55; --text-muted:#8c877f;
+  --text-accent:#185FA5; --text-danger:#A32D2D; --text-success:#3B6D11; --text-warning:#854F0B;
+  --bg-accent:#E6F1FB; --bg-danger:#FCEBEB; --bg-success:#EAF3DE; --bg-warning:#FAEEDA;
+  --border:rgba(0,0,0,.13); --border-strong:rgba(0,0,0,.24); --border-stronger:rgba(0,0,0,.4);
+  --border-accent:#85B7EB; --border-danger:#F09595; --border-success:#97C459; --border-warning:#EF9F27; }
+:root[data-mode=dark] { color-scheme: dark;
+  --surface-0:#1b1a1d; --surface-1:#26242b; --surface-2:#2e2c34; --surface-3:#36343d;
+  --text-primary:#e6e1d8; --text-secondary:#b3aea5; --text-muted:#8f897f;
+  --text-accent:#85B7EB; --text-danger:#F09595; --text-success:#97C459; --text-warning:#EF9F27;
+  --bg-accent:#0C447C; --bg-danger:#791F1F; --bg-success:#27500A; --bg-warning:#633806;
+  --border:rgba(255,255,255,.14); --border-strong:rgba(255,255,255,.26);
+  --border-stronger:rgba(255,255,255,.42); }
+html, body { margin:0; background:transparent; }
+body { color:var(--text-primary); font:16px/1.7 var(--font-sans); padding:12px 16px; }
+h1,h2,h3 { font-weight:500; margin:.6em 0 .3em; } h1{font-size:22px} h2{font-size:18px} h3{font-size:16px}
+.sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
+button { font:14px var(--font-sans); color:var(--text-primary); background:transparent;
+  border:.5px solid var(--border-strong); border-radius:var(--radius); padding:6px 12px; cursor:pointer; }
+button:hover { background:var(--surface-1); } button:active { transform:scale(.98); }
+input[type=text], input[type=number], select, textarea { font:14px var(--font-sans); height:36px;
+  color:var(--text-primary); background:var(--surface-2); border:.5px solid var(--border-strong);
+  border-radius:var(--radius); padding:0 10px; box-sizing:border-box; }
+textarea { height:auto; padding:8px 10px; }
+svg text { font-family:var(--font-sans); }
+.t { font-size:14px; fill:var(--text-primary); } .th { font-size:14px; font-weight:500; fill:var(--text-primary); }
+.ts { font-size:12px; fill:var(--text-secondary); }
+.box { fill:var(--surface-1); stroke:var(--border-strong); }
+.node { cursor:pointer; } .node:hover { opacity:.82; }
+.arr { stroke:var(--text-muted); stroke-width:1.5; fill:none; }
+.leader { stroke:var(--text-muted); stroke-width:.5; stroke-dasharray:3 3; fill:none; }
+.c-purple>rect,.c-purple>circle,.c-purple>ellipse,rect.c-purple,circle.c-purple,ellipse.c-purple{fill:#EEEDFE;stroke:#534AB7}.c-purple .th,.c-purple .t{fill:#3C3489}.c-purple .ts{fill:#534AB7}.c-teal>rect,.c-teal>circle,.c-teal>ellipse,rect.c-teal,circle.c-teal,ellipse.c-teal{fill:#E1F5EE;stroke:#0F6E56}.c-teal .th,.c-teal .t{fill:#085041}.c-teal .ts{fill:#0F6E56}.c-coral>rect,.c-coral>circle,.c-coral>ellipse,rect.c-coral,circle.c-coral,ellipse.c-coral{fill:#FAECE7;stroke:#993C1D}.c-coral .th,.c-coral .t{fill:#712B13}.c-coral .ts{fill:#993C1D}.c-pink>rect,.c-pink>circle,.c-pink>ellipse,rect.c-pink,circle.c-pink,ellipse.c-pink{fill:#FBEAF0;stroke:#993556}.c-pink .th,.c-pink .t{fill:#72243E}.c-pink .ts{fill:#993556}.c-gray>rect,.c-gray>circle,.c-gray>ellipse,rect.c-gray,circle.c-gray,ellipse.c-gray{fill:#F1EFE8;stroke:#5F5E5A}.c-gray .th,.c-gray .t{fill:#444441}.c-gray .ts{fill:#5F5E5A}.c-blue>rect,.c-blue>circle,.c-blue>ellipse,rect.c-blue,circle.c-blue,ellipse.c-blue{fill:#E6F1FB;stroke:#185FA5}.c-blue .th,.c-blue .t{fill:#0C447C}.c-blue .ts{fill:#185FA5}.c-green>rect,.c-green>circle,.c-green>ellipse,rect.c-green,circle.c-green,ellipse.c-green{fill:#EAF3DE;stroke:#3B6D11}.c-green .th,.c-green .t{fill:#27500A}.c-green .ts{fill:#3B6D11}.c-amber>rect,.c-amber>circle,.c-amber>ellipse,rect.c-amber,circle.c-amber,ellipse.c-amber{fill:#FAEEDA;stroke:#854F0B}.c-amber .th,.c-amber .t{fill:#633806}.c-amber .ts{fill:#854F0B}.c-red>rect,.c-red>circle,.c-red>ellipse,rect.c-red,circle.c-red,ellipse.c-red{fill:#FCEBEB;stroke:#A32D2D}.c-red .th,.c-red .t{fill:#791F1F}.c-red .ts{fill:#A32D2D}
+@media (prefers-color-scheme: dark){.c-purple>rect,.c-purple>circle,.c-purple>ellipse,rect.c-purple,circle.c-purple,ellipse.c-purple{fill:#3C3489;stroke:#AFA9EC}.c-purple .th,.c-purple .t{fill:#CECBF6}.c-purple .ts{fill:#AFA9EC}.c-teal>rect,.c-teal>circle,.c-teal>ellipse,rect.c-teal,circle.c-teal,ellipse.c-teal{fill:#085041;stroke:#5DCAA5}.c-teal .th,.c-teal .t{fill:#9FE1CB}.c-teal .ts{fill:#5DCAA5}.c-coral>rect,.c-coral>circle,.c-coral>ellipse,rect.c-coral,circle.c-coral,ellipse.c-coral{fill:#712B13;stroke:#F0997B}.c-coral .th,.c-coral .t{fill:#F5C4B3}.c-coral .ts{fill:#F0997B}.c-pink>rect,.c-pink>circle,.c-pink>ellipse,rect.c-pink,circle.c-pink,ellipse.c-pink{fill:#72243E;stroke:#ED93B1}.c-pink .th,.c-pink .t{fill:#F4C0D1}.c-pink .ts{fill:#ED93B1}.c-gray>rect,.c-gray>circle,.c-gray>ellipse,rect.c-gray,circle.c-gray,ellipse.c-gray{fill:#444441;stroke:#B4B2A9}.c-gray .th,.c-gray .t{fill:#D3D1C7}.c-gray .ts{fill:#B4B2A9}.c-blue>rect,.c-blue>circle,.c-blue>ellipse,rect.c-blue,circle.c-blue,ellipse.c-blue{fill:#0C447C;stroke:#85B7EB}.c-blue .th,.c-blue .t{fill:#B5D4F4}.c-blue .ts{fill:#85B7EB}.c-green>rect,.c-green>circle,.c-green>ellipse,rect.c-green,circle.c-green,ellipse.c-green{fill:#27500A;stroke:#97C459}.c-green .th,.c-green .t{fill:#C0DD97}.c-green .ts{fill:#97C459}.c-amber>rect,.c-amber>circle,.c-amber>ellipse,rect.c-amber,circle.c-amber,ellipse.c-amber{fill:#633806;stroke:#EF9F27}.c-amber .th,.c-amber .t{fill:#FAC775}.c-amber .ts{fill:#EF9F27}.c-red>rect,.c-red>circle,.c-red>ellipse,rect.c-red,circle.c-red,ellipse.c-red{fill:#791F1F;stroke:#F09595}.c-red .th,.c-red .t{fill:#F7C1C1}.c-red .ts{fill:#F09595}}
+:root[data-mode=light] .c-purple>rect,:root[data-mode=light] .c-purple>circle,:root[data-mode=light] .c-purple>ellipse,:root[data-mode=light] rect.c-purple,:root[data-mode=light] circle.c-purple,:root[data-mode=light] ellipse.c-purple{fill:#EEEDFE;stroke:#534AB7}:root[data-mode=light] .c-purple .th,:root[data-mode=light] .c-purple .t{fill:#3C3489}:root[data-mode=light] .c-purple .ts{fill:#534AB7}:root[data-mode=light] .c-teal>rect,:root[data-mode=light] .c-teal>circle,:root[data-mode=light] .c-teal>ellipse,:root[data-mode=light] rect.c-teal,:root[data-mode=light] circle.c-teal,:root[data-mode=light] ellipse.c-teal{fill:#E1F5EE;stroke:#0F6E56}:root[data-mode=light] .c-teal .th,:root[data-mode=light] .c-teal .t{fill:#085041}:root[data-mode=light] .c-teal .ts{fill:#0F6E56}:root[data-mode=light] .c-coral>rect,:root[data-mode=light] .c-coral>circle,:root[data-mode=light] .c-coral>ellipse,:root[data-mode=light] rect.c-coral,:root[data-mode=light] circle.c-coral,:root[data-mode=light] ellipse.c-coral{fill:#FAECE7;stroke:#993C1D}:root[data-mode=light] .c-coral .th,:root[data-mode=light] .c-coral .t{fill:#712B13}:root[data-mode=light] .c-coral .ts{fill:#993C1D}:root[data-mode=light] .c-pink>rect,:root[data-mode=light] .c-pink>circle,:root[data-mode=light] .c-pink>ellipse,:root[data-mode=light] rect.c-pink,:root[data-mode=light] circle.c-pink,:root[data-mode=light] ellipse.c-pink{fill:#FBEAF0;stroke:#993556}:root[data-mode=light] .c-pink .th,:root[data-mode=light] .c-pink .t{fill:#72243E}:root[data-mode=light] .c-pink .ts{fill:#993556}:root[data-mode=light] .c-gray>rect,:root[data-mode=light] .c-gray>circle,:root[data-mode=light] .c-gray>ellipse,:root[data-mode=light] rect.c-gray,:root[data-mode=light] circle.c-gray,:root[data-mode=light] ellipse.c-gray{fill:#F1EFE8;stroke:#5F5E5A}:root[data-mode=light] .c-gray .th,:root[data-mode=light] .c-gray .t{fill:#444441}:root[data-mode=light] .c-gray .ts{fill:#5F5E5A}:root[data-mode=light] .c-blue>rect,:root[data-mode=light] .c-blue>circle,:root[data-mode=light] .c-blue>ellipse,:root[data-mode=light] rect.c-blue,:root[data-mode=light] circle.c-blue,:root[data-mode=light] ellipse.c-blue{fill:#E6F1FB;stroke:#185FA5}:root[data-mode=light] .c-blue .th,:root[data-mode=light] .c-blue .t{fill:#0C447C}:root[data-mode=light] .c-blue .ts{fill:#185FA5}:root[data-mode=light] .c-green>rect,:root[data-mode=light] .c-green>circle,:root[data-mode=light] .c-green>ellipse,:root[data-mode=light] rect.c-green,:root[data-mode=light] circle.c-green,:root[data-mode=light] ellipse.c-green{fill:#EAF3DE;stroke:#3B6D11}:root[data-mode=light] .c-green .th,:root[data-mode=light] .c-green .t{fill:#27500A}:root[data-mode=light] .c-green .ts{fill:#3B6D11}:root[data-mode=light] .c-amber>rect,:root[data-mode=light] .c-amber>circle,:root[data-mode=light] .c-amber>ellipse,:root[data-mode=light] rect.c-amber,:root[data-mode=light] circle.c-amber,:root[data-mode=light] ellipse.c-amber{fill:#FAEEDA;stroke:#854F0B}:root[data-mode=light] .c-amber .th,:root[data-mode=light] .c-amber .t{fill:#633806}:root[data-mode=light] .c-amber .ts{fill:#854F0B}:root[data-mode=light] .c-red>rect,:root[data-mode=light] .c-red>circle,:root[data-mode=light] .c-red>ellipse,:root[data-mode=light] rect.c-red,:root[data-mode=light] circle.c-red,:root[data-mode=light] ellipse.c-red{fill:#FCEBEB;stroke:#A32D2D}:root[data-mode=light] .c-red .th,:root[data-mode=light] .c-red .t{fill:#791F1F}:root[data-mode=light] .c-red .ts{fill:#A32D2D}
+:root[data-mode=dark] .c-purple>rect,:root[data-mode=dark] .c-purple>circle,:root[data-mode=dark] .c-purple>ellipse,:root[data-mode=dark] rect.c-purple,:root[data-mode=dark] circle.c-purple,:root[data-mode=dark] ellipse.c-purple{fill:#3C3489;stroke:#AFA9EC}:root[data-mode=dark] .c-purple .th,:root[data-mode=dark] .c-purple .t{fill:#CECBF6}:root[data-mode=dark] .c-purple .ts{fill:#AFA9EC}:root[data-mode=dark] .c-teal>rect,:root[data-mode=dark] .c-teal>circle,:root[data-mode=dark] .c-teal>ellipse,:root[data-mode=dark] rect.c-teal,:root[data-mode=dark] circle.c-teal,:root[data-mode=dark] ellipse.c-teal{fill:#085041;stroke:#5DCAA5}:root[data-mode=dark] .c-teal .th,:root[data-mode=dark] .c-teal .t{fill:#9FE1CB}:root[data-mode=dark] .c-teal .ts{fill:#5DCAA5}:root[data-mode=dark] .c-coral>rect,:root[data-mode=dark] .c-coral>circle,:root[data-mode=dark] .c-coral>ellipse,:root[data-mode=dark] rect.c-coral,:root[data-mode=dark] circle.c-coral,:root[data-mode=dark] ellipse.c-coral{fill:#712B13;stroke:#F0997B}:root[data-mode=dark] .c-coral .th,:root[data-mode=dark] .c-coral .t{fill:#F5C4B3}:root[data-mode=dark] .c-coral .ts{fill:#F0997B}:root[data-mode=dark] .c-pink>rect,:root[data-mode=dark] .c-pink>circle,:root[data-mode=dark] .c-pink>ellipse,:root[data-mode=dark] rect.c-pink,:root[data-mode=dark] circle.c-pink,:root[data-mode=dark] ellipse.c-pink{fill:#72243E;stroke:#ED93B1}:root[data-mode=dark] .c-pink .th,:root[data-mode=dark] .c-pink .t{fill:#F4C0D1}:root[data-mode=dark] .c-pink .ts{fill:#ED93B1}:root[data-mode=dark] .c-gray>rect,:root[data-mode=dark] .c-gray>circle,:root[data-mode=dark] .c-gray>ellipse,:root[data-mode=dark] rect.c-gray,:root[data-mode=dark] circle.c-gray,:root[data-mode=dark] ellipse.c-gray{fill:#444441;stroke:#B4B2A9}:root[data-mode=dark] .c-gray .th,:root[data-mode=dark] .c-gray .t{fill:#D3D1C7}:root[data-mode=dark] .c-gray .ts{fill:#B4B2A9}:root[data-mode=dark] .c-blue>rect,:root[data-mode=dark] .c-blue>circle,:root[data-mode=dark] .c-blue>ellipse,:root[data-mode=dark] rect.c-blue,:root[data-mode=dark] circle.c-blue,:root[data-mode=dark] ellipse.c-blue{fill:#0C447C;stroke:#85B7EB}:root[data-mode=dark] .c-blue .th,:root[data-mode=dark] .c-blue .t{fill:#B5D4F4}:root[data-mode=dark] .c-blue .ts{fill:#85B7EB}:root[data-mode=dark] .c-green>rect,:root[data-mode=dark] .c-green>circle,:root[data-mode=dark] .c-green>ellipse,:root[data-mode=dark] rect.c-green,:root[data-mode=dark] circle.c-green,:root[data-mode=dark] ellipse.c-green{fill:#27500A;stroke:#97C459}:root[data-mode=dark] .c-green .th,:root[data-mode=dark] .c-green .t{fill:#C0DD97}:root[data-mode=dark] .c-green .ts{fill:#97C459}:root[data-mode=dark] .c-amber>rect,:root[data-mode=dark] .c-amber>circle,:root[data-mode=dark] .c-amber>ellipse,:root[data-mode=dark] rect.c-amber,:root[data-mode=dark] circle.c-amber,:root[data-mode=dark] ellipse.c-amber{fill:#633806;stroke:#EF9F27}:root[data-mode=dark] .c-amber .th,:root[data-mode=dark] .c-amber .t{fill:#FAC775}:root[data-mode=dark] .c-amber .ts{fill:#EF9F27}:root[data-mode=dark] .c-red>rect,:root[data-mode=dark] .c-red>circle,:root[data-mode=dark] .c-red>ellipse,:root[data-mode=dark] rect.c-red,:root[data-mode=dark] circle.c-red,:root[data-mode=dark] ellipse.c-red{fill:#791F1F;stroke:#F09595}:root[data-mode=dark] .c-red .th,:root[data-mode=dark] .c-red .t{fill:#F7C1C1}:root[data-mode=dark] .c-red .ts{fill:#F09595}
+</style>
+<script>
+function roostPost(message) { parent.postMessage(message, '*'); }
+addEventListener('message', function (event) {
+  if (event.source === parent && event.data && event.data.roostMode)
+    document.documentElement.dataset.mode = event.data.roostMode === 'dark' ? 'dark' : 'light';
+});
+function sendPrompt(text) { roostPost({roost: 'prompt', kind: 'prompt', text: String(text)}); }
+function openLink(url) { roostPost({roost: 'link', kind: 'link', text: String(url)}); }
+function roostFit() { roostPost({roost: 'height', height: Math.ceil(document.body.getBoundingClientRect().height)}); }
+addEventListener('load', function () {
+  roostPost({roost: 'ready'}); roostFit(); new ResizeObserver(roostFit).observe(document.body); });
+document.addEventListener('click', function (e) {
+  var a = e.target.closest && e.target.closest('a[href]');
+  if (a) { e.preventDefault(); openLink(a.href); } });
+</script>
+"""
+
+
+# The page Emacs loads: none of the agent's code runs in it. That runs in a
+# frame with no origin of its own, which can run scripts and nothing more:
+# it cannot open a window, send a form, or take the page or itself
+# anywhere, which a policy alone lets a script do. The page passes the frame
+# its mode, makes it as tall as what it holds, and keeps what it asks to
+# send for Emacs to take.
+WIDGET_FRAME = """<!doctype html><meta charset=utf-8>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob:;
+ style-src 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com;
+ font-src https://fonts.gstatic.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com;
+ script-src 'unsafe-inline' https://cdnjs.cloudflare.com https://esm.sh https://cdn.jsdelivr.net https://unpkg.com">
+<style>html, body { margin:0; } iframe { display:block; width:100%%; height:60px; border:0; }</style>
+<iframe id="widget" sandbox="allow-scripts" srcdoc="%s"></iframe>
+<script>
+window.roostOutbox = [];
+var roostFrame = document.getElementById('widget');
+function roostMode(mode) {
+  document.documentElement.dataset.mode = mode;
+  document.documentElement.style.colorScheme = mode;
+  roostFrame.contentWindow.postMessage({roostMode: mode}, '*');
+}
+addEventListener('message', function (event) {
+  var data = event.data || {};
+  if (event.source !== roostFrame.contentWindow) return;
+  if (data.roost === 'height') roostFrame.style.height = Math.max(40, Math.min(20000, data.height | 0)) + 'px';
+  else if (data.roost === 'ready' && document.documentElement.dataset.mode) roostMode(document.documentElement.dataset.mode);
+  else if ((data.roost === 'prompt' || data.roost === 'link') && window.roostOutbox.length < 20)
+    window.roostOutbox.push({kind: data.roost, text: String(data.text).slice(0, 4000)});
+});
+</script>
+"""
+
+
+def widget_page(code):
+    """The whole page for CODE, an SVG element or an HTML fragment."""
+    return WIDGET_FRAME % html.escape(WIDGET_HEAD + code, quote=True)
+
+
 def image_kind(data):
     """The kind of image DATA, a file's bytes, starts as, or None."""
     if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
@@ -4947,6 +5120,13 @@ def show_image(store, task_id, path):
         raise refused
     # Its name is read in Emacs, where what doesn't show would mislead.
     name = "".join("?" if hidden_character(c) or c in "\n\t" else c for c in file.name)[:200]
+    keep_shown(store, task_id, data, kind, name)
+    return "Shown. Roost shows %s beside this terminal, or when the user next opens this task." % name
+
+
+def keep_shown(store, task_id, data, kind, name):
+    """Keep DATA, of KIND and called NAME, as the one thing TASK_ID shows,
+    in place of what it showed before, and say so in its record."""
     ident = uuid.uuid4().hex[:8]
     folder = store.shown(task_id)
     kept = folder / ("%s.%s" % (ident, kind))
@@ -4975,6 +5155,24 @@ def show_image(store, task_id, path):
                 if other != kept:
                     with contextlib.suppress(OSError):
                         other.unlink()
+
+
+def show_widget(store, task_id, title, code):
+    """Show you the page CODE, an SVG element or an HTML fragment the agent
+    of TASK_ID wrote, under TITLE: kept whole, with what it needs of its
+    host around it (`widget_page`), as the one thing the task shows.
+    Emacs draws that page in a web view. The agent's code runs in a frame
+    of it that reaches nothing but a few hosts of libraries; what it asks
+    to send is yours to send."""
+    code = text(code) or ""
+    if not code.strip():
+        raise RoostError("Give widget_code: one SVG element, or an HTML fragment")
+    data = widget_page(code).encode("utf-8", "replace")
+    if len(data) > PAGE_LIMIT:
+        raise RoostError("That is more than Roost shows: at most %d KB" % (PAGE_LIMIT // 1024))
+    name = "".join("?" if hidden_character(c) or c in "\n\t" else c
+                   for c in (text(title) or "").strip())[:200] or "a page"
+    keep_shown(store, task_id, data, "html", name)
     return "Shown. Roost shows %s beside this terminal, or when the user next opens this task." % name
 
 
@@ -4983,7 +5181,8 @@ def shown_image(task):
     helper wrote it: {"id", "name", "kind", "at"}, or None."""
     shown = task.get("shown")
     if (isinstance(shown, dict) and all(text(shown.get(key)) for key in ("id", "name", "kind", "at"))
-            and re.fullmatch(r"[a-f0-9]{8}", shown["id"]) and shown["kind"] in ("png", "jpeg", "gif", "webp")):
+            and re.fullmatch(r"[a-f0-9]{8}", shown["id"])
+            and shown["kind"] in ("png", "jpeg", "gif", "webp", "html")):
         return shown
     return None
 
