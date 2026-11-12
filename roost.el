@@ -1576,6 +1576,8 @@ notifies of itself."
 Its bytes, as its host sent them.")
 (defvar-local roost--shown-page-drawn nil
   "The page this buffer's web view shows, as `roost--shown-page' held it.")
+(defvar-local roost--shown-page-waiting nil
+  "Whether a draft for what this buffer's page asked waits on a question.")
 (defvar-local roost--shown-page-asked nil
   "What this buffer's page had a draft opened for, newest first.
 An alist of each prompt and when, as `float-time' gives it.")
@@ -1588,6 +1590,7 @@ An alist of each prompt and when, as `float-time' gives it.")
 (put 'roost--shown-page-timer 'permanent-local t)
 (put 'roost--shown-page-drawn 'permanent-local t)
 (put 'roost--shown-page-asked 'permanent-local t)
+(put 'roost--shown-page-waiting 'permanent-local t)
 
 (defun roost--shown-buffer (key)
   "The buffer of the image the task with KEY showed, or nil.
@@ -11114,6 +11117,7 @@ A page its view shows already is left as you have it."
         (set-buffer-modified-p nil)
         (setq roost--shown-page-drawn page
               roost--shown-page-asked nil
+              roost--shown-page-waiting nil
               roost--shown-page-timer
               (run-at-time 1 1 #'roost--ask-page (current-buffer)))))
     ;; Its window is its own, loosely: a draft to the task, which a click
@@ -11182,23 +11186,37 @@ dark.  What the page asks to send becomes a draft to its task."
        (dolist (item asked)
          (let ((text (alist-get 'text item)))
            (when (and task (stringp text) (not (string-blank-p text)))
-             (cond ((not (equal (alist-get 'kind item) "prompt"))
-                    (message "%s's page links to %s" (roost--field task 'name) text))
-                   ;; One draft in a while, and the same words not again for
-                   ;; longer: a page that asks again and again, as a script
-                   ;; can, would keep taking you to the draft.
-                   ((let* ((asked (buffer-local-value 'roost--shown-page-asked buffer))
-                           (now (float-time))
-                           (same (cdr (assoc text asked))))
-                      (or (and asked (< (- now (cdar asked)) roost--page-draft-pause))
-                          (and same (< (- now same) roost--page-draft-repeat)))))
-                   (t
-                    (with-current-buffer buffer
-                      (setq roost--shown-page-asked
-                            (cons (cons text (float-time))
-                                  (seq-take (assoc-delete-all text roost--shown-page-asked) 30))))
-                    (roost--when-out-of-minibuffer
-                     (lambda () (roost--send-draft (roost--as-listed task) text))))))))))))
+             (if (equal (alist-get 'kind item) "prompt")
+                 (roost--page-asks buffer text)
+               (message "%s's page links to %s" (roost--field task 'name) text)))))))))
+
+(defun roost--page-asks (buffer text)
+  "Open a draft with TEXT to the task whose page BUFFER shows, which asked.
+One draft in a while, and the same words not again for longer: a page
+that asks again and again, as a script can, would keep taking you to the
+draft.  While you answer a question the draft waits, and what else the
+page asks meanwhile is dropped; whether it may open, and for which task,
+is decided once the question is done, as the task may have gone by then."
+  (unless (buffer-local-value 'roost--shown-page-waiting buffer)
+    (with-current-buffer buffer
+      (setq roost--shown-page-waiting t))
+    (roost--when-out-of-minibuffer
+     (lambda ()
+       (when (buffer-live-p buffer)
+         (let* ((task (gethash (buffer-local-value 'roost--shown-task buffer) roost--tasks))
+                (asked (buffer-local-value 'roost--shown-page-asked buffer))
+                (now (float-time))
+                (same (cdr (assoc text asked))))
+           (with-current-buffer buffer
+             (setq roost--shown-page-waiting nil))
+           (when (and task
+                      (not (and asked (< (- now (cdar asked)) roost--page-draft-pause)))
+                      (not (and same (< (- now same) roost--page-draft-repeat))))
+             (with-current-buffer buffer
+               (setq roost--shown-page-asked
+                     (cons (cons text now)
+                           (seq-take (assoc-delete-all text roost--shown-page-asked) 30))))
+             (roost--send-draft task text))))))))
 
 (defun roost--show-waiting (task)
   "Show the image TASK's agent showed while its terminal was off screen.

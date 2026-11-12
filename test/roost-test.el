@@ -15403,6 +15403,39 @@ it of the same ID's, or nil for the first."
              (let ((last-input-event (list 'xwidget-event 'javascript-callback 'view #'ignore reply)))
                (roost--page-event 'view 'javascript-callback)))
            (should (= (length drafts) 2))
+           ;; While you answer a question, one draft waits and what else
+           ;; the page asks is dropped; when the question is done the pause
+           ;; still holds, and a task that went meanwhile gets no draft.
+           (let (held)
+             (cl-letf (((symbol-function 'roost--when-out-of-minibuffer)
+                        (lambda (function) (push function held))))
+               (with-current-buffer buffer (setq roost--shown-page-asked nil))
+               (dolist (text '("One" "Two" "Three"))
+                 (roost--page-asks buffer text))
+               (should (= (length held) 1))
+               (funcall (car held))
+               (should (equal (car drafts) '("budget" "One")))
+               (should (= (length drafts) 3))
+               ;; Asked again in the pause, behind another question.
+               (setq held nil)
+               (roost--page-asks buffer "Four")
+               (funcall (car held))
+               (should (= (length drafts) 3))
+               (with-current-buffer buffer (setq roost--shown-page-asked nil))
+               (setq held nil)
+               (roost--page-asks buffer "Five")
+               (let ((task (gethash key roost--tasks)))
+                 (remhash key roost--tasks)
+                 (funcall (car held))
+                 (should (= (length drafts) 3))
+                 (puthash key task roost--tasks))
+               ;; And it can ask again afterwards.
+               (setq held nil)
+               (roost--page-asks buffer "Six")
+               (funcall (car held))
+               (should (equal (car drafts) '("budget" "Six")))
+               (with-current-buffer buffer (setq roost--shown-page-asked nil))))
+           (setq drafts (last drafts 2))
            ;; Nor what a page says once its task has gone.
            (remhash key roost--tasks)
            (let ((last-input-event
