@@ -25,6 +25,12 @@ What each release changes, and what to do when upgrading. Newest first.
   `roost-agent-offers`, as a third tool, `show_image`, which adds about
   220 tokens to each Claude request, and works on a remote host too. Tasks started before the update don't have it: stop and
   resume one to give it the tool.
+- Roost works with the next tmux, which is not yet released. Built from
+  tmux's source today, it names no process for a pane whose program has
+  ended, so Roost said "Task's tmux ownership changed" when you finished,
+  resumed or opened the shell of a task whose agent had exited; and it
+  pasted a form feed in a prompt as the two characters `^L`. Nothing to do
+  on tmux 3.6 or older, where nothing changes.
 
 ## 0.12.0
 

@@ -513,6 +513,56 @@ class Lifecycle(unittest.TestCase):
             time.sleep(.04)
         self.assertEqual(keys.read_bytes(), pasted)
 
+    def test_a_form_feed_is_pasted_as_it_is_by_a_tmux_that_would_rewrite_it(self):
+        """tmux newer than 3.6 pastes a form feed as ^L unless told -S,
+        which older ones refuse before they paste. Asked once and refused
+        for another reason, or unanswered, it may have pasted."""
+        task = self.create()
+        real = roost.tmux
+        for answer, pastes, sent in (
+                (None, [True, False], True),  # This tmux's own answer, whichever it is.
+                (subprocess.CompletedProcess([], 1, "", "command paste-buffer: unknown flag -S"), [True, False], True),
+                (subprocess.CompletedProcess([], 0, "", ""), [True], True),
+                (subprocess.CompletedProcess([], 124, "", "tmux did not answer in 5 seconds"), [True], False),
+                (subprocess.CompletedProcess([], 1, "", "target pane has exited"), [True], False)):
+            asked = []
+
+            def tmux(socket, *args, **options):
+                if args[0] != "paste-buffer":
+                    return real(socket, *args, **options)
+                asked.append("-S" in args)
+                if "-S" in args and answer:
+                    return answer
+                return real(socket, *args, **options)
+
+            with self.subTest(answer=answer and answer.stderr), patch.object(roost, "tmux", tmux):
+                reply = self.request("send", id=task["id"], text="one\ftwo", force=True)
+                self.assertEqual(reply["ok"], sent, reply)
+                if answer:
+                    self.assertEqual(asked, pastes)
+                else:
+                    self.assertIn(asked, ([True], [True, False]))
+                with patch.object(roost, "tmux", real):
+                    self.assertNotIn("roost-", real(self.socket, "list-buffers", check=False).stdout)
+        asked = []
+        with patch.object(roost, "tmux", lambda socket, *args, **options: (
+                asked.append(args) if args[0] == "paste-buffer" else None, real(socket, *args, **options))[1]):
+            self.assertTrue(self.request("send", id=task["id"], text="no form feed", force=True)["ok"])
+        self.assertEqual(["-S" in args for args in asked], [False])
+
+    def test_a_dead_pane_that_names_no_process_is_still_the_tasks(self):
+        """tmux newer than 3.6 names no process for a pane whose program
+        has ended, where older ones go on naming the one that ran."""
+        task = dict(id="task", paneId="%1", panePid=42)
+        for pane, owned in ((dict(task="task", dead=True, pid=None), True),
+                            (dict(task="task", dead=True, pid=42), True),
+                            (dict(task="task", dead=False, pid=42), True),
+                            (dict(task="task", dead=True, pid=7), False),
+                            (dict(task="task", dead=False, pid=None), False),
+                            (dict(task="other", dead=True, pid=None), False)):
+            with self.subTest(pane=pane):
+                self.assertIs(roost.owned_pane(task, {"%1": pane}), pane if owned else None)
+
     def test_attachments_keep_their_names_and_go_with_the_task(self):
         task = self.create()
         encode = lambda data: base64.b64encode(data).decode()

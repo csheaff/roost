@@ -576,7 +576,10 @@ def owned_pane(task, inventory):
     # The tag goes with the pane wherever you move it, and stays on what tmux
     # starts in it after the runner, as `respawn-pane` does, which is no agent.
     # A task from before Roost noted the runner's process is taken as it is.
-    if pane and pane["task"] == task["id"] and task.get("panePid", pane["pid"]) == pane["pid"]:
+    # So is a dead pane that names no process, as tmux newer than 3.6 names
+    # none once a pane's program has ended: nothing runs there to steer.
+    if pane and pane["task"] == task["id"] and (
+            pane["dead"] and pane["pid"] is None or task.get("panePid", pane["pid"]) == pane["pid"]):
         return pane
     return None
 
@@ -4520,7 +4523,16 @@ def send(store, task, text, force=False, send_id=None):
     buffer = "roost-" + uuid.uuid4().hex
     tmux(task["socket"], "load-buffer", "-b", buffer, "-", input=text)
     try:
-        tmux(task["socket"], "paste-buffer", "-p", "-d", "-b", buffer, "-t", task["paneId"])
+        paste = ["-p", "-d", "-b", buffer, "-t", task["paneId"]]
+        # tmux newer than 3.6 pastes a form feed as the two characters ^L
+        # unless told -S, a flag older ones don't know and refuse before
+        # they paste. Refused for another reason, or unanswered, it may
+        # have pasted, so it is not pasted again.
+        raw = tmux(task["socket"], "paste-buffer", "-S", *paste, check=False) if "\f" in text else None
+        if raw and raw.returncode and "unknown flag" not in raw.stderr:
+            raise RoostError(raw.stderr.strip() or "tmux could not paste the prompt")
+        if not raw or raw.returncode:
+            tmux(task["socket"], "paste-buffer", *paste)
         tmux(task["socket"], "send-keys", "-t", task["paneId"], "Enter")
     finally:
         tmux(task["socket"], "delete-buffer", "-b", buffer, check=False)
