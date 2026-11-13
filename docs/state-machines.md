@@ -1147,11 +1147,11 @@ Which process is this task's agent, and whether Roost may touch it.
 | --- | --- | --- |
 | No run | Stopped, or made and never spawned | `paneId` None |
 | Owned, live | The run's pane | `owned_pane`: tag and `panePid` match, not dead |
-| Owned, dead | The runner ended; the pane holds its last output | `owned_pane`, `dead` |
+| Owned, dead | The runner ended; the pane holds its last output | `owned_pane`, `dead`; tmux newer than 3.6 names no process for a dead pane, so there the tag alone tells |
 | Gone | No such pane | not in the inventory |
 | Reused | Another pane has the ID, after tmux restarted | ID there, tag differs |
 | Moved | Owned, in another window or session | `windowId`, `windowIndex` and `session` follow it at the next `list`, `inspect` or `shell` |
-| Respawned | Another process in the run's pane | ID and tag match, `panePid` doesn't: not owned |
+| Respawned | Another process in the run's pane | ID and tag match, `panePid` doesn't: not owned. Once that process ends, tmux newer than 3.6 names none, and the pane reads Owned, dead |
 | Unknown | tmux didn't answer | `pane_inventory` None; `live` None |
 
 Invariants:
@@ -1166,7 +1166,10 @@ Invariants:
   another run.
 - I4. Owned means the agent's runner: the tag stays on whatever tmux starts in the
   pane, so `spawn` notes the process tmux started, and only that is owned. A task
-  whose run began before `panePid` is taken as it is, until it resumes.
+  whose run began before `panePid` is taken as it is, until it resumes. So is a
+  dead pane for which tmux names no process, as tmux newer than 3.6 names none
+  once a pane's program has ended: nothing runs there to steer, and nothing
+  tells the runner's dead pane from that of a program you respawned in it.
 - I5. Not owned means the agent isn't in that pane: the tag goes where the pane goes.
 - I6. What Roost closes is the agent's pane and the task's shell, where tmux has
   them as it closes them, each with its window if nothing else is in it
@@ -1183,6 +1186,7 @@ Invariants:
 | Owned, live | `kill-pane` | | Gone | shell pane, if any, stays in its window | |
 | Owned | `break-pane`, `join-pane`, `move-pane` | | Moved | still owned; a shell it left stays, and `shell` opens one beside it | `list_tasks`, `inspect`, `shell` |
 | Owned | `respawn-pane` | | Respawned | not `live`: `send` refused; a status not in `ENDED` reads `crashed` | `owned_pane` |
+| Respawned | its process ends | tmux newer than 3.6 | Owned, dead | owned by its tag alone: `stop` and `resume` close it, and `inspect` shows its last output | `owned_pane` |
 | any | a window a failed request made | `runId` differs | closes | `remain-on-exit` off | `runner` |
 
 What an earlier run can still do. Its hooks and reports return at the `runId`
