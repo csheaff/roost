@@ -902,6 +902,16 @@ dashboard the command starts from."
      :fields ((ahead . 0))
      :start ,(lambda () (roost-retire (roost-sweep-late--mine)))
      :action "retire")
+    ;; Its agent reports work in the background: `x' stops it, then
+    ;; retires once that reply comes.
+    (retire-once-stopped
+     :fields ((status . "background") (ahead . 0))
+     :start ,(lambda () (roost-retire (roost-sweep-late--mine)))
+     :first ("stop") :action "retire")
+    (retire-background-stop-refused
+     :fields ((status . "background") (ahead . 0))
+     :start ,(lambda () (roost-retire (roost-sweep-late--mine)))
+     :action "stop" :refusals ((,roost-sweep-late--retired)))
     (retire-teardown-failed
      :fields ((ahead . 0))
      :start ,(lambda () (roost-retire (roost-sweep-late--mine)))

@@ -4,6 +4,16 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- `x` finishes with a task whose agent reports work left in the
+  background: it asks, saying it stops the agent, and stops it before
+  retiring. Its turn has ended, and that work lives in the worktree `x`
+  removes, so there was nothing to wait for. Claude counts a teammate, a
+  named agent it can send to, as background work even once it idles, for
+  as long as its session lives, which made `x` refuse such a task for
+  good; it said "or wait", which never ended. The task panel now names
+  `x` there too, once its work is merged. `K` still stops an agent in the
+  middle of a turn, which `x` keeps refusing. Nothing to do when
+  upgrading.
 - An agent can show you a page it writes, once you turn it on with
   `roost-agent-pages`: ask a Claude task for a diagram of what it changed,
   a mock-up or something to try, and it opens beside the task's terminal as

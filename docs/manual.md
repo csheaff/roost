@@ -469,7 +469,7 @@ an error, which keeps its colour once you've seen it.
 | `ci failed` | Once you've seen its reply | A check of its pull request failed |
 | `comments` | Once you've seen its reply | A review thread on its pull request is unresolved, Copilot's too |
 | `running` | No | The agent works on a prompt |
-| `background` | No | Claude's background work, or Pi's queued messages, remain |
+| `background` | No | Claude's background work, or Pi's queued messages, remain. Claude counts a teammate, a named agent it can send to, even once it idles, so a task reads this after every turn once its session has started one; `x` offers to stop it and finish with the task |
 | `stopped` | No | Stopped with `K`; `s` resumes its conversation |
 | `merged` | No | Its work is merged, on GitHub or GitLab or into its branch; `x` retires it |
 | `offline` | No | Its host doesn't answer; the row is as it was last known |
@@ -654,7 +654,7 @@ counted once you stop and resume it (`K`, then `s`).
 | `u` | `roost-update` | Bring the task up to date: merge the branch it merges into, such as `main`, into it; for uncommitted changes or conflicts, offers to have its agent do it |
 | `P` | `roost-pr` | Draft a pull request for the task; if it has one, push new commits and open it (`C-u`: open only); after one closed, or merged with commits since, draft another |
 | `m` | `roost-merge-retire` | Merge committed work as one commit, then retire the task (a merge commit with `roost-merge-style` set to `merge`) |
-| `x` | `roost-retire` | Finish with a task: retire it when its work is merged or it has none, otherwise offer to discard it (`roost-discard`), first saying what would be lost; to lose commits or files you type its name |
+| `x` | `roost-retire` | Finish with a task: retire it when its work is merged or it has none, otherwise offer to discard it (`roost-discard`), first saying what would be lost; to lose commits or files you type its name. An agent with work left in the background is stopped first, once you say so; one in the middle of a turn is refused, and `K` stops it |
 | `X` | `roost-forget` | Drop the task from Roost, leaving its worktree and branch as they are |
 | `K` | `roost-stop` | Stop the agent's window; keep all work |
 | `s` | `roost-resume` | Restart a stopped, exited or crashed task in its recorded conversation; when other agents crashed on its host too, as after it restarted, ask whether to resume those as well. Refuses while the agent runs in the task's shell or another window of its tmux session, which Roost didn't start |

@@ -2151,6 +2151,19 @@ def retire(qa, repo):
     qa.wait("the task to go", lambda s: qa.task(s, dirty) is None, timeout=30)
     qa.step("Discarded", expect=[
         ("its branch is gone", lambda s: not qa.git(repo, "branch", "--list", "roost/" + dirty + "*"))])
+    # Claude counts a teammate, a named agent it can send to, as background
+    # work once it idles too, so waiting needn't ever end.
+    named = new_task(qa, "teammate")
+    qa.status(named, "background")
+    qa.keys("C-c r x")
+    qa.wait("the question", lambda s: s["prompt"])
+    qa.step("Background work: it offers to stop the agent", expect=[
+        ("the question says it stops it", lambda s: "stopping its agent" in (s["prompt"] or ""))])
+    qa.type("y")
+    qa.wait("the task to go", lambda s: qa.task(s, named) is None, timeout=30)
+    qa.step("Stopped and retired", expect=[
+        ("the echo area says so", lambda s: "Retired" in (s["echo"] or "")),
+        ("its branch is gone", lambda s: not qa.git(repo, "branch", "--list", "roost/" + named + "*"))])
 
 
 @journey("Discard a task, typing its name")

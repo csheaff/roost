@@ -8600,7 +8600,9 @@ When its work is merged, or it has none, retire it.  When it holds work
 nothing else has, offer to discard it, saying what that loses: `m'
 merges its commits instead, and for work not yet committed, `r' opens
 Magit to commit it.  With its worktree on another branch, which its host
-won't retire, offer to discard it, which keeps that branch."
+won't retire, offer to discard it, which keeps that branch.  An agent
+that reports work left in the background is stopped first, once you say
+so: its work runs in the worktree this removes."
   (interactive)
   (setq task (roost--choose task))
   (let* ((name (roost--field task 'name))
@@ -8609,6 +8611,12 @@ won't retire, offer to discard it, which keeps that branch."
          ;; Its offers, read once: the question names them, and its host is
          ;; told which, as its agent may offer another while you read.
          (named (roost--offers task))
+         ;; A turn of its own has ended, so nothing is interrupted
+         ;; mid-thought, and what it reports -- a command of its own, a
+         ;; wakeup, or a teammate Claude counts as background work even
+         ;; once it idles -- lives in the worktree retiring removes.
+         ;; Waiting it out needn't ever end, so offer to stop it instead.
+         (background (equal (roost--field task 'status) "background"))
          (offer (lambda (&optional branch)
                   (when (y-or-n-p
                          (if branch
@@ -8628,7 +8636,7 @@ won't retire, offer to discard it, which keeps that branch."
                                         "\\<roost-task-info-mode-map>\\[roost-review] commits it in Magit"
                                       "\\<roost-task-info-mode-map>\\[roost-merge-retire] merges it")))))
                     (roost-discard task))))
-         (retire (lambda ()
+         (retire (lambda (task)
                    (roost--act task "retire" (list (roost--offers-named named))
                                (lambda (retired)
                                  (roost--retired-workspace retired)
@@ -8647,16 +8655,22 @@ won't retire, offer to discard it, which keeps that branch."
                                         (funcall offer (if (equal branch "a detached HEAD") "HEAD" branch))))))
                                   (t (roost--finish-refused task err))))))))
     (cond
-     ((member (roost--field task 'status) '("starting" "running" "permission" "background"))
+     ((member (roost--field task 'status) '("starting" "running" "permission"))
       (user-error "%s's agent is at work; stop it (K) first, or wait" name))
+     ;; The discard these two offer says itself that it stops the agent,
+     ;; and its host stops one however the agent reports itself.
      ((roost--other-branch task)
       (funcall offer (roost--other-branch task)))
      ((roost--unmerged-work-p task)
       (funcall offer))
      ((y-or-n-p (concat (roost--offers-sentence named)
-                        (format "Retire %s, removing its worktree and branch (nothing in them would be lost)? "
-                                name)))
-      (funcall retire)))))
+                        (format "Retire %s, %sremoving its worktree and branch (nothing in them would be lost)? "
+                                name (if background "stopping its agent and " ""))))
+      (if background
+          ;; The host retires only a task whose agent has stopped, as
+          ;; `roost-forget' finds too; the reply carries it stopped.
+          (roost--act task "stop" nil retire)
+        (funcall retire task))))))
 
 ;;;###autoload
 (defun roost-merge-retire (&optional task)
@@ -10400,8 +10414,11 @@ Unknown Git statistics count as making sense."
         (ahead (roost--field task 'ahead))
         ;; All its work, not a pull request merged before its latest commits.
         (merged (roost--landed task))
-        ;; The host retires and merges only a task whose agent is not at work.
-        (active (member (roost--field task 'status) '("starting" "running" "permission" "background"))))
+        ;; The host retires and merges only a task whose agent is not at
+        ;; work.  `x' offers to stop one that reports background work,
+        ;; whose turn has ended; `m' leaves that to `x'.
+        (active (member (roost--field task 'status) '("starting" "running" "permission" "background")))
+        (mid-turn (member (roost--field task 'status) '("starting" "running" "permission"))))
     (pcase command
       ('roost-shell (and worktree (not (member (roost--field task 'status) '("stopped" "crashed")))))
       ((or 'roost-files 'roost-review 'roost-diff 'roost-mark-looked 'roost-update) worktree)
@@ -10416,7 +10433,7 @@ Unknown Git statistics count as making sense."
                                 (or (not merged) (roost--other-branch task)) (not (eql ahead 0)) (not active)
                                 (not (roost--agent-work-left task))))
       ;; Retires the task, or discards work merged nowhere.
-      ('roost-retire (and (not active) (not (roost--agent-work-left task))))
+      ('roost-retire (and (not mid-turn) (not (roost--agent-work-left task))))
       ('roost-goto-note (and worktree (roost--task-notes task) t))
       ('roost-retarget (not (roost--conversation-p task)))
       ;; A terminal attaches to an agent's window, while there is one.
@@ -10463,6 +10480,15 @@ where RET would pick the agent's default answer, so no key is named."
                         (roost--host-label (roost--field task 'host))))))
      ((not (roost--agent-running-p task))
       (concat (funcall key "RET") " shows its last output; " (funcall key "s") " resumes its conversation"))
+     ;; Its turn has ended, and what it reports in the background need
+     ;; never stop by itself: a teammate Claude counts there goes on
+     ;; being counted while it idles.  So there is something to do.
+     ((and (equal status "background") (eq (roost--landed task) t)
+           (not (roost--field task 'dirty))
+           (not (roost--other-branch task))
+           (not (roost--agent-work-left task)))
+      (concat (if merged "Its pull request is merged; " "Its work is merged; ")
+              (funcall key "x") " stops its background work and retires it"))
      ((member status '("running" "background" "starting")) nil)
      ((equal (roost--status-name task) "interrupted")
       (concat "You stopped its last turn; tell it what to do instead: " (funcall key "e")))
