@@ -103,7 +103,12 @@ def status(state, msg=None, **fields):
         pairs = ["state=" + state, "app=fake"] + ["%s=%s" % pair for pair in fields.items()]
         if msg:
             pairs.append("msg=" + base64.b64encode(msg.encode()).decode())
-        os.write(1, b"\x1b]7501;" + ":".join(pairs).encode() + b"\x1b\\")
+        # Its terminal may be gone, as when its tmux server is: it goes on
+        # to say goodbye, as Claude Code does.
+        try:
+            os.write(1, b"\x1b]7501;" + ":".join(pairs).encode() + b"\x1b\\")
+        except OSError:
+            pass
 
 
 def hang_up(*_):
