@@ -2,6 +2,7 @@
 """Offline lifecycle fixture. Talks to the actual per-task Claude hook commands,
 and, if its terminal answers the probe, reports its status there as Claude Code does."""
 import base64
+import errno
 import json
 import os
 from pathlib import Path
@@ -107,8 +108,9 @@ def status(state, msg=None, **fields):
         # to say goodbye, as Claude Code does.
         try:
             os.write(1, b"\x1b]7501;" + ":".join(pairs).encode() + b"\x1b\\")
-        except OSError:
-            pass
+        except OSError as exc:
+            if exc.errno != errno.EIO:
+                raise
 
 
 def hang_up(*_):

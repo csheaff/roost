@@ -4525,8 +4525,13 @@ def send(store, task, text, force=False, send_id=None):
     try:
         paste = ["-p", "-d", "-b", buffer, "-t", task["paneId"]]
         # tmux newer than 3.6 pastes a form feed as the two characters ^L
-        # unless told -S, which older ones refuse, leaving the buffer.
-        if "\f" not in text or tmux(task["socket"], "paste-buffer", "-S", *paste, check=False).returncode:
+        # unless told -S, a flag older ones don't know and refuse before
+        # they paste. Refused for another reason, or unanswered, it may
+        # have pasted, so it is not pasted again.
+        raw = tmux(task["socket"], "paste-buffer", "-S", *paste, check=False) if "\f" in text else None
+        if raw and raw.returncode and "unknown flag" not in raw.stderr:
+            raise RoostError(raw.stderr.strip() or "tmux could not paste the prompt")
+        if not raw or raw.returncode:
             tmux(task["socket"], "paste-buffer", *paste)
         tmux(task["socket"], "send-keys", "-t", task["paneId"], "Enter")
     finally:
