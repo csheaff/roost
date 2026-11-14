@@ -32,6 +32,7 @@ def parse(argv):
     whether it asks for a terminal (-t), as TRAMP does."""
     control = terminal = False
     remote_command = ""
+    host = None
     i = 0
     while i < len(argv):
         arg = argv[i]
@@ -39,7 +40,13 @@ def parse(argv):
             i += 1
             break
         if not arg.startswith("-") or arg == "-":
-            break
+            if host is not None:
+                break
+            # ssh reads options after the host too, and TRAMP's direct
+            # async processes put -t there: `ssh HOST -t -t COMMAND'.
+            host = arg
+            i += 1
+            continue
         letters = arg[1:]
         control = control or letters.startswith("O")
         terminal = terminal or (letters.startswith("t") and set(letters) == {"t"})
@@ -52,8 +59,10 @@ def parse(argv):
                     i += 1
                 break
         i += 1
-    host = argv[i] if i < len(argv) else ""
-    return host, " ".join(argv[i + 1:]) or remote_command, control, terminal
+    if host is None:
+        host = argv[i] if i < len(argv) else ""
+        i += 1
+    return host, " ".join(argv[i:]) or remote_command, control, terminal
 
 
 def relay(source, sink, done):

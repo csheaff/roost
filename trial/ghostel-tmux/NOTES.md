@@ -80,6 +80,107 @@ alone.
 - The wrong width did not show in a way that repeats. See the last
   section of `ISSUES.md`, which has the drafts for dakra.
 
+## 2026-11-13: dakra's fixes, on main at dd84ebb
+
+dakra closed four of the six issues with commits. `tmux-control.el` now
+uses what they added, and needs less that is private.
+
+| Issue | Fix | Here |
+|---|---|---|
+| #4 socket | `ghostel-tmux-socket`, and a socket argument to attach | Works by name locally and by path on the remote host |
+| #6 reconnect | Sealed panes are live again on the next attach; `ghostel-tmux-detach` takes KEEP | Same buffer after `kill -9` of the client, no `<2>` copy, matches tmux, typing lands |
+| #8 `C-t o` | The pane is selected in Emacs at once | Keys reach the next pane, 3 of 3 over the delayed link |
+| #9 typing | Keys join the `send-keys` waiting in the queue | 52 keys in 0.5 s, was 16.0 s |
+
+Roost again: 11 local journeys, 53 steps, no problems. The shell journey
+over the delayed link passes 3 runs of 3, where it had failed.
+
+Still open: #5, public functions, and #7, the attach that blocks (14.5 s
+for a first attach over the delayed link, as before). The adapter still
+calls these private names: `ghostel-tmux--attach-pane`,
+`--display-pane-in-window`, `--queue-command`, `--select-pane-buffer`,
+`--tile-windows`, `--get-or-create-pane` (advised), and reads
+`--panes`, `--pane-id`, `--window-id`, `--session-name`,
+`--controller-buffer`, `--controller-process`, `--auto-host-window`.
+One new need: `ghostel-tmux-attach` returns nothing that names its
+controller, so the adapter marks the session it is attaching in a
+variable and claims the controller when its first pane is made.
+
+## 2026-11-13, later: #7, on main at 8d5328a
+
+dakra closed #7. `ghostel-tmux-attach` returns its controller at once,
+and the pane takes the window when tmux reports it. A remote tmux starts
+after `stty raw -echo`, so that TRAMP's direct async processes work, and
+the README says how to turn them on for a host.
+
+ghostel-tmux alone over the delayed link:
+
+| | Before | Now, TRAMP as it comes | Now, direct async on |
+|---|---|---|---|
+| First attach to the host, Emacs blocked | 14.3 s | 13.6 s | 8.4 to 8.7 s |
+| A later attach, Emacs blocked | 6.3 to 6.6 s | 5.2 s | 0.0 to 0.3 s |
+| A later attach, pane shown after | the same | 5.8 s | 0.8 s |
+
+So the fix needs direct async on: without it Emacs still blocks while
+TRAMP sets up a shell for the process. What is left of the first attach
+is TRAMP opening its own connection to the host, once. With direct async
+on, typing lands, a line of 711 keys arrives whole, and the pane matches
+tmux.
+
+### What it asked of Roost
+
+Roost counted on the terminal being in the window once it had connected,
+as tmux-control's is. With the layer changed only to take the controller
+attach returns, the remote journeys failed 5 runs of 6 with TRAMP as it
+comes, and one local step failed. Each cause is marked NEEDS in
+`tmux-control.el`:
+
+1. **A buffer of the session in the window at once.** Roost sends the
+   session commands from the window's buffer right after it connects.
+   And it drops an open whose window shows another session by the time
+   its host replies ("didn't open X, as you went to another window or
+   buffer"): a pane that arrived late read as you having left. The layer
+   now shows a stand-in, "Connecting to S…", puts the pane in its place
+   when tmux lists the session, and withdraws ghostel-tmux's own claim
+   on the window.
+2. **A pane that waits for the minibuffer.** A pane that arrives while a
+   question is open leaves its window again when the question closes, as
+   Emacs puts the windows back (`read-minibuffer-restore-windows`). With
+   a split shown, the frame was left with three windows for two panes.
+   This one is ghostel-tmux's: alone, 4 runs of 4, direct async on or
+   off. Filed as dakra/ghostel-tmux#17. The layer holds the pane until
+   the minibuffer closes.
+3. **An attach that says nothing.** "Attached to S" now comes after the
+   caller has returned, and replaced what Roost had just said in the
+   echo area about why it brought you to a task.
+4. **Tidying up after tmux lists the session.** Only then can the pane
+   buffers an earlier connection left be told from those made live
+   again.
+
+With those, Roost over the delayed link (answer, shell): 3 runs of 3
+with TRAMP as it comes, and 1 of 1 with direct async on (3 of 3 before
+the stand-in). Local: 11 journeys, 53 steps, no problems.
+
+The layer calls these private names now: `ghostel-tmux--attach-pane`,
+`--display-pane-in-window`, `--queue-command`, `--select-pane-buffer`,
+`--tile-windows`, `--tile-leaf`, `--tile-collapse`,
+`--get-or-create-pane` and `--receive-window-rows` (both advised); reads
+`--panes`, `--pane-id`, `--window-id`, `--controller-buffer`,
+`--controller-process`; and clears `--auto-host-window`.
+
+### Found on the way
+
+- `test/qa/fake_ssh.py` took `-t -t` after the host for the command,
+  where ssh reads options there too. That, not ghostel-tmux, is why
+  direct async did not attach on 2026-11-12. Fixed on this branch.
+- TRAMP refuses a direct async command longer than the host's
+  `PIPE_BUF`: 512 bytes on macOS, 4096 on Linux. TRAMP's `cd` and `env`
+  take about 310 and the `stty` wrapper 58. A Roost attach on a macOS
+  host comes to about 466; a long path to tmux goes over ("Command too
+  long").
+- Roost itself would have to turn direct async on for its hosts, or say
+  so in its manual: it is a TRAMP setting per host, off as TRAMP comes.
+
 ## Not tried
 
 - The journeys that press tmux-control's own commands: panes, tabs,

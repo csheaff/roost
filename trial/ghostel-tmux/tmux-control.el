@@ -2,6 +2,7 @@
 
 ;; Version: 99.0
 ;; Package-Requires: ((emacs "30.1") (ghostel "0.64.0") (ghostel-tmux "0.2.0"))
+;; Written against ghostel-tmux main at 8d5328a (2026-11-13).
 
 ;;; Commentary:
 
@@ -57,19 +58,37 @@ NEEDS a hook in ghostel-tmux for a new pane buffer.")
 ;; buffer's session, which a plain Ghostel terminal has none of.
 (derived-mode-add-parents 'ghostel-mode '(tmux-control-mode))
 
+(define-derived-mode tmux-control-connecting-mode special-mode "Connecting"
+  "For the buffer a window shows until its tmux session's pane arrives.")
+(derived-mode-add-parents 'tmux-control-connecting-mode '(tmux-control-mode))
+
 
 ;;; Which session a buffer belongs to
 
 (defvar-local tmux-control--place nil
   "The (HOST SOCKET SESSION) of this controller or pane buffer.
-NEEDS the socket and host of a session from ghostel-tmux, which knows
-neither: it has no socket option, and a host only as the remote part of
+NEEDS a way to ask a pane buffer for its session, socket and host.
+ghostel-tmux keeps the server in the private `ghostel-tmux--server', as
+tmux's arguments, and the host only as the remote part of
 `default-directory'.")
 
+(defvar-local tmux-control--stand-in nil
+  "In a controller, the buffer that stands in for its pane until it arrives.
+`ghostel-tmux-attach' returns before any pane is there.  Roost needs a
+buffer of the session in the window at once, as tmux-control's terminal
+was: it sends the session commands from the window's buffer right after
+it connects, and it drops an open whose window shows another session by
+the time its host replies.")
+
+(defvar-local tmux-control--stands-in-for nil
+  "In a buffer standing in for a pane, the controller it waits for.")
+
 (defun tmux-control--controller ()
-  "The live controller of the current buffer, a pane's or itself, or nil."
+  "The live controller of the current buffer, or nil.
+A pane's, the one a stand-in waits for, or the buffer itself."
   (let ((controller (or ghostel-tmux--controller-buffer
-                        (and ghostel-tmux--controller-process (current-buffer)))))
+                        (and ghostel-tmux--controller-process (current-buffer))
+                        tmux-control--stands-in-for)))
     (and (buffer-live-p controller) controller)))
 
 (defun tmux-control--buffer-place ()
@@ -110,34 +129,24 @@ A pane buffer of ghostel-tmux is one pane for good."
 (defvar tmux-control--socket-paths (make-hash-table :test #'equal)
   "The path of each remote socket, by (HOST . SOCKET).")
 
-(defun tmux-control--socket-args (host socket)
-  "The arguments that have tmux use SOCKET on HOST.
+(defun tmux-control--socket (host socket)
+  "SOCKET on HOST as `ghostel-tmux-attach' takes it: a name, or a path.
 On a remote host, the path `tmux-control-remote-tmux-socket-setup' puts
-it at, asked of the host once.
-NEEDS, for a remote host, a way to run a command before tmux there, or
-to name a socket by its path."
+it at, asked of the host once: Roost's helper runs that setup before
+tmux, and ghostel-tmux has no command to run first."
   (if (not host)
-      (list "-L" socket)
-    (let ((path (or (gethash (cons host socket) tmux-control--socket-paths)
-                    (let ((default-directory (format "/ssh:%s:" host)))
-                      (with-temp-buffer
-                        (and (eql 0 (process-file
-                                     "sh" nil t nil "-c"
-                                     (concat tmux-control-remote-tmux-socket-setup
-                                             " && printf %s \"$TMUX_TMPDIR/tmux-$(id -u)/$1\"")
-                                     "sh" socket))
-                             (puthash (cons host socket) (string-trim (buffer-string))
-                                      tmux-control--socket-paths)))))))
-      (if path (list "-S" path) (list "-L" socket)))))
-
-(define-advice ghostel-tmux--process-file (:around (fn &rest args) tmux-control-socket)
-  "Run tmux on the socket of the current buffer's session.
-NEEDS a socket option: ghostel-tmux asks tmux whether a session still
-exists, and without this would ask the default server."
-  (let ((place (tmux-control--buffer-place)))
-    (apply fn (if place
-                  (append (tmux-control--socket-args (nth 0 place) (nth 1 place)) args)
-                args))))
+      socket
+    (or (gethash (cons host socket) tmux-control--socket-paths)
+        (let ((default-directory (format "/ssh:%s:" host)))
+          (with-temp-buffer
+            (and (eql 0 (process-file
+                         "sh" nil t nil "-c"
+                         (concat tmux-control-remote-tmux-socket-setup
+                                 " && printf %s \"$TMUX_TMPDIR/tmux-$(id -u)/$1\"")
+                         "sh" socket))
+                 (puthash (cons host socket) (string-trim (buffer-string))
+                          tmux-control--socket-paths))))
+        socket)))
 
 (defun tmux-control--find-controller (place)
   "The live controller attached to PLACE, or nil."
@@ -156,36 +165,156 @@ exists, and without this would ask the default server."
                            (buffer-local-value 'ghostel-tmux--controller-buffer buffer)))))
               (buffer-list)))
 
+(defun tmux-control--stand-in-for (place &optional shown)
+  "Return a buffer to stand in for the pane of the session at PLACE.
+SHOWN if it is one for PLACE already, else a new one."
+  (if (and (buffer-live-p shown)
+           (eq (buffer-local-value 'major-mode shown) 'tmux-control-connecting-mode)
+           (equal (buffer-local-value 'tmux-control--place shown) place))
+      shown
+    (let ((buffer (generate-new-buffer (format "*tmux-control: %s*" (nth 2 place)))))
+      (with-current-buffer buffer
+        (tmux-control-connecting-mode)
+        (setq tmux-control--place place)
+        (let ((inhibit-read-only t))
+          (insert (format "Connecting to %s…\n" (nth 2 place)))))
+      (run-hook-with-args 'tmux-control-window-buffer-functions buffer)
+      buffer)))
+
+(defun tmux-control--show-stand-in (stand-in controller window)
+  "Show STAND-IN for CONTROLLER's pane in WINDOW.
+A split of another session that WINDOW is part of collapses into it
+first, as it does when ghostel-tmux shows a pane of another session
+there: left split, it would be tiled again over the stand-in.
+NEEDS a public way to show a buffer of one's own in a pane's window:
+`ghostel-tmux--tile-leaf', `--tile-windows' and `--tile-collapse'."
+  (when controller
+    (with-current-buffer controller
+      (setq tmux-control--stand-in stand-in))
+    (with-current-buffer stand-in
+      (setq tmux-control--stands-in-for controller)))
+  (unless (eq (window-buffer window) stand-in)
+    (when-let* ((tile (ghostel-tmux--tile-leaf window)))
+      (ghostel-tmux--tile-collapse
+       (ghostel-tmux--tile-windows (nth 0 tile) (nth 1 tile)) window))
+    (when (window-live-p window)
+      (with-selected-window window
+        (switch-to-buffer stand-in t)))))
+
+(defun tmux-control--sweep-stand-ins ()
+  "Kill the stand-ins no window shows whose pane has come or never will."
+  (dolist (buffer (buffer-list))
+    (when (and (eq (buffer-local-value 'major-mode buffer) 'tmux-control-connecting-mode)
+               (not (get-buffer-window buffer t)))
+      (let ((controller (buffer-local-value 'tmux-control--stands-in-for buffer)))
+        (unless (and (buffer-live-p controller)
+                     (process-live-p (buffer-local-value 'ghostel-tmux--controller-process
+                                                         controller))
+                     (not (with-current-buffer controller (ghostel-tmux--attach-pane))))
+          (kill-buffer buffer))))))
+
 (defun tmux-control-connect-or-switch (host socket-name session)
   "Show tmux SESSION from HOST and SOCKET-NAME in the selected window.
-A live connection to the session is reused.
-NEEDS, of ghostel-tmux: an attach that takes a socket (here through the
-private `ghostel-tmux--spawn-controller'), one that finds a session
-already attached rather than attaching twice, and one that does not
-wait: `ghostel-tmux--wait-for-pane' blocks Emacs for up to five seconds."
+A live connection to the session is reused.  The panes a connection
+that ended left behind come alive again, as ghostel-tmux does it.
+Returns before the pane is there: until tmux reports it the window shows
+a buffer that stands in for it.
+NEEDS, of ghostel-tmux: an attach that finds a session already attached
+rather than attaching twice."
   (let* ((host (and host (not (string-empty-p host)) host))
          (socket (or socket-name tmux-control-default-socket-name))
          (place (list host socket session))
          (window (selected-window))
-         (snapshots (tmux-control--snapshots place))
+         (shown (window-buffer window))
          (controller (tmux-control--find-controller place)))
-    (if controller
-        (with-current-buffer controller
-          (if-let* ((pane (ghostel-tmux--attach-pane)))
-              (ghostel-tmux--display-pane-in-window pane window)
-            (setq ghostel-tmux--auto-host-window window)))
+    (tmux-control--sweep-stand-ins)
+    (cond
+     ((and controller (with-current-buffer controller (ghostel-tmux--attach-pane)))
+      (with-current-buffer controller
+        (ghostel-tmux--display-pane-in-window (ghostel-tmux--attach-pane) window)))
+     (controller
+      ;; Its first pane is yet to come: this window waits for it too.
+      (tmux-control--show-stand-in
+       (or (let ((stand-in (buffer-local-value 'tmux-control--stand-in controller)))
+             (and (buffer-live-p stand-in) stand-in))
+           (tmux-control--stand-in-for place shown))
+       controller window))
+     ((memq shown (tmux-control--snapshots place))
+      ;; A pane the session's last connection left: ghostel-tmux makes it
+      ;; live again where it is.
       (let ((default-directory (if host (format "/ssh:%s:" host) (expand-file-name "~/"))))
-        (ghostel-tmux--check-spawn)
-        (let ((controller (ghostel-tmux--spawn-controller
-                           session
-                           (append (tmux-control--socket-args host socket)
-                                   (ghostel-tmux--attach-args session)))))
+        (with-current-buffer (ghostel-tmux-attach session (tmux-control--socket host socket))
+          (setq tmux-control--place place))))
+     (t
+      (let ((default-directory (if host (format "/ssh:%s:" host) (expand-file-name "~/")))
+            (path (tmux-control--socket host socket))
+            (stand-in (tmux-control--stand-in-for place shown)))
+        (tmux-control--show-stand-in stand-in nil window)
+        (condition-case err
+            (let ((controller (ghostel-tmux-attach session path)))
+              (with-current-buffer controller
+                (setq tmux-control--place place))
+              (tmux-control--show-stand-in stand-in controller window))
+          ((error quit)
+           (when (and (window-live-p window) (eq (window-buffer window) stand-in)
+                      (buffer-live-p shown) (not (eq shown stand-in)))
+             (set-window-buffer window shown))
+           (kill-buffer stand-in)
+           (signal (car err) (cdr err)))))))))
+
+(defun tmux-control--arrived (controller)
+  "Put CONTROLLER's active pane wherever its stand-in shows.
+Once no minibuffer is open: see the advice below."
+  (when (buffer-live-p controller)
+    (let ((stand-in (buffer-local-value 'tmux-control--stand-in controller)))
+      (when (buffer-live-p stand-in)
+        (if (> (minibuffer-depth) 0)
+            (letrec ((later (lambda ()
+                              (remove-hook 'minibuffer-exit-hook later)
+                              ;; Once the command that asked is done, and
+                              ;; Emacs has put the windows back.
+                              (run-at-time 0 nil #'tmux-control--arrived controller))))
+              (add-hook 'minibuffer-exit-hook later))
           (with-current-buffer controller
-            (setq tmux-control--place place))
-          (ghostel-tmux--wait-for-pane controller 5.0))))
-    ;; What a connection that ended left behind, now that the window
-    ;; shows the session again.
-    (mapc #'kill-buffer snapshots)))
+            (when-let* ((pane (ghostel-tmux--attach-pane)))
+              (dolist (window (get-buffer-window-list stand-in nil t))
+                (ghostel-tmux--display-pane-in-window pane window))
+              (setq tmux-control--stand-in nil)
+              (kill-buffer stand-in))))))))
+
+(define-advice ghostel-tmux--receive-window-rows
+    (:around (fn output &optional seed) tmux-control-arrived)
+  "Have a session of Roost's arrive where its stand-in shows, and quietly.
+With SEED, tmux lists the session's windows for the first time.
+NEEDS a hook for that, and an attach that claims no window: the pane is
+shown here, in place of its stand-in, so ghostel-tmux's own claim,
+`ghostel-tmux--auto-host-window', is withdrawn first.
+NEEDS a pane that waits for the minibuffer to close before it takes a
+window.  Emacs puts the windows back as they were when a question in
+the minibuffer is answered or quit (`read-minibuffer-restore-windows'),
+which takes the pane out of its window again and leaves a split shown
+twice.  `tmux-control--arrived' waits.
+NEEDS an attach that says nothing.  ghostel-tmux says \"Attached to
+SESSION\" here, which is after Roost has said in the echo area why it
+brought you to a task.  `inhibit-message' would not do: a message it
+hides still clears the echo area.
+By the time the rows are read every pane tmux still has is live again:
+the pane buffers an earlier connection left that are not, tmux no longer
+has."
+  (let ((ours (and seed tmux-control--place)))
+    (when (and ours (buffer-live-p tmux-control--stand-in))
+      (setq ghostel-tmux--auto-host-window nil))
+    (prog1 (cl-letf* ((say (symbol-function 'message))
+                      ((symbol-function 'message)
+                       (lambda (format-string &rest args)
+                         (unless (and ours (stringp format-string)
+                                      (string-prefix-p "Ghostel-tmux: Attached to"
+                                                       format-string))
+                           (apply say format-string args)))))
+             (funcall fn output seed))
+      (when ours
+        (tmux-control--arrived (current-buffer))
+        (mapc #'kill-buffer (tmux-control--snapshots ours))))))
 
 (defun tmux-control-connect (&optional host socket-name session)
   "Show tmux SESSION from HOST and SOCKET-NAME, creating it if it is not there.
@@ -198,20 +327,15 @@ Not one of Roost's calls: its tests connect a terminal of your own."
     (tmux-control-connect-or-switch host socket session)))
 
 (defun tmux-control-disconnect ()
-  "Disconnect the current buffer's client, keeping its panes as they were.
-NEEDS nothing private, but ghostel-tmux kills the pane buffers of a
-session it detached unless `ghostel-tmux-keep-detached-panes' says
-otherwise, where tmux-control keeps the terminal for a reconnect."
+  "Disconnect the current buffer's client, keeping its panes as they were."
   (interactive)
   (when-let* ((controller (tmux-control--controller)))
-    (let ((ghostel-tmux-keep-detached-panes t))
-      (with-current-buffer controller
-        (ghostel-tmux-detach)))))
+    (with-current-buffer controller
+      (ghostel-tmux-detach t))))
 
 (defun tmux-control-reconnect ()
   "Connect the session the current buffer showed again, in the selected window.
-NEEDS a reconnect in ghostel-tmux: after a connection ends, its pane
-buffers are read-only snapshots, and attaching makes new buffers."
+Attaching makes its sealed pane buffers live again."
   (interactive)
   (let ((place (or (tmux-control--buffer-place)
                    (user-error "No tmux session recorded in this buffer"))))
@@ -240,26 +364,19 @@ NEEDS the same as `tmux-control-send-command', with the reply."
 (defun tmux-control-select-pane (&optional pane)
   "Show and select PANE, a pane id such as \"%3\", of the current session.
 NEEDS a public way to show a pane by its id in a window:
-`ghostel-tmux--display-pane-in-window' and
-`ghostel-tmux--select-pane-buffer'."
+`ghostel-tmux--panes' and `ghostel-tmux--select-pane-buffer'."
   (when-let* ((controller (tmux-control--controller))
               ((stringp pane))
               ((string-match "\\`%\\([0-9]+\\)\\'" pane)))
     (let* ((id (string-to-number (match-string 1 pane)))
            (panes (buffer-local-value 'ghostel-tmux--panes controller))
-           (buffer (and panes (gethash id panes)))
-           (window (selected-window)))
+           (buffer (and panes (gethash id panes))))
       (if (not (buffer-live-p buffer))
           ;; Not told of the pane yet: tmux's report of the selection
           ;; shows it.
           (with-current-buffer controller
             (ghostel-tmux--queue-command (format "select-pane -t %s" pane)))
-        (unless (get-buffer-window buffer)
-          (with-current-buffer controller
-            (ghostel-tmux--display-pane-in-window buffer window)))
-        (ghostel-tmux--select-pane-buffer buffer)
-        (when-let* ((shown (get-buffer-window buffer)))
-          (select-window shown))))))
+        (ghostel-tmux--select-pane-buffer buffer)))))
 
 
 ;;; A window's panes side by side

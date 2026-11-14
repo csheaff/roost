@@ -140,6 +140,62 @@ the earlier reply, as tmux answers commands in order.
 
 ---
 
+## Posted 2026-11-13, against 8d5328a
+
+dakra closed #4, #6, #8 and #9 at dd84ebb and #7 at 8d5328a. The first
+four are confirmed on their issues. These three follow from #7's fix,
+and were posted that evening.
+
+### On #7: confirmation
+
+Confirmed on 8d5328a, same setup as above (0.3 s round trip, Emacs 30.2, tmux 3.6a).
+
+| | Before | Now, TRAMP as it comes | Now, direct async on |
+|---|---|---|---|
+| First attach to the host, Emacs blocked | 14.3 s | 13.6 s | 8.4 to 8.7 s |
+| A later attach, Emacs blocked | 6.3 to 6.6 s | 5.2 s | 0.0 to 0.3 s |
+| A later attach, pane shown after | the same | 5.8 s | 0.8 s |
+
+With direct async on, typing lands, a line of 711 keys arrives whole, and the pane matches tmux. What is left of the first attach is TRAMP opening its own connection to the host.
+
+My earlier failed try with `tramp-direct-async-process` was my test ssh, which did not take `-t -t` after the host name. Sorry for the noise.
+
+One thing for macOS hosts: TRAMP refuses a direct async command longer than the host's `PIPE_BUF`, which is 512 bytes there (4096 on Linux). TRAMP's `cd` and `env` take about 310 of them and the `stty` wrapper 58. With a long path in `ghostel-tmux-program` I got "Command too long". Ordinary names fit.
+
+### Filed as #17: A pane that arrives while the minibuffer is open leaves its window when it closes
+
+Since 8d5328a an attach returns before the pane is there, so the pane can arrive while a question is open in the minibuffer. It takes the window as it should. But when the minibuffer is answered or quit, Emacs puts the windows back as they were when it opened (`read-minibuffer-restore-windows`, on by default), and the pane is out of its window again.
+
+To see it, 4 times of 4 over a 0.3 s round trip (Emacs 30.2, tmux 3.6a), with direct async on or off:
+
+1. In a window showing `*scratch*`, attach a session on the host.
+2. Before the pane shows, press `M-x` and wait. The pane takes the window, with the minibuffer still open.
+3. `C-g`.
+
+The window shows `*scratch*` again. The pane's buffer is live but in no window.
+
+Over a slow link there is time to do this by hand. Without direct async it also happens by itself: keys typed while Emacs is blocked starting tmux run as soon as the attach returns, which is just before the pane arrives.
+
+It goes further when the window showed one pane of a split. In Roost's tests the pane of a newly attached session arrived in one of two such windows while a prompt was open, and `ghostel-tmux--tile-collapse` deleted the other. Closing the prompt brought both windows back, `ghostel-tmux--show-tile` then split one of them again, and the frame was left with three windows for the two panes, one pane shown twice.
+
+Having the pane wait for the minibuffer to close before it takes its window would fix the first. A layout change that arrives while the minibuffer is open may meet the same; I have not tried that.
+
+### On #5: what the attach that returns at once adds
+
+8d5328a covers the row I added last time: `ghostel-tmux-attach` returns its controller. Thanks.
+
+The attach no longer waiting adds three rows. Roost counted on the terminal being in the window once it had connected:
+
+| What Roost needs | What the adapter does now |
+|---|---|
+| To know when a session's panes first arrive, and to place the pane itself. Roost shows a buffer of its own for the session at once and puts the pane where that buffer shows. Otherwise a pane that arrives late reads to Roost as you having gone elsewhere, and it drops what you asked for meanwhile. | Advises `ghostel-tmux--receive-window-rows`, clears `ghostel-tmux--auto-host-window`, calls `ghostel-tmux--display-pane-in-window` |
+| To show that buffer in a window that is part of another session's split, with the split collapsing as it does for a pane. | `ghostel-tmux--tile-leaf`, `--tile-windows`, `--tile-collapse` |
+| An attach that says nothing. "Attached to S" is now said after the caller has returned, and replaces what Roost has just said in the echo area. It comes from the process filter, so `inhibit-message` cannot be bound around it. | Wraps `message` around `ghostel-tmux--receive-window-rows` |
+
+A hook run when the session's windows are first listed, and a way to attach without the window claim and the message, would cover the first and third.
+
+---
+
 ## Held back: a pane out of step after a split
 
 Not ready to file: no steps that show it every time.
