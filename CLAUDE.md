@@ -101,8 +101,10 @@ they can do themselves.
 - Ask whether a feature would still belong in Roost if every agent could do
   it. What sits between tasks or around them passes: which agent needs you,
   worktrees, merging, review in Magit, remote hosts. What happens inside one
-  conversation, such as watching a pull request, fixing CI or answering
-  review comments, is the agent's, through its own features and plugins.
+  conversation, such as fixing CI or answering review comments, is the
+  agent's, through its own features and plugins. Roost says whose turn it
+  is: yours, or, for a pull request you left to its agent, the agent's, in
+  one line of Roost's own.
 - Roost supports a few agents well rather than many: a couple from the model
   labs and a couple that work across them (see the manual's Install
   section). Don't add an adapter unless asked; a request for one goes in

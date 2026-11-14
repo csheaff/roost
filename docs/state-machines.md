@@ -2279,7 +2279,7 @@ gives it, neither BLOCKED nor BEHIND, which the next step names as what it waits
 
 | From | Event | Guard | To | Code |
 | --- | --- | --- | --- | --- |
-| none | Verdict appears | seen, not merged | turn | `roost--turn` |
+| none | Verdict appears | seen, not merged, not its agent's ("A pull request left to its agent") | turn | `roost--turn` |
 | turn | Agent starts, event, commit, PR moves | | none | same |
 | any | `roost--turn` differs from the record | measured, status known | sent | `roost--report-turn` |
 | sent | Reply | | noted | |
@@ -2326,6 +2326,68 @@ with a pull request still open and failing notifies `ci failed` and reads `merge
 That is true of the pull request, and clears when it closes.
 
 Open: none.
+
+### A pull request left to its agent
+
+Kind: recorded, then derived. Lives in: the record's `prLeft`, `prTold` and
+`prLeftAt`, written by `leave` and `tell`; in Emacs, `roost--left-p`,
+`roost--tell-due-p`, `roost--agents-turn-p`, `roost--telling` and `roost--untold`.
+You leave a task's pull request to its agent (`L`, `roost-leave-pull-request`, or
+`roost-leave-pull-requests` for new tasks). What would then wait on you, a failed
+check, an unresolved review thread or a conflict, Roost tells the agent first, in a
+line the helper writes (`told_words`) and pastes as `send` pastes yours. Merging
+stays yours: `to merge` is never the agent's.
+
+| State | Meaning | How you can tell |
+| --- | --- | --- |
+| Yours | Not left: every turn waits on you, as before | no `prLeft` |
+| Left, quiet | Left, with nothing to tell | `prLeft`, `roost--any-turn` nil or `to merge` |
+| Due | Something to tell, the agent at rest, you elsewhere | `roost--tell-due-p` |
+| Telling | Asked of the host, no reply yet | `roost--telling` has the task |
+| Told | The record says so; the agent has two minutes to start | a `prTold` entry with this key, under `roost--pr-grace` old |
+| Yours again | Told and nothing moved, told five times, refused, or the agent can't be told | `roost--agents-turn-p` nil with a turn |
+
+Invariants:
+
+- I1. Roost types only its own words: `tell` takes a verdict of `TOLD`, a key that
+  is never typed, and two numbers. What a reviewer wrote the agent reads from the
+  forge itself.
+- I2. Only at rest: the helper refuses unless the status is `ready` and the last
+  event no interrupt, so a paste answers no question and adds to no turn. Emacs
+  also holds off while you are at the task's terminal, where you may be typing.
+- I3. Once for each thing: a head for a failed check or a conflict, the newest
+  comment's time for threads. The record's `prTold` says it was told, and the send
+  ID, made of the task, the number, the verdict and the key, keeps a paste whose
+  record was lost from going twice.
+- I4. Of threads once, and after that only for a comment newer than the agent's
+  last event: its own answers, and threads it left open, are no news to it.
+- I5. Five times at most for one pull request and verdict (`TOLD_MOST`), so an
+  agent whose every fix fails, or two programs answering each other, stop. Leaving
+  it afresh counts from none.
+- I6. A turn is the agent's or yours, never neither for long: refused, unanswered
+  for two minutes, or with the agent gone, it waits on you, and is news then.
+- I7. Leaving and telling are no events of the agent's: `updatedAt` stays, and
+  `prLeftAt` keeps an older reply from undoing them (`roost--newer-left`).
+
+| From | Event | Guard | To | Effect | Code |
+| --- | --- | --- | --- | --- | --- |
+| Yours | `L`, or created with `leavePr` | not a conversation | Left, quiet | `prTold` dropped | `leave`, `make_task` |
+| Left, any | `L` | | Yours | `prTold` dropped | `leave` |
+| Left, quiet | A check fails, a thread waits, the pull request conflicts | verdict due, as "Verdict and turn" has it | Due | No word on the row, no notice | `roost--yours` |
+| Due | Task cached | not telling, not untold | Telling | `tell` asked | `roost--tell-agent` |
+| Telling | Reply | | Told | Line pasted, `prTold` grows | `tell` |
+| Telling | Refused, no reply | | Yours again | `roost--untold`; said once | `roost--tell-agent` |
+| Told | Agent starts | | Left, quiet | | its hooks |
+| Told | Two minutes, nothing moved | | Yours again | The word shows; news | `roost--agents-turn-p` |
+| Yours again | The agent pushes and it fails again, or a comment comes | under five | Due | | `roost--tell-due-p` |
+
+No Emacs running, nothing is told: only Emacs asks the forge. Roost can't see a
+prompt you left half typed in the agent's terminal while you were elsewhere: the
+line would join it.
+
+Open: no model yet. The table above was checked by tests (`roost-tells-the-agent-*`,
+`test_a_pull_request_left_to_its_agent_is_told_of_once`, the late-reply sweep's
+`leave` and `tell`, the crash scenarios `Leave` and `Tell`), not by TLC.
 
 ### Merges reported
 

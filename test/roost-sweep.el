@@ -141,6 +141,16 @@ KIND is `committed', `uncommitted', `untracked' or `binary'."
      (prStatus (state . "OPEN") (checks (passing . 2) (failing . 1) (pending . 0)) (failingChecks "test (29.1)")
                (mergeable . "MERGEABLE") (requested) (threads . 0) (failedAt . "2026-10-03T20:03:00Z")
                (checkedAt . "2026-10-03T20:05:00+00:00")))
+    ;; Left to its agent, which Roost told of the failure and which stopped
+    ;; with it as it was: yours again.
+    ("pull request left to its agent, told" (status . "ready") (live . t) (seen . "2026-10-03T20:00:00+00:00")
+     (ahead . 1) (dirty) (unpushed . 0) (prLeft . t) (prLeftAt . "2026-10-03T20:06:00+00:00")
+     (prTold ((number . 21) (verdict . "ci failed") (key . "a1") (at . "2026-10-03T20:06:00+00:00")
+              (said . "Roost: A check failed on #21. Fix it.")))
+     (pr (number . 21) (url . "https://github.com/o/r/pull/21") (head . "a1"))
+     (prStatus (state . "OPEN") (head . "a1") (checks (passing . 2) (failing . 1) (pending . 0))
+               (failingChecks "test (29.1)") (mergeable . "MERGEABLE") (requested) (threads . 0)
+               (failedAt . "2026-10-03T20:03:00Z") (checkedAt . "2026-10-03T20:05:00+00:00")))
     ("pull request with comments" (status . "ready") (live . t) (seen . "2026-10-03T20:00:00+00:00") (ahead . 1)
      (dirty) (unpushed . 0) (pr (number . 18) (url . "https://github.com/o/r/pull/18"))
      (prStatus (state . "OPEN") (draft . t) (checks (passing . 3) (failing . 0) (pending . 0))

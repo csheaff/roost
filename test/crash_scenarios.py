@@ -265,6 +265,43 @@ class Send(KeepsTask):
     args = dict(text="hello", sendId="ab" * 8)
 
 
+class Leave(KeepsTask):
+    """A pull request left to its agent: whenever the helper stops, the
+    record says whole whose it is."""
+
+    action = "leave"
+    args = dict(on=True)
+
+    def holds(self, box, problems):
+        super().holds(box, problems)
+        record = box.record(self.task["id"]) or {}
+        if self.final and self.final.get("ok") and record.get("prLeft") is not True:
+            problems.append("said left to its agent, and its record says %r" % record.get("prLeft"))
+        if record.get("prLeft") not in (None, True):
+            problems.append("its record leaves its pull request to %r" % record.get("prLeft"))
+
+
+class Tell(KeepsTask):
+    """An agent told of its pull request: asked again after the helper
+    stopped, it is told once, and its record says so."""
+
+    action = "tell"
+    args = dict(verdict="ci failed", key="a" * 40, number=12, count=1)
+
+    def prepare(self, box):
+        super().prepare(box)
+        box.helper("leave", id=self.task["id"], on=True)
+
+    def holds(self, box, problems):
+        super().holds(box, problems)
+        record = box.record(self.task["id"]) or {}
+        told = record.get("prTold") or []
+        if len(told) > 1:
+            problems.append("its record says it was told %d times" % len(told))
+        if self.final and self.final.get("ok") and len(told) != 1:
+            problems.append("said told, and its record says %r" % told)
+
+
 class Shell(KeepsTask):
     action = "shell"
 
@@ -539,5 +576,5 @@ class CreateConversation(Create):
 ALL = [Merge, MergeSquash, MergeAway, SquashAway, MergeTeardown, MergeSubmodule, MergeAgentWorktree, Retire, RetireMerged,
        RetireDead, RetireSquashedOnGitHub, Update, UpdateConflict, Discard, DiscardDirty, DiscardTeardown, Forget, Rename,
        Retarget,
-       Stop, Resume, Seen, Turn, Send, Shell, Attach, Inspect, Look, PullRequest, PullRequestPush, Create, CreateFromRemote,
+       Stop, Resume, Seen, Turn, Send, Leave, Tell, Shell, Attach, Inspect, Look, PullRequest, PullRequestPush, Create, CreateFromRemote,
        Propose, Show, ShowPage, TakeOffer, CreateFromOffer, CreateFork, CreateConversation]

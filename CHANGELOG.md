@@ -4,6 +4,17 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A task can leave its pull request to its agent: `L` on a task, or
+  `roost-leave-pull-requests` for new ones. When a check fails on it, a
+  review thread waits or it conflicts with the branch it merges into, Roost
+  then tells the agent itself, in one line such as "Roost: A check failed
+  on #12. Fix it.", rather than say it waits on you: once for each, while
+  the agent rests at its prompt and you aren't at its terminal, and five
+  times at most for each kind. If the agent stops with the pull request as
+  it was, the task waits on you as before. It works with every agent, while
+  Emacs runs, and Roost still never merges. Off unless you turn it on.
+  Restart Emacs after updating for the `L` key; nothing else to do when
+  upgrading.
 - An agent can show you a page it writes, once you turn it on with
   `roost-agent-pages`: ask a Claude task for a diagram of what it changed,
   a mock-up or something to try, and it opens beside the task's terminal as
