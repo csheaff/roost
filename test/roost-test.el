@@ -4553,9 +4553,11 @@ terminal's, on a pty.  Skips the test where it can't be made."
      (cl-letf (((symbol-function 'roost--act)
                 (lambda (task action &optional _parameters callback &rest _)
                   (push (cons action (roost--field task 'status)) acted)
-                  ;; Its host stops it, and the retire follows that reply.
+                  ;; Its host stops it, and the retire follows that reply.  A
+                  ;; copy, as the task here goes on reporting background work.
                   (when (and (equal action "stop") callback)
-                    (funcall callback (cons '(status . "stopped") (assq-delete-all 'status task))))))
+                    (funcall callback (cons '(status . "stopped")
+                                            (assq-delete-all 'status (copy-alist task)))))))
                ((symbol-function 'y-or-n-p) (lambda (prompt &rest _) (setq question prompt) t)))
        ;; One question, which says the agent stops.
        (roost-retire task)
@@ -4568,7 +4570,9 @@ terminal's, on a pty.  Skips the test where it can't be made."
        (should-not acted))
      ;; The panel names `x' there, once its work is merged, and the menu
      ;; offers it.
-     (should (string-match-p "x.+retires it" (roost--next-step task)))
+     (should (equal (roost--field task 'status) "background"))
+     (should (string-match-p "x stops its background work and retires it"
+                             (or (roost--next-step task) "")))
      (should (roost--action-applies-p task 'roost-retire))
      ;; Mid-turn it is still refused, and `K' is the way.
      (dolist (status '("starting" "running" "permission"))

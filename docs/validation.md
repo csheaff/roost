@@ -35,6 +35,26 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## A teammate in a turn's background work — 2026-11-12
+
+- **Why.** `x` refused a task that read `background` for good, and its issue
+  guessed at an idle subagent (#265).
+- **Claude Code 2.1.322 on Haiku, its TUI in tmux, with a `Stop` hook that kept
+  what it was sent.** Asked to start a subagent named scout, Claude made a
+  teammate. Every `Stop` from that turn on, the one after an unrelated prompt
+  too, carried `{"id": "tiet26y2u", "type": "teammate", "status": "running",
+  "description": "List scout directory files"}`, with nothing to say it idled.
+  `TeammateIdle` came when it did, and Claude's own list showed it idle.
+- **`claude -p`, the same prompt.** A plain subagent, with `SubagentStart` and
+  `SubagentStop`, and `"background_tasks": []` on every `Stop` after: one that
+  ends leaves the list.
+- **From its source.** An idle teammate keeps `running` and gains `isIdle`. What a
+  hook is sent goes by the status alone, where what holds `idle_prompt` back
+  leaves an idle teammate out. Reported as anthropics/claude-code#109427.
+- **Not run.** `x` on a real Claude task with an idle teammate: the retire
+  journey has the fake agent send that entry. Whether `idle_prompt` then comes,
+  which would bring such a task back to `ready`.
+
 ## Before 0.12.0 — 2026-11-12
 
 - **On a Mac**, the section below: `/code-review high` of #260, the whole
