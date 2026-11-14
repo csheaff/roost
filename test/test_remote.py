@@ -269,11 +269,14 @@ class Lifecycle(unittest.TestCase):
         self.wait_for_pastes(task, "Roost: A check failed on #12", 2)
         self.assertEqual(self.pastes(task, "Roost: A check failed on #12"), 2)
         self.wait(task, "ready", "Stop")
-        # What can't be pasted is not recorded as told.
+        # A paste tmux may or may not have taken counts as told: the agent
+        # is not told again, and Emacs says the pull request waits on you.
         before = roost.Store(str(self.state)).read(task["id"])["prTold"]
-        with unittest.mock.patch.object(roost, "send", side_effect=roost.RoostError("no pane")):
-            self.assertEqual(self.tell_agent(task, key="9" * 40)["error"], "no pane")
-        self.assertEqual(roost.Store(str(self.state)).read(task["id"])["prTold"], before)
+        with unittest.mock.patch.object(roost, "send", side_effect=roost.RoostError("tmux timed out")):
+            self.assertEqual(self.tell_agent(task, key="9" * 40)["error"], "tmux timed out")
+        after = roost.Store(str(self.state)).read(task["id"])["prTold"]
+        self.assertEqual([entry["key"] for entry in after], [entry["key"] for entry in before] + ["9" * 40])
+        self.assertIs(self.tell_agent(task, key="9" * 40)["result"]["alreadyTold"], True)
         # One you stopped mid-turn waits for you, and so does one that asks,
         # is at work or is gone.
         store = roost.Store(str(self.state))

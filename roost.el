@@ -8337,13 +8337,15 @@ or can't be asked, waits on you instead."
                         (gitlab . ,(if (equal (alist-get 'forge pr) "gitlab") t :false)))
                       (lambda (_)
                         (funcall done)
-                        (puthash key (cons occurrence (float-time)) roost--told-here)
                         (message "Told %s's agent: %s" name reason))
                       (lambda (err)
                         (funcall done)
                         (puthash key occurrence roost--untold)
                         (message "Roost did not tell %s's agent (%s): %s" name reason err)
-                        (roost--redraw)))
+                        (roost--redraw))
+                      ;; Before the reply is cached, which judges whose
+                      ;; turn it is: by this machine's clock from the first.
+                      (lambda () (puthash key (cons occurrence (float-time)) roost--told-here)))
         (error (funcall done))
         (quit (funcall done) (signal 'quit nil))))))
 

@@ -4658,26 +4658,24 @@ def tell(store, task, verdict, key, number, count=None, gitlab=False):
     # an update left half merged.
     require_not_removing(store, task, "send")
     words = told_words(verdict, number, count, gitlab is True)
-    # Recorded before it is pasted: a helper that dies between the two
-    # leaves an agent that may not have been told, which then waits on you,
-    # and never one told twice. Those of this pull request all stay, as
-    # they are counted: only what was told of others goes.
+    # What is known to stop a paste is found first, and tells nothing.
+    pane = owned_pane(task, inventory_for(task))
+    if not pane or pane["dead"]:
+        raise RoostError("The agent is not running; resume the task first")
+    # Recorded before it is pasted, and kept whatever comes of the paste: a
+    # helper that dies between the two, or a tmux that took the line and
+    # said nothing, leaves an agent that may not have been told, which then
+    # waits on you, and never one told twice. Those of this pull request all
+    # stay, as they are counted: only what was told of others goes.
     others = [entry for entry in entries if entry["number"] != number]
     task["prTold"] = (others[-TOLD_KEPT:] + [entry for entry in entries if entry["number"] == number]
                       + [dict(number=number, verdict=verdict, key=key, at=now(), said=words)])
     task["prLeftAt"] = now()
     store.save(task)
-    try:
-        # The ID is this telling's alone, of this time the pull request was
-        # left: a prompt of yours with the same words is another.
-        send(store, task, words, send_id=hashlib.sha256(
-            ("%s %s %d %s %s" % (task["id"], task.get("prLeftGen"), number, verdict, key)).encode()).hexdigest()[:32])
-    except RoostError:
-        # Nothing went: untold, for Emacs to say it waits on you.
-        task["prTold"] = entries
-        task["prLeftAt"] = now()
-        store.note(task)
-        raise
+    # The ID is this telling's alone, of this time the pull request was
+    # left: a prompt of yours with the same words is another.
+    send(store, task, words, send_id=hashlib.sha256(
+        ("%s %s %d %s %s" % (task["id"], task.get("prLeftGen"), number, verdict, key)).encode()).hexdigest()[:32])
     return task
 
 

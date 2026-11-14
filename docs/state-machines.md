@@ -2359,7 +2359,8 @@ Invariants:
   its host has yet to hear the agent took (`roost--prompting-p`).
 - I3. Once for each thing: a head for a failed check or a conflict, the newest
   comment's time for threads. The record's `prTold` says it was told, written
-  before the paste: a helper killed between the two leaves an agent that may not
+  before the paste and kept whatever comes of it: a helper killed between the two, or
+  a tmux that took the line and never said so, leaves an agent that may not
   have been told, which waits on you after two minutes, and never one told twice.
   The send ID, made of the task, the time it was left (`prLeftGen`), the number,
   the verdict and the key, stands behind it.
