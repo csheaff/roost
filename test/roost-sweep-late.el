@@ -174,6 +174,14 @@ what its host said when it read it.")
                             (assq-delete-all 'retargetedAt
                                              (assq-delete-all 'baseRef
                                                               (assq-delete-all 'integrationBranch record))))))
+      ("leave" (append (when (alist-get 'on request) '((prLeft . t)))
+                       `((prLeftAt . ,(roost-sweep-late--now)))
+                       (assq-delete-all 'prTold (assq-delete-all 'prLeftAt (assq-delete-all 'prLeft record)))))
+      ("tell" (append `((prTold ((number . ,(alist-get 'number request)) (verdict . ,(alist-get 'verdict request))
+                                 (key . ,(alist-get 'key request)) (at . ,(roost-sweep-late--now))
+                                 (said . "Roost: A check failed on #12. Fix it.")))
+                        (prLeftAt . ,(roost-sweep-late--now)))
+                      (assq-delete-all 'prTold (assq-delete-all 'prLeftAt record))))
       ("retire" (roost-sweep-late--became record "retired"))
       ("forget" (roost-sweep-late--became record "forgotten"))
       ("merge" (roost-sweep-late--became record "retired" '(retiringCommit . "c9")))
@@ -216,7 +224,7 @@ SUCCESS and FAILURE take it when it comes.  Its host reads the world now."
       ("create" (unless (assq 'alreadyMade reply)
                   (setq roost-sweep-late--records
                         (append roost-sweep-late--records (list (cons (alist-get 'id reply) reply))))))
-      ((or "stop" "resume" "rename" "retarget" "shell" "pr" "take-offer")
+      ((or "stop" "resume" "rename" "retarget" "leave" "tell" "shell" "pr" "take-offer")
        (when (assoc id roost-sweep-late--records)
          (setf (alist-get id roost-sweep-late--records nil nil #'equal) (assq-delete-all 'pushed reply)))))))
 
@@ -890,6 +898,18 @@ dashboard the command starts from."
      :start ,(lambda () (roost-retarget (roost-sweep-late--mine) "release"))
      :action "retarget"
      :refusals ((,roost-sweep-late--retired) ("No branch, tag or commit named 'release' to merge into")))
+    (leave
+     :start ,(lambda () (roost-leave-pull-request (roost-sweep-late--mine)))
+     :action "leave" :refusals ((,roost-sweep-late--retired)))
+    (tell
+     ;; Its pull request is left to its agent, and a check failed on it.
+     :fields ((prLeft . t) (prLeftAt . "2026-11-01T09:00:00+00:00") (live . t) (unpushed . 0) (dirty) (conflicts)
+              (pr (number . 12) (url . "https://example.com/12") (state . "OPEN") (head . "a1"))
+              (prStatus (state . "OPEN") (head . "a1") (checks (passing . 1) (failing . 1) (pending . 0))
+                        (failedAt . "2026-01-01T00:00:00Z") (mergeable . "MERGEABLE") (requested) (threads . 0)
+                        (checkedAt . "2099-01-01T00:00:00+00:00")))
+     :start ,(lambda () (roost--tell-agent (roost-sweep-late--mine)))
+     :action "tell" :refusals ((,roost-sweep-late--retired) ("The agent is not at rest")))
     (retire
      :fields ((ahead . 0))
      :start ,(lambda () (roost-retire (roost-sweep-late--mine)))

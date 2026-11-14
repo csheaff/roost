@@ -28,6 +28,7 @@ import textwrap
 import threading
 import time
 import unittest
+import unittest.mock
 import uuid
 from unittest.mock import patch
 
@@ -166,6 +167,127 @@ class Lifecycle(unittest.TestCase):
         deadline = time.monotonic() + 5
         while self.pastes(task, words) < count and time.monotonic() < deadline:
             time.sleep(0.05)
+
+    def tell_agent(self, task, **args):
+        """Ask the helper to tell TASK's agent of its pull request, #12."""
+        return self.request("tell", id=task["id"], **dict(dict(verdict="ci failed", key="a" * 40, number=12, count=2),
+                                                         **args))
+
+    def rested(self, task, words):
+        """Wait until TASK's agent has had WORDS and rests again."""
+        self.wait_for_pastes(task, words, 1)
+        self.wait(task, "ready", "Stop")
+
+    def test_a_pull_request_left_to_its_agent_is_told_of_once(self):
+        task = self.create()
+        line = "Roost: 2 checks failed on #12. Fix them."
+        # Yours until you leave it to the agent.
+        refused = self.tell_agent(task)
+        self.assertEqual((refused["ok"], refused["error"]), (False, "This task's pull request is not left to its agent"))
+        left = self.request("leave", id=task["id"], on=True)["result"]
+        self.assertIs(left["prLeft"], True)
+        self.assertTrue(left["prLeftAt"])
+        # No event of the agent's: you have seen what you had.
+        self.assertEqual(left["updatedAt"], roost.Store(str(self.state)).read(task["id"])["updatedAt"])
+        first = self.tell_agent(task)
+        self.assertTrue(first["ok"], first)
+        self.rested(task, line)
+        self.assertEqual([(entry["number"], entry["verdict"], entry["key"], entry["said"])
+                          for entry in first["result"]["prTold"]], [(12, "ci failed", "a" * 40, line)])
+        self.assertGreater(first["result"]["prLeftAt"], left["prLeftAt"])
+        # Asked again, as by another Emacs or after no reply: told already.
+        again = self.tell_agent(task)
+        self.assertIs(again["result"]["alreadyTold"], True)
+        time.sleep(0.3)
+        self.assertEqual(self.pastes(task, line), 1)
+        self.assertNotIn("alreadyTold", roost.Store(str(self.state)).read(task["id"]))
+        # Pasted, with the record of it lost, as when the helper is killed
+        # between the two: its send ID keeps it from going twice.
+        record = roost.Store(str(self.state)).read(task["id"])
+        del record["prTold"]
+        roost.Store(str(self.state)).save(record)
+        self.assertTrue(self.tell_agent(task)["ok"])
+        time.sleep(0.3)
+        self.assertEqual(self.pastes(task, line), 1)
+        self.assertEqual(len(roost.Store(str(self.state)).read(task["id"])["prTold"]), 1)
+        # Other things of it are told in their own words, and so is another
+        # forge's merge request.
+        for words, args in (("Roost: A check failed on #12. Fix it.", dict(key="b" * 40, count=1)),
+                            ("Roost: #12 has 1 unresolved review thread. Answer it.",
+                             dict(verdict="comments", key="2026-11-14T10:00:00Z", count=1)),
+                            ("Roost: !12 has 3 unresolved review threads. Answer them.",
+                             dict(verdict="comments", key="2026-11-14T11:00:00+00:00", count=3, gitlab=True)),
+                            ("Roost: #12 conflicts with the branch it merges into. Resolve the conflicts.",
+                             dict(verdict="conflicts", count=None))):
+            self.assertTrue(self.tell_agent(task, **args)["ok"], words)
+            self.rested(task, words)
+        # Taken back, nothing is told, and what was counts no more.
+        self.assertEqual(self.request("leave", id=task["id"])["error"],
+                         "Say whether to leave this task's pull request to its agent")
+        self.assertIs(roost.Store(str(self.state)).read(task["id"])["prLeft"], True)
+        back = self.request("leave", id=task["id"], on=False)["result"]
+        self.assertNotIn("prLeft", back)
+        self.assertNotIn("prTold", back)
+        self.assertFalse(self.tell_agent(task, key="c" * 40)["ok"])
+        # A new task leaves its own when Emacs says so, a conversation never.
+        self.assertIs(self.create(name="left", leavePr=True)["prLeft"], True)
+        self.assertNotIn("prLeft", self.create(name="plain", leavePr=False))
+        talk = self.create(name="Conversation 09:15", directory="/nowhere", conversation=True, leavePr=True)
+        self.assertNotIn("prLeft", talk)
+        self.assertEqual(self.request("leave", id=talk["id"], on=True)["error"],
+                         "A conversation has no pull request to leave to its agent")
+
+    def test_an_agent_is_told_only_what_roost_writes_and_only_at_rest(self):
+        task = self.create()
+        self.assertTrue(self.request("leave", id=task["id"], on=True)["ok"])
+        # Nothing of Emacs's reaches the terminal but two numbers.
+        for args in (dict(verdict="to merge"), dict(verdict="rm -rf"), dict(verdict=None),
+                     dict(key="a b"), dict(key="a\x1b[201~"), dict(key=""), dict(key=None), dict(key="a" * 65),
+                     dict(number=0), dict(number=True), dict(number="12"), dict(number=10 ** 10), dict(number=1.5),
+                     dict(count=0), dict(count=True), dict(count="2\nrm"), dict(count=None), dict(count=10 ** 5)):
+            reply = self.tell_agent(task, **args)
+            self.assertFalse(reply["ok"], args)
+        time.sleep(0.3)
+        self.assertEqual(self.pastes(task, "Roost:"), 0)
+        self.assertNotIn("prTold", roost.Store(str(self.state)).read(task["id"]))
+        # As often as TOLD_MOST of one thing about one pull request, each
+        # for another key; another pull request, or another thing, counts
+        # apart.
+        for index in range(roost.TOLD_MOST):
+            self.assertTrue(self.tell_agent(task, key="%040d" % index, count=index + 1)["ok"])
+            self.rested(task, "Roost: %s on #12" % ("A check failed" if not index else "%d checks failed" % (index + 1)))
+        more = self.tell_agent(task, key="f" * 40)
+        self.assertEqual(more["error"], "Roost has told this agent of it 5 times; the pull request is left to you")
+        self.assertTrue(self.tell_agent(task, key="f" * 40, number=13)["ok"])
+        self.rested(task, "Roost: 2 checks failed on #13")
+        # Left afresh, it is told again.
+        self.assertTrue(self.request("leave", id=task["id"], on=True)["ok"])
+        self.assertTrue(self.tell_agent(task, key="e" * 40, count=7)["ok"])
+        self.rested(task, "Roost: 7 checks failed on #12")
+        # Of what it was told before, too: pasted again, not only recorded.
+        self.assertTrue(self.tell_agent(task, key="%040d" % 0, count=1)["ok"])
+        self.wait_for_pastes(task, "Roost: A check failed on #12", 2)
+        self.assertEqual(self.pastes(task, "Roost: A check failed on #12"), 2)
+        self.wait(task, "ready", "Stop")
+        # A paste tmux may or may not have taken counts as told: the agent
+        # is not told again, and Emacs says the pull request waits on you.
+        before = roost.Store(str(self.state)).read(task["id"])["prTold"]
+        with unittest.mock.patch.object(roost, "send", side_effect=roost.RoostError("tmux timed out")):
+            self.assertEqual(self.tell_agent(task, key="9" * 40)["error"], "tmux timed out")
+        after = roost.Store(str(self.state)).read(task["id"])["prTold"]
+        self.assertEqual([entry["key"] for entry in after], [entry["key"] for entry in before] + ["9" * 40])
+        self.assertIs(self.tell_agent(task, key="9" * 40)["result"]["alreadyTold"], True)
+        # One you stopped mid-turn waits for you, and so does one that asks,
+        # is at work or is gone.
+        store = roost.Store(str(self.state))
+        for change in (dict(lastEvent="Interrupt"), dict(status="permission"), dict(status="running"),
+                       dict(status="starting")):
+            record = store.read(task["id"])
+            store.save(dict(record, **change))
+            self.assertEqual(self.tell_agent(task, key="d" * 40)["error"], "The agent is not at rest", change)
+            store.save(record)
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        self.assertFalse(self.tell_agent(task, key="d" * 40)["ok"])
 
     def sending(self, task, **args):
         """A send request running as over SSH: its own process, not told
@@ -8337,7 +8459,7 @@ sys.exit(status)
             branch="PROJ-1-fix", number=12, url=url % 12, state="OPEN", draft=False, review=None, head=there,
             base="main", tip=there, checks=dict(passing=0, failing=1, pending=0), failingChecks=["test"],
             failedAt="2026-10-30T09:00:00Z", mergeable="MERGEABLE", requested=[], threads=1,
-            threadAt="2026-10-30T09:01:00Z", unpushed=0))
+            threadAt="2026-10-30T09:01:00Z", threadLatest="2026-10-30T09:01:00Z", unpushed=0))
         self.assertEqual(listed["worktreeHead"], there)
         # One lookup, from the worktree's branch; the task's isn't pushed.
         self.assertEqual([call[:4] for call in self.gh_calls() if call[:2] == ["pr", "list"]],
@@ -8787,6 +8909,7 @@ print(json.dumps(dict(data=data)))
             checks=dict(passing=3, failing=2, pending=2), failingChecks=["unit", "old"],
             pendingChecks=["approve", "e2e"], failedAt="2026-10-31T10:05:00Z",
             mergeable="MERGEABLE", requested=["tanuki"], threads=2, threadAt="2026-10-31T10:20:00Z",
+            threadLatest="2026-10-31T10:30:00Z",
             openThreads=[dict(path="b.py", line=7, author="fox", text="Rename this")]))
         self.assertEqual(listed["unpushed"], 0)
         self.assertEqual(self.variables(self.glab_calls()[-1]), dict(path="group/sub/project", branch=task["branch"]))

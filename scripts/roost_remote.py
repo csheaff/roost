@@ -2444,6 +2444,10 @@ def make_task(store, request, create_id):
     # It shows in the agent's own app, if the agent has one to show it in.
     if request.get("remoteControl") is True and getattr(agent, "remote_control", False):
         task["remoteControl"] = True
+    # Its pull request, once it has one, is left to its agent, as `leave`
+    # leaves one: whatever the agent, as Roost does the telling.
+    if request.get("leavePr") is True and not conversation:
+        task.update(prLeft=True, prLeftAt=now(), prLeftGen=uuid.uuid4().hex[:12])
     # The task whose agent offered this one, which shows it under that, and
     # the offer it was made from, which waits no more once it is saved.
     parent, offer = request.get("parent"), text(request.get("offer"))
@@ -3032,7 +3036,9 @@ def review_state(pr):
     PULL_REQUEST_REVIEWS answer, gives. Unresolved threads aren't counted
     or listed when there are more than were asked for. Of each one's last
     comment, the first is when they came to wait: a comment in one leaves
-    another overdue. Without the time of one, there is none."""
+    another overdue. The last is the newest word in any of them, which an
+    agent that rested before it has not read. Without the time of one,
+    there is neither."""
     requested = [(request.get("requestedReviewer") or {}) for request in pr["reviewRequests"]["nodes"]]
     threads = pr["reviewThreads"]
     unresolved = [thread for thread in threads["nodes"] if not thread["isResolved"]]
@@ -3043,9 +3049,10 @@ def review_state(pr):
     if pr.get("mergeStateStatus"):
         state["mergeState"] = pr["mergeStateStatus"]
     if threads["totalCount"] <= len(threads["nodes"]):
+        timed = bool(times) and all(parse_time(t) for t in times)
         state.update(threads=len(unresolved),
-                     threadAt=(min(times, key=parse_time) if times and all(parse_time(t) for t in times)
-                               else None))
+                     threadAt=min(times, key=parse_time) if timed else None,
+                     threadLatest=max(times, key=parse_time) if timed else None)
         listed = sorted((open_thread(thread) for thread in unresolved if isinstance(thread.get("path"), str)),
                         key=lambda thread: (thread["path"], thread.get("line") or 0))
         if listed:
@@ -3318,8 +3325,8 @@ class GitLabForge:
     def threads(found):
         """What `review_state` says of FOUND's review threads, from its
         unresolved discussions: how many, as GitLab counts them, and when
-        it listed them all, when the first came to wait and those on a
-        file, as the task panel shows them."""
+        it listed them all, when the first came to wait, the newest word
+        in any, and those on a file, as the task panel shows them."""
         discussions = found.get("discussions") or {}
         unresolved = [discussion for discussion in discussions.get("nodes") or []
                       if isinstance(discussion, dict) and discussion.get("resolvable") and not discussion.get("resolved")]
@@ -3334,7 +3341,9 @@ class GitLabForge:
 
         times = [note(discussion, "last").get("createdAt") for discussion in unresolved]
         state.setdefault("threads", len(unresolved))
-        state["threadAt"] = min(times, key=parse_time) if times and all(parse_time(t) for t in times) else None
+        timed = bool(times) and all(parse_time(t) for t in times)
+        state["threadAt"] = min(times, key=parse_time) if timed else None
+        state["threadLatest"] = max(times, key=parse_time) if timed else None
         listed = []
         for discussion in unresolved:
             first = note(discussion, "first")
@@ -4540,6 +4549,131 @@ def send(store, task, text, force=False, send_id=None):
         task["sendIds"] = (sent + [send_id])[-SEND_IDS_KEPT:]
         # It went, and a full disk is no reason to say otherwise.
         store.note(task)
+    return task
+
+
+# What Roost tells an agent of its own pull request, once you have left
+# that to the agent: that a check failed on it, that a review thread waits,
+# or that it conflicts with the branch it merges into. Merging it stays
+# yours.
+TOLD = ("ci failed", "comments", "conflicts")
+# How often for each, of one pull request. An agent whose every fix fails,
+# or two programs answering each other in a thread, stop there, and the
+# pull request is yours until you leave it to the agent afresh.
+TOLD_MOST = 5
+TOLD_KEY = re.compile(r"[0-9A-Za-z:.+-]{1,64}")
+TOLD_NUMBERS = 10 ** 9
+TOLD_COUNTS = 10 ** 4
+
+
+def counted(value, most):
+    """Whether VALUE is a whole number from 1 to MOST."""
+    return isinstance(value, int) and not isinstance(value, bool) and 0 < value <= most
+
+
+def told(task):
+    """What Roost told TASK's agent of its pull requests, oldest first: of
+    each, the pull request's number, what of it, the key Emacs gave, which
+    stays the same while there is nothing new to tell, when, and the words."""
+    entries = task.get("prTold")
+    return [entry for entry in entries
+            if isinstance(entry, dict) and counted(entry.get("number"), TOLD_NUMBERS)
+            and entry.get("verdict") in TOLD and isinstance(entry.get("key"), str)] if isinstance(entries, list) else []
+
+
+def told_words(verdict, number, count, gitlab=False):
+    """The line Roost types to an agent whose pull request NUMBER needs it
+    for VERDICT, one of TOLD, with COUNT checks failed or threads waiting.
+    Roost's own words and two numbers, with nothing a forge said in them:
+    what a reviewer wrote the agent reads from the forge itself, as it would
+    had you told it. They say whose they are, as the agent's conversation
+    keeps them among your prompts."""
+    name = ("!%d" if gitlab else "#%d") % number
+    if verdict == "ci failed":
+        said = ("A check failed on %s. Fix it." % name if count == 1
+                else "%d checks failed on %s. Fix them." % (count, name))
+    elif verdict == "comments":
+        said = ("%s has 1 unresolved review thread. Answer it." % name if count == 1
+                else "%s has %d unresolved review threads. Answer them." % (name, count))
+    else:
+        said = "%s conflicts with the branch it merges into. Resolve the conflicts." % name
+    return "Roost: " + said
+
+
+def leave(store, task, on):
+    """Leave TASK's pull request to its agent, or with ON false, to you
+    again. While it is left, Emacs, which alone asks the forge, has `tell`
+    say so to the agent when a check fails on it, a review thread waits or
+    it conflicts, rather than wait for you. What Roost told the agent
+    counts afresh each time. No event of the agent's, so its `updatedAt`
+    stays; `prLeftAt` tells Emacs a reply read before this from one read
+    since."""
+    if task.get("conversation") is True:
+        raise RoostError("A conversation has no pull request to leave to its agent")
+    if not isinstance(on, bool):
+        raise RoostError("Say whether to leave this task's pull request to its agent")
+    if on is True:
+        task["prLeft"] = True
+    else:
+        task.pop("prLeft", None)
+    task.pop("prTold", None)
+    # Left afresh, the same failure is told again, under another send ID.
+    task["prLeftGen"] = uuid.uuid4().hex[:12]
+    task["prLeftAt"] = now()
+    store.save(task)
+    return task
+
+
+def tell(store, task, verdict, key, number, count=None, gitlab=False):
+    """Tell TASK's agent that its pull request NUMBER needs it for VERDICT,
+    one of TOLD: paste the line `told_words` gives, as `send` pastes yours.
+    Only while the pull request is left to the agent (`leave`), and while
+    the agent rests at its prompt after a turn it ended itself: one at work
+    needs no telling, one that asks would take the paste for its answer,
+    and one you stopped waits for you. Once for each KEY, which Emacs keeps
+    the same while there is nothing new to tell: asked again, as by another
+    Emacs or after no reply, the record says the agent was told, and it is
+    not told twice. And TOLD_MOST times at most for one pull request and
+    VERDICT."""
+    if task.get("prLeft") is not True:
+        raise RoostError("This task's pull request is not left to its agent")
+    if verdict not in TOLD:
+        raise RoostError("Nothing Roost tells an agent: %r" % (verdict,))
+    if not (isinstance(key, str) and TOLD_KEY.fullmatch(key)):
+        raise RoostError("Invalid key")
+    if not counted(number, TOLD_NUMBERS):
+        raise RoostError("Invalid pull request number")
+    if verdict != "conflicts" and not counted(count, TOLD_COUNTS):
+        raise RoostError("Invalid count")
+    entries = told(task)
+    same = [entry for entry in entries if entry["number"] == number and entry["verdict"] == verdict]
+    if any(entry["key"] == key for entry in same):
+        return dict(task, alreadyTold=True)
+    if len(same) >= TOLD_MOST:
+        raise RoostError("Roost has told this agent of it %d times; the pull request is left to you" % TOLD_MOST)
+    if task["status"] != "ready" or task.get("lastEvent") == "Interrupt":
+        raise RoostError("The agent is not at rest")
+    # As for a prompt of yours, which an agent would act on in a worktree
+    # an update left half merged.
+    require_not_removing(store, task, "send")
+    words = told_words(verdict, number, count, gitlab is True)
+    # What is known to stop a paste is found first, and tells nothing.
+    pane = owned_pane(task, inventory_for(task))
+    if not pane or pane["dead"]:
+        raise RoostError("The agent is not running; resume the task first")
+    # Recorded before it is pasted, and kept whatever comes of the paste: a
+    # helper that dies between the two, or a tmux that took the line and
+    # said nothing, leaves an agent that may not have been told, which then
+    # waits on you, and never one told twice. All of them stay until the
+    # pull request is left afresh, as they are what is counted and told
+    # once: five of each kind for each pull request the task has had.
+    task["prTold"] = entries + [dict(number=number, verdict=verdict, key=key, at=now(), said=words)]
+    task["prLeftAt"] = now()
+    store.save(task)
+    # The ID is this telling's alone, of this time the pull request was
+    # left: a prompt of yours with the same words is another.
+    send(store, task, words, send_id=hashlib.sha256(
+        ("%s %s %d %s %s" % (task["id"], task.get("prLeftGen"), number, verdict, key)).encode()).hexdigest()[:32])
     return task
 
 
@@ -8539,6 +8673,10 @@ TASK_ACTIONS = {
     "turn": lambda store, task, request: turn(store, task, text(request.get("turn"))),
     "rename": lambda store, task, request: rename(store, task, request.get("name")),
     "retarget": lambda store, task, request: retarget(store, task, request.get("base")),
+    "leave": lambda store, task, request: leave(store, task, request.get("on")),
+    "tell": lambda store, task, request: tell(store, task, request.get("verdict"), request.get("key"),
+                                              request.get("number"), request.get("count"),
+                                              request.get("gitlab") is True),
     "retire": lambda store, task, request: retire(store, task, merged_head=request.get("mergedHead"),
                                                   teardown=text(request.get("teardown")),
                                                   still_open=request.get("stillOpen") is True,

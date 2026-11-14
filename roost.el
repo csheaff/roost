@@ -409,6 +409,18 @@ no such app, and start as ever.  Tasks you start after changing this
 follow it."
   :type 'boolean)
 
+(defcustom roost-leave-pull-requests nil
+  "Whether a new task leaves its pull request to its agent.
+Roost then tells the agent itself, in one line of its own, when a check
+fails on the task's pull request, a review thread waits on it or it
+conflicts with the branch it merges into, rather than wait for you to:
+once for each, while the agent rests at its prompt and you are not at
+its terminal.  Whatever the agent, as Roost does the telling, while
+Emacs runs.  Merging stays yours.  \\[roost-leave-pull-request] leaves
+one task's to its agent, or takes it back; tasks you start after
+changing this follow it."
+  :type 'boolean)
+
 (defcustom roost-decorate t
   "Whether Roost's views are drawn with more than their text.
 A quiet tint behind a status that wants you, a band behind what is
@@ -612,6 +624,21 @@ A ready agent you have seen since its last event is no longer waiting.")
 (defvar roost--turns-sent (make-hash-table :test 'equal)
   "For each task key, the turn sent to its host that its record lacks yet.
 See `roost--report-turn'.")
+(defvar roost--telling (make-hash-table :test 'equal)
+  "For each task key, what Roost is telling its agent, until its host replies.
+As `roost--tell-occurrence' has it.")
+
+(defvar roost--told-here (make-hash-table :test 'equal)
+  "For each task key, what this Emacs heard its agent was told, and when.
+A cons of `roost--tell-occurrence' and `float-time'.")
+
+(defvar roost--sent-at (make-hash-table :test 'equal)
+  "For each task key, when you last sent its agent a prompt, as `float-time'.")
+
+(defvar roost--untold (make-hash-table :test 'equal)
+  "For each task key, what Roost could not tell its agent, which waits on you.
+As `roost--tell-occurrence' has it: something else is tried again.")
+
 (defvar roost--remembered-hosts nil)
 (defvar roost--hosts-loaded nil)
 (defvar roost--remembered-projects nil)
@@ -1302,6 +1329,22 @@ merged it into the other."
         (when-let* ((cell (assq field old)))
           (setq task (cons cell task)))))))
 
+(defun roost--newer-left (task old)
+  "TASK, with what OLD says of its pull request left to its agent, if newer.
+Leaving it, taking it back and telling the agent of it are no events of
+the agent's, which `roost--newer-events' goes by: this keeps a reply
+read before one of them from bringing back what was, and so from having
+Roost tell the agent again, or say a pull request is its agent's that
+you took back."
+  (let ((changed (roost--field old 'prLeftAt)))
+    (if (not (and (stringp changed)
+                  (string< (or (roost--field task 'prLeftAt) "") changed)))
+        task
+      (dolist (field '(prLeft prTold prLeftAt prLeftGen) task)
+        (setq task (assq-delete-all field task))
+        (when-let* ((cell (assq field old)))
+          (setq task (cons cell task)))))))
+
 (defun roost--newer-look (task old)
   "TASK, with OLD's record of where you last looked when that is newer.
 A reply its host read before you last looked at the task, such as a
@@ -1342,15 +1385,17 @@ A reply to create read before then can come after.")
 (defun roost--cache-task (host task)
   "Cache TASK from HOST and notify only on attention transitions."
   (setf (alist-get 'host task) host)
-  (dolist (field '(pushed alreadySent alreadyMade note))
+  (dolist (field '(pushed alreadySent alreadyMade alreadyTold note))
     (setq task (assq-delete-all field task)))
   (when-let* ((old (gethash (roost--key task) roost--tasks)))
     ;; Looks and the agent's events move apart: the newer of each counts.
     (let ((looked (roost--newer-look old task)))
       (setq task (roost--kept-reviews
-                  (roost--newer-look (roost--newer-branch
-                                      (roost--newer-offers (roost--newer-name (roost--newer-events task old) old)
-                                                           old)
+                  (roost--newer-look (roost--newer-left
+                                      (roost--newer-branch
+                                       (roost--newer-offers (roost--newer-name (roost--newer-events task old) old)
+                                                            old)
+                                       old)
                                       old)
                                      looked)
                   old))))
@@ -1403,7 +1448,11 @@ A reply to create read before then can come after.")
       ;; what was there all along would read as news from the first that does.
       (cond ((not (gethash key roost--tasks))
              (remhash key roost--pr-verdicts)
-             (remhash key roost--agent-news))
+             (remhash key roost--agent-news)
+             (remhash key roost--telling)
+             (remhash key roost--told-here)
+             (remhash key roost--sent-at)
+             (remhash key roost--untold))
             ((or (roost--judged-p task) (not (eq had 'unknown))) (puthash key turn roost--pr-verdicts)))
       ;; One held about it that is so no longer goes no more, though the
       ;; task may come to be so again before it would go.
@@ -1435,6 +1484,7 @@ A reply to create read before then can come after.")
       (roost--run-task-hook 'roost-task-status-functions task previous status))
     (when (gethash key roost--tasks)
       (roost--report-turn task)
+      (roost--tell-agent task)
       (roost--note-shown host task old))
     ;; Another pull request merged, as a second one on the task, is another
     ;; merge, at another head or into another branch.
@@ -2078,6 +2128,10 @@ They are in order of host and name."
 
 (defconst roost--pr-turns '("ci failed" "comments" "to merge")
   "Statuses of a task whose pull request waits on you; see `roost--pr-turn'.")
+
+(defconst roost--told-turns '("ci failed" "comments" "conflicts")
+  "What of its pull request Roost tells a task's agent.
+As `roost--any-turn' has it; see `roost--tell-due-p'.")
 
 (defun roost--just-started-p (task)
   "Whether TASK's agent has done nothing since it started, as when resumed.
@@ -3354,6 +3408,7 @@ EXTRA is an alist of further request fields, such as the issue."
            ,(cons 'mayOffer (if roost-agent-offers t :false))
            ,(cons 'mayShowPages (if (and roost-agent-offers roost-agent-pages) t :false))
            ,(cons 'remoteControl (if roost-remote-control t :false))
+           ,(cons 'leavePr (if roost-leave-pull-requests t :false))
            ,(cons 'size (roost--terminal-size))
            ,(cons 'socket (or roost-socket-name
                               (bound-and-true-p tmux-control-default-socket-name)
@@ -5168,6 +5223,8 @@ when you ask again after no reply."
                                (if (equal status "starting") "starting up" "asking for permission")))
                       (user-error "Open the task with RET to answer it")))))
     (cond ((not problem)
+           ;; Roost tells its agent nothing of its own for a moment.
+           (puthash (roost--key task) (float-time) roost--sent-at)
            (roost--act task "send" (append (list (cons 'text text))
                                            (when force (list (cons 'force t)))
                                            (when look (list (cons 'look t)))
@@ -7952,9 +8009,11 @@ One of `roost--pr-turns', from `roost--pr-verdict' giving its agent time
 to take up a failure or thread, once you have seen what the agent last
 did, as for one merged: stopped too, its host keeps it seen only if it
 was before.  It lasts until the pull request or the agent moves: seeing
-it changes nothing, as it does nothing to the pull request."
+it changes nothing, as it does nothing to the pull request.  Not while
+it is left to its agent, which Roost tells of it first, as
+`roost--agents-turn-p' has it."
   (when (roost--seen-p task)
-    (roost--pr-verdict task t)))
+    (roost--yours task (roost--pr-verdict task t))))
 
 (defun roost--turn (task)
   "What of TASK's pull request or work waits on you, as its status word, or nil.
@@ -8039,9 +8098,13 @@ would not push to, nor open, what to do on GitHub, or with that branch."
          (open (unless branch (concat ", " (funcall key "P") " opens it")))
          (unpushed (and status (roost--field task 'unpushed)))
          (verdict (roost--pr-verdict task))
-         (tell (if (roost--agent-running-p task)
-                   (concat (funcall key "e") " tells its agent")
-                 (concat (funcall key "s") " resumes its agent")))
+         (conflicting (and status (equal (alist-get 'mergeable status) "CONFLICTING")))
+         (tell (cond ((roost--agents-turn-p task (or (car (member verdict roost--told-turns))
+                                                     (and (not verdict) conflicting "conflicts")))
+                      ;; Left to its agent, as `roost-leave-pull-request' leaves it.
+                      "Roost tells its agent")
+                     ((roost--agent-running-p task) (concat (funcall key "e") " tells its agent"))
+                     (t (concat (funcall key "s") " resumes its agent"))))
          (pending (alist-get 'pending (alist-get 'checks status)))
          (reviewers (mapcar #'roost--reviewer-name (alist-get 'requested status)))
          (waits (delq nil (list (when (and (numberp pending) (> pending 0))
@@ -8107,14 +8170,216 @@ way: until then those come first."
 (defun roost--conflict-turn (task)
   "Whether TASK's work conflicts with the branch it merges into, for you.
 That is as `roost--conflicting-p' has it, once you have seen what its
-agent last did."
-  (and (roost--seen-p task) (roost--conflicting-p task)))
+agent last did, and not while Roost tells its agent of it first, as
+`roost--agents-turn-p' has it."
+  (and (roost--seen-p task) (roost--conflicting-p task)
+       (not (roost--agents-turn-p task "conflicts"))))
+
+(defun roost--any-turn (task)
+  "What of TASK's pull request or work waits, on you or on its agent, or nil.
+As `roost--news-turn' has it, before `roost--yours' leaves any to the agent."
+  (or (roost--pr-verdict task t) (and (roost--conflicting-p task) "conflicts")))
 
 (defun roost--news-turn (task)
   "What of TASK's pull request or work waits on you, for a notification, or nil.
 As `roost--turn' has it, but whether or not you have seen what its agent
 last did: a notification about it is news."
-  (or (roost--pr-verdict task t) (and (roost--conflicting-p task) "conflicts")))
+  (roost--yours task (roost--any-turn task)))
+
+;;;; A pull request left to its agent
+
+;; `roost-leave-pull-request' leaves a task's pull request to its agent.
+;; What would then wait on you, a failed check, an unresolved review thread
+;; or a conflict, Roost tells the agent instead, in a line its host
+;; writes, as `e' would have you do: once for each, while the agent rests
+;; at its prompt and you are not at its terminal.  Until the agent has had
+;; its turn, the pull request doesn't wait on you.  It does once the agent
+;; stops with it as it was, or was told `roost--told-most' times.
+
+(defconst roost--told-most 5
+  "How often Roost tells an agent of one thing about one pull request.
+As its host counts (TOLD_MOST), which refuses more.")
+
+(defun roost--left-p (task)
+  "Whether TASK's pull request is left to its agent."
+  (eq (roost--field task 'prLeft) t))
+
+(defun roost--tell-key (task turn)
+  "What tells one TURN to tell TASK's agent of from the next, or nil.
+The pull request's head for a failed check or a conflict, which the
+agent's next push changes, and for review threads the time of the newest
+comment in them.  Its host tells the agent once for each."
+  (let ((status (roost--field (roost--pr-view task) 'prStatus)))
+    (if (equal turn "comments")
+        (or (alist-get 'threadLatest status) (alist-get 'threadAt status) "first")
+      (alist-get 'head status))))
+
+(defun roost--tell-occurrence (task turn)
+  "TURN of TASK's pull request, as one thing to tell its agent.
+A list of TURN, the pull request's number, `roost--tell-key', and which
+time the pull request was left this is: left afresh, as by another
+Emacs, what was refused before is another thing."
+  (list turn (alist-get 'number (roost--field (roost--pr-view task) 'pr)) (roost--tell-key task turn)
+        (roost--field task 'prLeftGen)))
+
+(defun roost--told (task turn)
+  "What Roost told TASK's agent of TURN, oldest first.
+Of the pull request the task has now."
+  (let ((number (alist-get 'number (roost--field (roost--pr-view task) 'pr))))
+    (seq-filter (lambda (entry)
+                  (and (equal (alist-get 'number entry) number) (equal (alist-get 'verdict entry) turn)))
+                (append (roost--field task 'prTold) nil))))
+
+(defun roost--told-entry (task turn)
+  "What Roost told TASK's agent of TURN as it stands now, or nil."
+  (let ((key (roost--tell-key task turn)))
+    (seq-find (lambda (entry) (equal (alist-get 'key entry) key)) (roost--told task turn))))
+
+(defun roost--tell-due-p (task turn)
+  "Whether Roost is to tell TASK's agent of TURN now.
+TURN is as `roost--any-turn' has it.
+That is while its pull request is left to the agent, which rests at its
+prompt after a turn it ended itself, and you are not at its terminal,
+where you may be typing.  Not twice of one thing, nor more than
+`roost--told-most' times of one kind, nor of a conflict with no pull
+request.  Of review threads once, and then only when a comment came
+since the agent last did anything: its own answers, and threads it left
+open, are no news to it."
+  (and (roost--left-p task)
+       (member turn roost--told-turns)
+       (or (not (equal turn "conflicts")) (eq (roost--conflicts task) t))
+       (equal (roost--status-name task) "ready")
+       (roost--agent-running-p task)
+       (stringp (roost--tell-key task turn))
+       (let ((told (roost--told task turn)))
+         (and (not (roost--told-entry task turn))
+              (< (length told) roost--told-most)
+              (or (not (equal turn "comments"))
+                  (null told)
+                  (let ((latest (roost--time (alist-get 'threadLatest
+                                                        (roost--field (roost--pr-view task) 'prStatus))))
+                        (rested (roost--time (roost--field task 'updatedAt))))
+                    (and latest rested (time-less-p rested latest))))))
+       (not (equal (gethash (roost--key task) roost--untold) (roost--tell-occurrence task turn)))
+       (not (when-let* ((watched (roost--watched-task)))
+              (equal (roost--key watched) (roost--key task))))
+       (not (roost--prompting-p task))
+       t))
+
+(defconst roost--prompting-seconds 30
+  "Seconds after you send a task's agent a prompt in which Roost tells it nothing.
+Its host says the agent rests until the agent's own word that it has
+your prompt, which can take a moment.")
+
+(defun roost--prompting-p (task)
+  "Whether you are telling TASK's agent something yourself.
+A draft to it is open, or you sent it a prompt less than
+`roost--prompting-seconds' ago: Roost's line would land beside yours."
+  (let ((key (roost--key task)))
+    (or (when-let* ((sent (gethash key roost--sent-at)))
+          (< (- (float-time) sent) roost--prompting-seconds))
+        (seq-some (lambda (buffer)
+                    (when-let* ((to (buffer-local-value 'roost--send-task buffer)))
+                      (equal (roost--key to) key)))
+                  (buffer-list)))))
+
+(defun roost--agents-turn-p (task turn)
+  "Whether TURN of TASK's pull request is its agent's for now, and not yours.
+Roost is about to tell the agent of it, as `roost--tell-due-p' has it,
+or told it less than `roost--pr-grace' seconds ago, by when an agent
+that takes it up is at work."
+  (and turn
+       (or (roost--tell-due-p task turn)
+           (when-let* ((entry (and (roost--left-p task) (roost--agent-running-p task)
+                                   ;; Not what its host recorded and then
+                                   ;; failed to paste: that waits on you.
+                                   (not (equal (gethash (roost--key task) roost--untold)
+                                               (roost--tell-occurrence task turn)))
+                                   (roost--told-entry task turn)))
+                       ;; An agent that has done something since, by its
+                       ;; host's clock, had its turn: what is left is yours.
+                       ((not (when-let* ((told (roost--time (alist-get 'at entry)))
+                                         (event (roost--time (roost--field task 'updatedAt))))
+                               (time-less-p told event))))
+                       ;; By this machine's clock when it heard so, where
+                       ;; it did: a host's may differ from it by minutes.
+                       (seconds (if-let* ((here (gethash (roost--key task) roost--told-here))
+                                          ((equal (car here) (roost--tell-occurrence task turn))))
+                                    (- (float-time) (cdr here))
+                                  (roost--seconds-since (alist-get 'at entry)))))
+             (< seconds roost--pr-grace)))
+       t))
+
+(defun roost--yours (task turn)
+  "TURN, what of TASK's pull request or work waits, unless it is its agent's."
+  (and turn (not (roost--agents-turn-p task turn)) turn))
+
+(defun roost--tell-agent (task)
+  "Tell TASK's agent what of its pull request waits, if Roost is to.
+As `roost--tell-due-p' has it.  Its host writes the line, from what
+waits, the pull request's number and how many checks or threads, and
+pastes it once.  What it refuses, as when the agent has started since,
+or can't be asked, waits on you instead."
+  (when-let* (((roost--left-p task))
+              (turn (roost--any-turn task))
+              ((roost--tell-due-p task turn))
+              (key (roost--key task))
+              ((not (gethash key roost--telling))))
+    (let* ((view (roost--pr-view task))
+           (pr (roost--field view 'pr))
+           (status (roost--field view 'prStatus))
+           (occurrence (roost--tell-occurrence task turn))
+           (name (roost--field task 'name))
+           (reason (roost--turn-reason task turn))
+           (done (lambda () (remhash key roost--telling))))
+      (puthash key occurrence roost--telling)
+      (condition-case nil
+          (roost--act task "tell"
+                      `((verdict . ,turn)
+                        (key . ,(nth 2 occurrence))
+                        (number . ,(nth 1 occurrence))
+                        (count . ,(pcase turn
+                                    ("ci failed" (alist-get 'failing (alist-get 'checks status)))
+                                    ("comments" (alist-get 'threads status))))
+                        (gitlab . ,(if (equal (alist-get 'forge pr) "gitlab") t :false)))
+                      (lambda (_)
+                        (funcall done)
+                        (message "Told %s's agent: %s" name reason))
+                      (lambda (err)
+                        (funcall done)
+                        (puthash key occurrence roost--untold)
+                        (message "Roost did not tell %s's agent (%s): %s" name reason err)
+                        (roost--redraw))
+                      ;; Before the reply is cached, which judges whose
+                      ;; turn it is: by this machine's clock from the first.
+                      (lambda () (puthash key (cons occurrence (float-time)) roost--told-here)))
+        (error (funcall done))
+        (quit (funcall done) (signal 'quit nil))))))
+
+;;;###autoload
+(defun roost-leave-pull-request (&optional task)
+  "Leave TASK's pull request to its agent, or take it back.
+Left, Roost tells the agent when a check fails on it, a review thread
+waits on it or it conflicts with the branch it merges into, in one line
+of its own, as \\[roost-send] would have you: once for each, while the
+agent rests at its prompt and you are not at its terminal, and at most
+five times for each kind.  Until the agent has had its turn, the pull
+request doesn't wait on you; merging it stays yours.  It works with any
+agent, while Emacs runs.  `roost-leave-pull-requests' leaves those of
+new tasks."
+  (interactive)
+  (setq task (roost--choose task))
+  (roost--refuse-conversation task "has no pull request")
+  (let ((name (roost--field task 'name))
+        (key (roost--key task))
+        (on (not (roost--left-p task))))
+    (roost--act task "leave" `((on . ,(if on t :false)))
+                (lambda (_)
+                  (remhash key roost--untold)
+                  (message (if on
+                               "Roost tells %s's agent when its pull request needs work"
+                             "%s's pull request waits on you again")
+                           name)))))
 
 (defun roost--conflict-reason (task)
   "What TASK's work conflicts with, on one line, or nil."
@@ -10338,6 +10603,9 @@ there are no tasks at all."
     ["Details" roost-task-info :active (roost--menu-applies-p 'roost-task-info)]
     ["Rename…" roost-rename :active (roost--menu-applies-p 'roost-rename)]
     ["Branch to merge into…" roost-retarget :active (roost--menu-applies-p 'roost-retarget)]
+    ["Leave pull request to its agent" roost-leave-pull-request
+     :active (roost--menu-applies-p 'roost-leave-pull-request)
+     :style toggle :selected (when-let* ((task (ignore-errors (roost--task-at-point)))) (roost--left-p task))]
     ["Copy attach command" roost-copy-attach-command
      :active (roost--menu-applies-p 'roost-copy-attach-command)])
   "Menu items acting on the task at point.")
@@ -10381,7 +10649,8 @@ With no task at all, none of the task commands do."
 ;; `roost--stop-inapt-p': older transient doesn't say which entry it asks about.
 (dolist (command '(roost-open-task roost-shell roost-files roost-send roost-task-info roost-review
                    roost-diff roost-mark-looked roost-update roost-pr roost-merge-retire roost-retire roost-forget
-                   roost-stop roost-resume roost-goto-note roost-rename roost-retarget roost-compare-attempts))
+                   roost-stop roost-resume roost-goto-note roost-rename roost-retarget roost-compare-attempts
+                   roost-leave-pull-request))
   (defalias (intern (format "roost--%s-inapt-p" (string-remove-prefix "roost-" (symbol-name command))))
     (lambda () (roost--dispatch-inapt-p command))
     (format "Whether `%s' does not apply to the task of `roost-dispatch'." command)))
@@ -10418,7 +10687,7 @@ Unknown Git statistics count as making sense."
       ;; Retires the task, or discards work merged nowhere.
       ('roost-retire (and (not active) (not (roost--agent-work-left task))))
       ('roost-goto-note (and worktree (roost--task-notes task) t))
-      ('roost-retarget (not (roost--conversation-p task)))
+      ((or 'roost-retarget 'roost-leave-pull-request) (not (roost--conversation-p task)))
       ;; A terminal attaches to an agent's window, while there is one.
       ('roost-copy-attach-command (and (roost--field task 'live) t))
       ;; With the other attempts at its prompt, while there are any.
@@ -10513,6 +10782,7 @@ terminal or worktree, or ask which task."
     ("=" "Compare attempts" roost-compare-attempts :inapt-if roost--compare-attempts-inapt-p)]
    ["Finish"
     ("P" "Pull request" roost-pr :inapt-if roost--pr-inapt-p)
+    ("L" "Leave it to agent, or not" roost-leave-pull-request :inapt-if roost--leave-pull-request-inapt-p)
     ("m" "Merge and retire" roost-merge-retire :inapt-if roost--merge-retire-inapt-p)
     ("x" "Retire or discard" roost-retire :inapt-if roost--retire-inapt-p)
     ("X" "Forget" roost-forget :inapt-if roost--forget-inapt-p)]
@@ -10552,6 +10822,7 @@ terminal or worktree, or ask which task."
   "u" #'roost-update
   "R" #'roost-rename
   "B" #'roost-retarget
+  "L" #'roost-leave-pull-request
   "=" #'roost-compare-attempts
   "I" #'roost-task-panel-mode
   ;; Commands beyond this task, as in the dashboard and sidebar.
@@ -11476,6 +11747,19 @@ EVIDENCE means results stand above it, and its heading says whose it is."
       (when (and (not expanded) (not (equal preview reply)))
         (roost--insert-reply-toggle reply nil)))))
 
+(defun roost--left-detail (task)
+  "Whether TASK's pull request is left to its agent, for its details.
+With the key that changes it, and what Roost last told the agent."
+  (let ((key (propertize "L" 'face 'roost-key)))
+    (if (not (roost--left-p task))
+        (format "waits on you when it needs work (%s leaves it to its agent)" key)
+      (concat (format "left to its agent, which Roost tells when it needs work (%s takes it back)" key)
+              (when-let* ((last (car (last (append (roost--field task 'prTold) nil))))
+                          (said (alist-get 'said last))
+                          (at (roost--time (alist-get 'at last))))
+                (format "; told at %s: %s" (format-time-string "%H:%M" at)
+                        (string-remove-prefix "Roost: " said)))))))
+
 (defun roost--insert-details (task width &optional under)
   "Insert where TASK's work lives, in WIDTH columns.
 UNDER means under the line that folds it, which is its heading."
@@ -11492,7 +11776,11 @@ UNDER means under the line that folds it, which is its heading."
                                             (format " (%s gives it a branch to merge into)" retarget))
                                           (if-let* ((other (roost--other-branch task)))
                                               (format "; the worktree is on %s" (roost--branch-label other))
-                                            "")))))
+                                            "")))
+                           ;; Whose turn it is when a check fails or a thread
+                           ;; waits, once there is one, or it is left already.
+                           ,@(when (or (roost--left-p task) (roost--field task 'pr))
+                               `(("Pull request" . ,(roost--left-detail task))))))
                      ;; One of several tasks a draft made from one prompt.
                      ,@(when-let* ((attempt (roost--attempt-detail task)))
                          `(("Attempt" . ,attempt)))
@@ -11658,6 +11946,7 @@ are told apart."
   "u" #'roost-update
   "R" #'roost-rename
   "B" #'roost-retarget
+  "L" #'roost-leave-pull-request
   "=" #'roost-compare-attempts
   "n" #'roost-next-waiting
   "/" #'roost-search

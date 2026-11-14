@@ -98,6 +98,10 @@ ROOST_TEST_MATCH, a regexp, keeps to the tests whose names match it."
          (roost--merges-reported (make-hash-table :test 'equal))
          (roost--seen (make-hash-table :test 'equal))
          (roost--turns-sent (make-hash-table :test 'equal))
+         (roost--telling (make-hash-table :test 'equal))
+         (roost--untold (make-hash-table :test 'equal))
+         (roost--told-here (make-hash-table :test 'equal))
+         (roost--sent-at (make-hash-table :test 'equal))
          (roost--workload nil)
          (roost--errors (make-hash-table :test 'equal))
          (roost--installed (make-hash-table :test 'equal))
@@ -11278,6 +11282,197 @@ field (FIELD . :none) is left out."
        ;; Forgotten with the task.
        (roost--apply-snapshot "dev" nil)
        (should (eq (gethash '("dev" "0123456789abcdef") roost--pr-verdicts 'gone) 'gone)))))))
+
+;;;; A pull request left to its agent
+
+(defmacro roost-test--telling (requests &rest body)
+  "Run BODY with what Roost asks hosts kept in REQUESTS, newest first.
+Each is (ACTION PARAMETERS SUCCESS FAILURE), and nobody watches a task."
+  (declare (indent 1))
+  `(cl-letf (((symbol-function 'roost--request)
+              (lambda (_host action parameters success &optional failure &rest _)
+                (push (list action parameters success failure) ,requests)))
+             ((symbol-function 'roost--watched-task) #'ignore)
+             ((symbol-function 'roost--redraw) #'ignore))
+     ,@body))
+
+(defun roost-test--tells (requests)
+  "The parameters of each time Roost told an agent, among REQUESTS."
+  (mapcar #'cadr (seq-filter (lambda (request) (equal (car request) "tell")) requests)))
+
+(defun roost-test--left-task (&rest status)
+  "A task as `roost-test--turn-task' makes it, its pull request left to its agent."
+  (append '((prLeft . t) (prLeftAt . "2026-10-03T19:00:00+00:00")) (apply #'roost-test--turn-task status)))
+
+(ert-deftest roost-tells-the-agent-of-a-pull-request-left-to-it ()
+  ;; What would wait on you goes to the agent instead, once, in words its
+  ;; host writes: Emacs says only what, of which pull request, and how many.
+  (roost-test--isolated
+   (let (requests)
+     (roost-test--telling requests
+       (let* ((failed `((checks . ((passing . 2) (failing . 1) (pending . 0))) (failedAt . ,(roost-test--ago 300))))
+              (task (roost--cache-task "dev" (apply #'roost-test--left-task failed))))
+         (should (equal (roost-test--tells requests)
+                        '(((id . "0123456789abcdef") (verdict . "ci failed") (key . "a1") (number . 12)
+                           (count . 1) (gitlab . :false)))))
+         ;; Its agent's turn, so no word on its row, nothing to notify of,
+         ;; and nothing asked twice while its host has yet to answer.
+         (should-not (roost--turn task))
+         (should-not (roost--news-turn task))
+         (should (equal (roost--status-name task) "ready"))
+         (roost--cache-task "dev" (apply #'roost-test--left-task failed))
+         (should (= (length (roost-test--tells requests)) 1))
+         ;; Told, as its record says: not again, and its agent's for the
+         ;; two minutes an agent takes to start, then yours.
+         (let ((told (lambda (ago)
+                       `(prTold . (((number . 12) (verdict . "ci failed") (key . "a1")
+                                    (at . ,(roost-test--ago ago)) (said . "Roost: A check failed on #12. Fix it.")))))))
+           (funcall (nth 2 (car requests))
+                    (append (list (funcall told 5) '(prLeftAt . "2026-10-03T19:30:00+00:00"))
+                            (apply #'roost-test--left-task failed)))
+           (should (= (length (roost-test--tells requests)) 1))
+           (should-not (roost--turn (gethash '("dev" "0123456789abcdef") roost--tasks)))
+           ;; Its agent did something since and rests with it as it was,
+           ;; or is gone: yours at once.
+           (let ((since (append (list (funcall told 5) '(prLeftAt . "2026-10-03T19:35:00+00:00"))
+                                (apply #'roost-test--left-task failed))))
+             (setf (alist-get 'updatedAt since) (roost-test--ago 1))
+             (should (roost--agents-turn-p (cons '(updatedAt . "2026-10-03T20:00:00+00:00") since) "ci failed"))
+             (should-not (roost--agents-turn-p since "ci failed"))
+             (should-not (roost--agents-turn-p (cons '(live) since) "ci failed")))
+           ;; By this machine's clock, where it heard so; another Emacs
+           ;; goes by when the record says.
+           (clrhash roost--told-here)
+           (setq task (roost--cache-task "dev" (append (list (funcall told 600)
+                                                             '(prLeftAt . "2026-10-03T19:40:00+00:00"))
+                                                       (apply #'roost-test--left-task failed))))
+           (should (equal (roost--turn task) "ci failed"))
+           (should (= (length (roost-test--tells requests)) 1))
+           ;; Its next push fails too: another thing to tell.
+           (roost--cache-task "dev" (append (list (funcall told 600) '(prLeftAt . "2026-10-03T19:40:00+00:00")
+                                                  '(pr . ((number . 12) (state . "OPEN") (head . "b2"))))
+                                            (apply #'roost-test--left-task '(head . "b2") failed)))
+           (should (equal (alist-get 'key (car (roost-test--tells requests))) "b2"))))))))
+
+(ert-deftest roost-leaves-a-pull-request-to-you-unless-it-can-tell-its-agent ()
+  (roost-test--isolated
+   (let ((failed `((checks . ((passing . 2) (failing . 1) (pending . 0))) (failedAt . ,(roost-test--ago 300))))
+         requests)
+     (roost-test--telling requests
+       (cl-flet ((yours (&rest fields)
+                   (remhash '("dev" "0123456789abcdef") roost--tasks)
+                   (let ((task (roost--cache-task "dev" (append fields (apply #'roost-test--left-task failed)))))
+                     (should-not (roost-test--tells requests))
+                     (should (equal (roost--turn task) "ci failed")))))
+         ;; Not left to its agent at all.
+         (yours '(prLeft))
+         ;; An agent that isn't there, or that you stopped mid-turn.
+         (yours '(live))
+         (yours '(lastEvent . "Interrupt"))
+         ;; Told as often as Roost tells an agent of one thing.
+         (yours `(prTold . ,(mapcar (lambda (n) `((number . 12) (verdict . "ci failed") (key . ,(format "c%d" n))
+                                                  (at . ,(roost-test--ago 900))))
+                                    (number-sequence 1 roost--told-most))))
+         ;; You are at its terminal, where you may be typing.
+         (cl-letf (((symbol-function 'roost--watched-task)
+                    (lambda () (gethash '("dev" "0123456789abcdef") roost--tasks))))
+           (yours))
+         ;; You sent it a prompt a moment ago, which its host has yet to
+         ;; say it has; or you are writing it one.
+         (puthash '("dev" "0123456789abcdef") (- (float-time) 5) roost--sent-at)
+         (yours)
+         (clrhash roost--sent-at)
+         (with-temp-buffer
+           (setq roost--send-task (roost-test--task))
+           (setf (alist-get 'host roost--send-task) "dev")
+           (yours)))
+       ;; Its host refuses, as when the agent started meanwhile: yours,
+       ;; said once, and not asked again for the same failure.
+       (remhash '("dev" "0123456789abcdef") roost--tasks)
+       (roost--cache-task "dev" (apply #'roost-test--left-task failed))
+       (should (= (length (roost-test--tells requests)) 1))
+       (funcall (nth 3 (car requests)) "The agent is not at rest")
+       (let ((task (roost--cache-task "dev" (apply #'roost-test--left-task failed))))
+         (should (= (length (roost-test--tells requests)) 1))
+         (should (equal (roost--turn task) "ci failed")))
+       ;; Left afresh, as by another Emacs, it is another thing to tell.
+       (roost--cache-task "dev" (append '((prLeftGen . "0a1b2c3d4e5f") (prLeftAt . "2026-10-03T19:10:00+00:00"))
+                                        (apply #'roost-test--left-task failed)))
+       (should (= (length (roost-test--tells requests)) 2))
+       (funcall (nth 3 (car requests)) "The agent is not at rest")
+       ;; Nor is it its agent's because its host recorded the telling
+       ;; before the paste that failed.
+       (let ((task (roost--cache-task
+                    "dev" (append `((prTold . (((number . 12) (verdict . "ci failed") (key . "a1")
+                                                (at . ,(roost-test--ago 5)))))
+                                    (prLeftGen . "0a1b2c3d4e5f") (prLeftAt . "2026-10-03T19:30:00+00:00"))
+                                  (apply #'roost-test--left-task failed)))))
+         (should (equal (roost--turn task) "ci failed")))))))
+
+(ert-deftest roost-tells-the-agent-of-review-threads-new-to-it ()
+  ;; Once of the threads there are, and then only of a comment that came
+  ;; after the agent last did anything: its own answers are no news to it.
+  (roost-test--isolated
+   (let (requests)
+     (roost-test--telling requests
+       (cl-flet ((threads (latest &rest fields)
+                   (remhash '("dev" "0123456789abcdef") roost--tasks)
+                   (roost--cache-task "dev" (append fields
+                                                    (roost-test--left-task
+                                                     '(threads . 2) `(threadAt . ,(roost-test--ago 900))
+                                                     `(threadLatest . ,latest))))))
+         (threads "2026-10-03T19:59:00Z")
+         (should (equal (mapcar (lambda (field) (alist-get field (car (roost-test--tells requests))))
+                                '(verdict key count))
+                        '("comments" "2026-10-03T19:59:00Z" 2)))
+         (let ((told '(prTold . (((number . 12) (verdict . "comments") (key . "2026-10-03T19:59:00Z")
+                                  (at . "2026-10-03T19:59:30+00:00"))))))
+           ;; It answered one and left it open, before it rested at 20:00.
+           (should (equal (roost--turn (threads "2026-10-03T19:59:50Z" told)) "comments"))
+           (should (= (length (roost-test--tells requests)) 1))
+           ;; A reviewer wrote since.
+           (clrhash roost--telling)
+           (threads "2026-10-03T20:05:00Z" told)
+           (should (equal (alist-get 'key (car (roost-test--tells requests))) "2026-10-03T20:05:00Z"))))))))
+
+(ert-deftest roost-tells-the-agent-of-a-conflicting-pull-request ()
+  (roost-test--isolated
+   (let (requests)
+     (roost-test--telling requests
+       (roost--cache-task "dev" (roost-test--left-task '(mergeable . "CONFLICTING")))
+       (should (equal (mapcar (lambda (field) (alist-get field (car (roost-test--tells requests))))
+                              '(verdict key number count))
+                      '("conflicts" "a1" 12 nil)))
+       ;; Work that conflicts with no pull request is yours to bring up to date.
+       (setq requests nil)
+       (remhash '("dev" "0123456789abcdef") roost--tasks)
+       (roost--cache-task "dev" (append '((prLeft . t) (conflicts "a.py") (dirty) (ahead . 1) (live . t)
+                                          (seen . "2026-10-03T20:00:00+00:00"))
+                                        (roost-test--task)))
+       (should-not (roost-test--tells requests))))))
+
+(ert-deftest roost-leave-pull-request-asks-its-host-and-keeps-the-newer-word ()
+  (roost-test--isolated
+   (let (requests)
+     (roost-test--telling requests
+       (let ((task (roost--cache-task "dev" (roost-test--task))))
+         (roost-leave-pull-request task)
+         (should (equal (car (car requests)) "leave"))
+         (should (eq (alist-get 'on (cadr (car requests))) t))
+         (funcall (nth 2 (car requests))
+                  (append '((prLeft . t) (prLeftAt . "2026-10-03T21:00:00+00:00")) (roost-test--task)))
+         (setq task (gethash '("dev" "0123456789abcdef") roost--tasks))
+         (should (roost--left-p task))
+         (should (string-search "takes it back" (roost--left-detail task)))
+         ;; A reply read before that, as a poll's, doesn't take it back.
+         (should (roost--left-p (roost--cache-task "dev" (roost-test--task))))
+         ;; Left, the command takes it back.
+         (roost-leave-pull-request (gethash '("dev" "0123456789abcdef") roost--tasks))
+         (should (eq (alist-get 'on (cadr (car requests))) :false)))
+       ;; A conversation has none.
+       (should-error (roost-leave-pull-request
+                      (roost--cache-task "dev" (append '((conversation . t)) (roost-test--task "fedcba9876543210"))))
+                     :type 'user-error)))))
 
 (ert-deftest roost-the-panel-says-what-a-pull-request-waits-for ()
   (roost-test--isolated

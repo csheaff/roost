@@ -444,16 +444,18 @@ Larger, or undecided.
 - **Answering the agent's prompts from Roost** (approval inboxes, approve
   keys). The agent's own terminal stays the way you talk to it, so its
   menus and new features work on day one. Calyx and octomux have inboxes.
-- **Watching a pull request for the agent:** review comments and failed
-  checks turned into prompts, or fixed on their own. The agents do this:
-  Claude Code can subscribe a session to its pull request's reviews and CI,
-  and autofix it, though in 2.1.302 that comes from a tool
-  (`subscribe_pr_activity`) a plain CLI session may not have. Roost keeps
-  `P`, the `#12` line with checks and review, and `x` once it merges; when
-  the agent's watcher sets it to work, the status lights show it like any
-  other turn. Saying when a pull request waits on you is Roost's
-  (`to merge`, `ci failed`, `comments`), whether or not the agent watches;
-  fixing what it finds is the agent's.
+- **Fixing a pull request for the agent, or reading it what a reviewer
+  wrote.** Fixing what a failed check or a review finds is the agent's, and
+  so is reading it. Roost says whose turn it is, and for a pull request you
+  left to its agent (`L`, `roost-leave-pull-requests`) it says so to the
+  agent, in one line of its own, with every agent alike. That was not
+  planned here until 2026-11-14: it was left to each agent's own watcher,
+  which in a terminal only Claude Code has, and only once you type `/loop`.
+  An agent that does watch its own pull request starts within the two
+  minutes Roost gives it, and is told nothing. What it may grow, if use
+  asks for it: telling while Emacs is closed, which needs something always
+  running on the host, and a model of it beside the others in
+  `test/formal`.
 - **`n` picking by a reckoning of its own.** `n` keeps a plain order,
   permission requests first, and says where it went and why rather than
   choose more cleverly out of sight. In a rescue-robot simulation, a key that chose the next robot for

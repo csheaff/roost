@@ -561,6 +561,38 @@ nothing is left uncommitted or in the agent's own worktrees. A commit made there
 as by GitHub's Update branch button or an applied suggestion, isn't one it lacks:
 Roost fetches it, once, to compare it with the branch.
 
+### A pull request left to its agent
+
+`L` leaves a task's pull request to its agent, and `L` again takes it back;
+`roost-leave-pull-requests` leaves those of new tasks. Left, a failed check,
+an unresolved review thread or a conflict with the branch it merges into
+doesn't wait on you first. After the same two minutes, Roost tells the
+agent, in one line of its own:
+
+    Roost: A check failed on #12. Fix it.
+
+The agent's terminal shows it among your prompts, and the agent goes to work
+as if you had pressed `e`. The task panel says the pull request is left to
+its agent and what Roost last told it. It works the same with every agent,
+as Roost does the telling.
+
+- Roost writes the line itself, from what waits and two numbers. What a
+  reviewer wrote isn't in it: the agent reads that from GitHub or GitLab.
+- It goes once for each thing: a failed check or a conflict once for each
+  commit the agent pushes, review threads once, and after that only when a
+  comment came since the agent last did anything.
+- Only while the agent rests at its prompt after a turn it ended itself,
+  and you aren't at its terminal, writing it a prompt, or just done
+  sending one. One that asks, one you stopped and one that has exited wait
+  for you.
+- Five times at most for each kind on one pull request. After that, or when
+  the agent stops with the pull request as it was, the task waits on you as
+  before, with its word and a notification. `L` twice starts the count again.
+- Roost never merges: `to merge` is always yours.
+- Emacs has to be running, as only Emacs asks GitHub or GitLab.
+- Roost can't see a prompt you left half typed in the agent's terminal
+  before going elsewhere: the line would join it.
+
 ### Work that is merged
 
 A task whose work is merged, on GitHub or GitLab or into the branch it
@@ -647,6 +679,7 @@ counted once you stop and resume it (`K`, then `s`).
 | `i` | `roost-task-info` | The task's next step, prompt, your latest prompt, changes, checks, open review threads, the agent's latest reply and details |
 | `R` | `roost-rename` | Rename the task, in Roost, its tab or perspective, and its agent's tmux window; its branch and worktree keep the name it started with |
 | `B` | `roost-retarget` | Change the branch the task starts from and merges into, as after you rebased its branch onto another: `m`, `u` and its counts follow; no commit moves, and a pull request already open keeps its base |
+| `L` | `roost-leave-pull-request` | Leave the task's pull request to its agent, or take it back: left, Roost tells the agent itself when a check fails, a review thread waits or it conflicts, once for each ([below](#a-pull-request-left-to-its-agent)) |
 | `l` | `roost-switch-task` | Choose a task by name, waiting tasks first |
 | `/` | `roost-search` | Find messages in your tasks' conversations, retired tasks' too; `RET` opens a live task, `TAB` shows more of a message (its first 1,500 characters) |
 | `b` | `roost-sidebar-mode` | Keep the task list at the left of the frame |
@@ -904,6 +937,9 @@ header line. A failed creation keeps the draft.
   merged, a dash is a host out of reach, a small dot waits for nothing).
   The colours are made from your theme's, and no text differs; nil draws
   the same words without any of it, each light a dot.
+- `roost-leave-pull-requests` (nil): leave each new task's pull request to
+  its agent, as `L` does for one task: Roost tells the agent when it needs
+  work, rather than wait for you. For tasks started after you turn it on.
 - `roost-remote-control` (nil): start each Claude Code task with Remote
   Control (`--remote-control`, `--name`), named for the task, so it shows
   in the Claude app and at claude.ai/code, which notify your phone when
