@@ -8288,6 +8288,10 @@ that takes it up is at work."
   (and turn
        (or (roost--tell-due-p task turn)
            (when-let* ((entry (and (roost--left-p task) (roost--agent-running-p task)
+                                   ;; Not what its host recorded and then
+                                   ;; failed to paste: that waits on you.
+                                   (not (equal (gethash (roost--key task) roost--untold)
+                                               (roost--tell-occurrence task turn)))
                                    (roost--told-entry task turn)))
                        ;; An agent that has done something since, by its
                        ;; host's clock, had its turn: what is left is yours.

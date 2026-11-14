@@ -4561,7 +4561,6 @@ TOLD = ("ci failed", "comments", "conflicts")
 # or two programs answering each other in a thread, stop there, and the
 # pull request is yours until you leave it to the agent afresh.
 TOLD_MOST = 5
-TOLD_KEPT = 24
 TOLD_KEY = re.compile(r"[0-9A-Za-z:.+-]{1,64}")
 TOLD_NUMBERS = 10 ** 9
 TOLD_COUNTS = 10 ** 4
@@ -4665,11 +4664,10 @@ def tell(store, task, verdict, key, number, count=None, gitlab=False):
     # Recorded before it is pasted, and kept whatever comes of the paste: a
     # helper that dies between the two, or a tmux that took the line and
     # said nothing, leaves an agent that may not have been told, which then
-    # waits on you, and never one told twice. Those of this pull request all
-    # stay, as they are counted: only what was told of others goes.
-    others = [entry for entry in entries if entry["number"] != number]
-    task["prTold"] = (others[-TOLD_KEPT:] + [entry for entry in entries if entry["number"] == number]
-                      + [dict(number=number, verdict=verdict, key=key, at=now(), said=words)])
+    # waits on you, and never one told twice. All of them stay until the
+    # pull request is left afresh, as they are what is counted and told
+    # once: five of each kind for each pull request the task has had.
+    task["prTold"] = entries + [dict(number=number, verdict=verdict, key=key, at=now(), said=words)]
     task["prLeftAt"] = now()
     store.save(task)
     # The ID is this telling's alone, of this time the pull request was

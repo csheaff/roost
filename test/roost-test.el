@@ -11394,6 +11394,14 @@ Each is (ACTION PARAMETERS SUCCESS FAILURE), and nobody watches a task."
        (funcall (nth 3 (car requests)) "The agent is not at rest")
        (let ((task (roost--cache-task "dev" (apply #'roost-test--left-task failed))))
          (should (= (length (roost-test--tells requests)) 1))
+         (should (equal (roost--turn task) "ci failed")))
+       ;; Nor is it its agent's because its host recorded the telling
+       ;; before the paste that failed.
+       (let ((task (roost--cache-task
+                    "dev" (append `((prTold . (((number . 12) (verdict . "ci failed") (key . "a1")
+                                                (at . ,(roost-test--ago 5)))))
+                                    (prLeftAt . "2026-10-03T19:30:00+00:00"))
+                                  (apply #'roost-test--left-task failed)))))
          (should (equal (roost--turn task) "ci failed")))))))
 
 (ert-deftest roost-tells-the-agent-of-review-threads-new-to-it ()
