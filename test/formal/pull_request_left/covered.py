@@ -20,6 +20,9 @@ COVERED = {
     "scripts/roost_remote.py": [
         # The helper's side, in every model.
         "leave", "tell", "told", "counted", "send",
+        # Poll and PollAsks: the record read under rpc's lock, and the forge
+        # asked once it is let go.
+        "rpc", "check_pull_requests",
     ],
     "roost.el": [
         # What Emacs reads of its copy.

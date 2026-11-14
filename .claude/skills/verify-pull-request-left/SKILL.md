@@ -5,8 +5,8 @@ description: >
   `tell`, and Emacs deciding when to tell the agent and whose turn it is,
   with replies late, lost or out of order, a helper killed between the
   record and the paste, and the agent, you and a reviewer acting at once.
-  Use before committing a change to leave, tell, told, counted or send in
-  scripts/roost_remote.py, or to roost--tell-due-p, roost--agents-turn-p,
+  Use before committing a change to leave, tell, told, counted, send,
+  check_pull_requests or rpc's lock around `list` in scripts/roost_remote.py, or to roost--tell-due-p, roost--agents-turn-p,
   roost--tell-agent, roost--tell-key, roost--tell-occurrence, roost--told,
   roost--yours, roost--prompting-p, roost--newer-left, roost--pr-verdict,
   roost--pr-status, roost-leave-pull-request or roost--cache-task in
