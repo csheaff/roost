@@ -99,6 +99,7 @@ never.
 | `Merge` | `roost--cache-task`: `roost--newer-events`, then `roost--newer-left`, and `prStatus` from the reply that has it |
 | `Deliver` with `mine` | the reply to your own `L`, which forgets `roost--untold` |
 | `GraceEnds`, `expired` | `roost--pr-grace` over, by `roost--told-here` or the entry's time |
+| `Poll`, `PollAsks`, `polled` | rpc `list`: the record read under the lock, and `check_pull_requests` once it is let go; one step unless a config has `PollSplit` |
 | `OtherAsks` | another Emacs's `tell`, of what the forge says then |
 
 Three configs, as the whole is too large for one:
@@ -110,6 +111,15 @@ Three configs, as the whole is too large for one:
   reviewer's, and no push or prompt of your own.
 - `LeftPullRequestHost.cfg`: the helper alone, asked by any Emacs at any
   time and killed at any step: two pushes, `L` twice, three tellings.
+
+Checked once and in no config, for its two minutes: `LeftPullRequest.cfg`
+with `PollSplit` passes (60 million states).
+
+Assumed: the forge's clock and the host's agree. A comment's time is the
+forge's and `updatedAt` the host's, and `roost--tell-due-p` compares them:
+on a host whose clock is behind by more than the rest of the agent's turn,
+its own answer reads as newer than its last event, and it is told of it.
+The model has one clock.
 
 Left out: conflicts, which are told as a failed check is, by the head;
 `to merge`, which is never the agent's; you at the task's terminal, a draft
@@ -132,7 +142,7 @@ the action and point its comment at the code that rules the step out.
 
 ### Findings
 
-Open, both of one cause: Emacs judges by the copy it holds, and `tell`
+Open, all of one cause: Emacs judges by the copy it holds, and `tell`
 doesn't know what that copy was.
 
 - `LeftPullRequest.finding-told-after-a-turn.cfg` (NothingSinceJudged). A
@@ -149,6 +159,13 @@ doesn't know what that copy was.
   holds no word of the telling; Emacs then takes the agent's own answer
   for the first news of the thread, and the agent is told of it. The fix
   above ends this path.
+- `LeftPullRequestThreads.finding-answered-while-a-list-asks.cfg`
+  (ThreadsNoEcho). With no prompt of yours: a list reads the record of an
+  agent at rest, just told of a thread. While the list asks the forge, the
+  agent takes the line, answers in the thread and rests again. Emacs then
+  holds its answer beside the time of its event before, which makes the
+  answer news, and the agent is told of it. It needs a whole turn within
+  one list's asking. The fix above ends this too: the record has moved.
 
 Fixed before the model, each kept as the variant that undoes it:
 `LeftPullRequestHost.record-after-paste.cfg`,

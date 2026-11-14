@@ -34,7 +34,8 @@ CONSTANTS
   Kills,      \* a helper killed between the record and the paste, or after it
   OtherEmacs, \* `tell` asked by another Emacs, with no guard of this one's
   ThisEmacs,  \* this Emacs, with its cache and replies; without, only the host
-  LateTake    \* the helper takes a request after Emacs stopped waiting for it
+  LateTake,   \* the helper takes a request after Emacs stopped waiting for it
+  PollSplit   \* a list reads the record, then asks the forge, with the lock let go between
 
 None == 0
 Ci == "ci failed"
@@ -51,6 +52,7 @@ VARIABLES
   reqs,      \* every `tell` request, and what became of it
   waits,     \* those this Emacs still waits on
   mail,      \* replies on their way to Emacs
+  polled,    \* the record a list has read, before it asks the forge
   cache,     \* `roost--tasks`: the record and what the forge said, as Emacs has them
   seenLeft,  \* the newest `prLeftAt` Emacs has been given
   telling,   \* `roost--telling`
@@ -58,7 +60,7 @@ VARIABLES
   expired,   \* tellings whose two minutes are over
   pushes, comments, leaves, polls, prompts
 
-vars == <<clock, rec, pr, own, inbox, sendIds, pastes, reqs, waits, mail, cache, seenLeft,
+vars == <<clock, rec, pr, own, inbox, sendIds, pastes, reqs, waits, mail, polled, cache, seenLeft,
           telling, untold, expired, pushes, comments, leaves, polls, prompts>>
 
 Reqs == 1..Len(reqs)
@@ -88,7 +90,7 @@ Entries(c, t) == {i \in ToldOf(c, t) : c.told[i].key = Key(c, t)}  \* `roost--to
 Due(c) ==                                                 \* `roost--tell-due-p`
   LET t == Turn(c) IN
   /\ c.left /\ t # "none"
-  /\ c.status = "ready"
+  /\ c.status = "ready" /\ ~c.intr   \* `roost--status-name`: "interrupted" is not "ready"
   /\ Entries(c, t) = {}
   /\ Cardinality(ToldOf(c, t)) < Most
   /\ (t # Comments \/ ToldOf(c, t) = {} \/ ~NewerCommentsOnly \/ c.updatedAt < c.latest)
@@ -133,7 +135,7 @@ Snap(r, at, full, mine) ==
 -----------------------------------------------------------------------------
 (* The agent, you and the reviewer                                         *)
 
-World == UNCHANGED <<sendIds, pastes, reqs, waits, mail, cache, seenLeft, telling, untold, expired>>
+World == UNCHANGED <<sendIds, pastes, reqs, waits, mail, polled, cache, seenLeft, telling, untold, expired>>
 
 \* Its UserPromptSubmit hook: whatever was pasted is one turn's prompt.
 AgentTakes ==
@@ -207,18 +209,31 @@ Leave ==
      THEN \E mine \in (IF OtherEmacs THEN BOOLEAN ELSE {TRUE}) :
             mail' = mail \cup {Snap(rec', None, FALSE, mine)}
      ELSE UNCHANGED mail
-  /\ UNCHANGED <<pr, own, inbox, sendIds, pastes, reqs, waits, cache, seenLeft, telling, untold, expired,
+  /\ UNCHANGED <<pr, own, inbox, sendIds, pastes, reqs, waits, polled, cache, seenLeft, telling, untold, expired,
                  pushes, comments, polls, prompts>>
 
 \* A list that asks the forge too.  A quiet one says no more of the record
-\* than the replies to `leave` and `tell` do.
+\* than the replies to `leave` and `tell` do.  rpc reads the record under
+\* the lock and asks the forge once it has let go (`check_pull_requests`):
+\* with PollSplit, anything may happen between the two.
 Poll ==
-  /\ ThisEmacs /\ ~Busy /\ polls < MaxPolls
+  /\ ThisEmacs /\ ~Busy /\ polls < MaxPolls /\ polled = {}
   /\ polls' = polls + 1
-  /\ clock' = clock + 1
-  /\ mail' = mail \cup {Snap(rec, clock + 1, TRUE, FALSE)}
+  /\ IF PollSplit
+     THEN polled' = {rec} /\ UNCHANGED <<clock, mail>>
+     ELSE /\ clock' = clock + 1
+          /\ mail' = mail \cup {Snap(rec, clock + 1, TRUE, FALSE)}
+          /\ UNCHANGED polled
   /\ UNCHANGED <<rec, pr, own, inbox, sendIds, pastes, reqs, waits, cache, seenLeft, telling, untold, expired,
                  pushes, comments, leaves, prompts>>
+
+PollAsks ==
+  /\ \E r \in polled :
+       /\ clock' = clock + 1
+       /\ mail' = mail \cup {Snap(r, clock + 1, TRUE, FALSE)}
+  /\ polled' = {}
+  /\ UNCHANGED <<rec, pr, own, inbox, sendIds, pastes, reqs, waits, cache, seenLeft, telling, untold, expired,
+                 pushes, comments, leaves, polls, prompts>>
 
 Handled(r, result) ==
   reqs' = [reqs EXCEPT ![r].state = "handled", ![r].result = result,
@@ -231,7 +246,7 @@ Recorded(r) ==
                                   ELSE Last(Append(rec.told, Entry(r)), Kept),
                         !.leftAt = clock + 1]
 
-HostQuiet == UNCHANGED <<pr, own, waits, mail, cache, seenLeft, telling, untold, expired,
+HostQuiet == UNCHANGED <<pr, own, waits, mail, polled, cache, seenLeft, telling, untold, expired,
                          pushes, comments, leaves, polls, prompts>>
 
 \* `tell`, to where it writes the record.
@@ -297,7 +312,7 @@ OtherAsks ==
 -----------------------------------------------------------------------------
 (* Emacs                                                                   *)
 
-EmacsQuiet == UNCHANGED <<clock, rec, pr, own, inbox, sendIds, pastes,
+EmacsQuiet == UNCHANGED <<clock, rec, pr, own, inbox, sendIds, pastes, polled,
                           pushes, comments, leaves, polls, prompts>>
 
 Cached(m) ==
@@ -355,7 +370,7 @@ Init ==
   /\ rec = [left |-> FALSE, gen |-> 1, told |-> <<>>, leftAt |-> 0,
             status |-> "ready", intr |-> FALSE, updatedAt |-> 1]
   /\ \E fails \in BOOLEAN : pr = [head |-> 1, failing |-> fails, latest |-> 0]
-  /\ own = {} /\ inbox = FALSE /\ sendIds = {} /\ pastes = <<>> /\ reqs = <<>> /\ waits = {} /\ mail = {}
+  /\ own = {} /\ inbox = FALSE /\ sendIds = {} /\ pastes = <<>> /\ reqs = <<>> /\ waits = {} /\ mail = {} /\ polled = {}
   /\ cache = [left |-> FALSE, gen |-> 1, told |-> <<>>, leftAt |-> 0, status |-> "ready", intr |-> FALSE,
               updatedAt |-> 1, head |-> 1, failing |-> FALSE, latest |-> 0, checkedAt |-> 0]
   /\ seenLeft = 0 /\ telling = <<>> /\ untold = <<>> /\ expired = {}
@@ -364,7 +379,7 @@ Init ==
 Next ==
   \/ AgentTakes \/ AgentPushes \/ AgentAnswers \/ AgentStops \/ AgentExits
   \/ YouInterrupt \/ YouPrompt \/ ReviewerComments
-  \/ Leave \/ Poll \/ OtherAsks
+  \/ Leave \/ Poll \/ PollAsks \/ OtherAsks
   \/ \E r \in Reqs : Take(r) \/ Paste(r) \/ Record(r) \/ Killed(r) \/ Reply(r) \/ NoReply(r)
   \/ \E m \in mail : Deliver(m)  \* or never
   \/ Tells \/ GraceEnds

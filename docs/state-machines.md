@@ -2393,7 +2393,7 @@ line would join it.
 Model: `test/formal/pull_request_left`, by `.claude/skills/verify-pull-request-left`.
 It holds I2 to I7; I1 is `test_an_agent_is_told_only_what_roost_writes_and_only_at_rest`.
 
-Open, found by the model, both of one cause: Emacs judges by the copy it holds, and
+Open, found by the model, all of one cause: Emacs judges by the copy it holds, and
 `tell` doesn't know what that copy was.
 
 - You prompt the agent from where Roost doesn't see it, it takes a turn and rests
@@ -2402,6 +2402,12 @@ Open, found by the model, both of one cause: Emacs judges by the copy it holds, 
 - The same with a thread it answered in that turn, and a paste tmux took and said
   failed: the agent is then told of its own answer
   (`LeftPullRequestThreads.finding-told-of-its-own-answer.cfg`). S4.
+- The same with no prompt of yours: the agent takes what it was told, answers and
+  rests again while a list that read its record before asks the forge
+  (`LeftPullRequestThreads.finding-answered-while-a-list-asks.cfg`). S4.
+
+Assumed, and not in the model: the forge's clock and the host's agree. I4 compares a
+comment's time, the forge's, with `updatedAt`, the host's.
 
 ### Merges reported
 
