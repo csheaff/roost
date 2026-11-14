@@ -170,6 +170,12 @@ KIND is `committed', `uncommitted', `untracked' or `binary'."
      (landed) (dirty) (pr (number . 15) (url . "https://github.com/o/r/pull/15")) (prStatus (state . "MERGED")))
     ("merged, stopped" (status . "stopped") (live) (seen . "2026-10-03T20:00:00+00:00") (ahead . 0) (landed . t)
      (dirty) (diff . ""))
+    ;; `x' offers to stop what it reports in the background, rather than
+    ;; refuse a task its agent will go on reporting work for.
+    ("merged, in the background" (status . "background") (live . t) (ahead . 2) (landed . t) (dirty)
+     (seen . "2026-10-03T20:00:00+00:00") (diff . "1 file +12 −3")
+     (files . ,(roost-sweep--files '("report.py" . committed)))
+     (pr (number . 16) (url . "https://github.com/o/r/pull/16") (state . "MERGED")))
     ("from an issue" (status . "running") (live . t)
      (issue (number . 70) (url . "https://github.com/o/r/issues/70") (title . "Off-by-one scroll")))
     ("from a Jira work item" (status . "ready") (live . t) (seen . "2026-10-03T20:00:00+00:00") (ahead . 1)

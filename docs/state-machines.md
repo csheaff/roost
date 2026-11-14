@@ -894,6 +894,17 @@ What stands may stand long: a subagent declined that calls no tool again, and
 another agent's request (`worker_permission_prompt`, `agent_needs_input`), which no
 tool's event ends, each show `permission` until the turn ends.
 
+A `background_tasks` entry says `{id, type, status, description}`, and its `status` is
+the raw one Claude's task registry holds. A teammate -- a named agent Claude can send
+to -- stays `running` there once its work is done and it idles, and no field tells the
+two apart, so a task whose session has started one reads `background` after every turn
+until the session ends. `x` offers to stop it, in [Asking before
+acting](#asking-before-acting); the status itself stays as Claude reports it. A plain
+subagent ends and leaves the list, so it doesn't do this. Captured from Claude Code
+2.1.322 for roost issue #265: `{"id": "tiet26y2u", "type": "teammate", "status":
+"running", "description": "List scout directory files"}`, on every turn after the
+teammate idled.
+
 Between `SessionEnd` and the process's end, a moment: with `prompt_input_exit`, an
 unrelayed task reads `exited` and a relayed one what it was, and with `other`, both
 read what they were, while the pane is live. `send` reaches an agent on its way
@@ -3224,6 +3235,7 @@ Invariants:
 | Discard, name typed | dry run | branch commit (`expect`), counts (`told`), the offers it named (`offers`) | branch moved, any count higher, an offer it didn't name | a change that adds to no count: a file edited, one swapped for another, a commit amended off the branch; an offer made again under its title with another brief |
 | Discard, y-or-n-p | dry run | the same, all counts 0 | the same: asked again, it wants the name | none: any new file or commit counts |
 | Retire | cache | the offers it named | agent, dirty, unmerged, an offer it didn't name | none: it refuses |
+| Retire, agent in the background | cache | the same | the same, after the `stop` it asked for | none: the stop and the retire are each refused on their own |
 | Merge | cache | branch commit (`branchTip`, as `expect`), once measured; the offers it named | branch moved, just before merging; agent, dirty, conflicts; an offer it didn't name, before merging and again after | a commit before it was measured, which is refused too: the question spoke of what was measured |
 | Stop | cache | nothing | | none that matter |
 | Forget | cache | the offers it named | agent running, an offer it didn't name | none: it refuses |
@@ -3243,12 +3255,18 @@ Commands against what Emacs offers (`roost--action-applies-p`) and what the host
 | update | worktree | | active, dirty, merge under way |
 | pull request | worktree, and commits or a pull request | | dirty |
 | merge | work unmerged, not active, none left by the agent | another branch; dirty offers Magit | branch moved, active, dirty, conflicts; an offer made since you were asked, which after the merge leaves it merged and not retired |
-| retire | not active, none left by the agent | active; else offers discard | active, unmerged, dirty; an offer made since you were asked |
+| retire | not mid-turn, none left by the agent | mid-turn (`starting`, `running`, `permission`); else offers discard | active, unmerged, dirty; an offer made since you were asked |
 | forget | always | | running: stops it first; an offer made since you were asked |
 | discard | always | | branch moved; holds more than you were told; an offer made since you were asked |
 
 No state has no way out, and nothing offered is always refused: a task on another
 branch has `x`, and a task gone has `X`.
+
+An agent that reports work in the background has ended a turn, and that work lives in
+the worktree retiring removes, so `x` offers to stop it rather than refuse: the
+question says it stops the agent, and the host's `stop` goes first, its `retire` after
+the reply. `m` doesn't, leaving that to `x`. Claude counts a teammate it can send to as
+background work once it idles too, so waiting it out needn't end.
 
 A merge refused as moved measures the task, so that the next `m` asks about where it
 is now, watching or not; a removal cut short, which `m` finishes, is measured that far

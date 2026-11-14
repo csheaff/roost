@@ -4544,6 +4544,42 @@ terminal's, on a pty.  Skips the test where it can't be made."
        ;; Not while its agent works.
        (should-error (roost-retire (roost--cache-task "dev" (roost-test--task nil "running"))) :type 'user-error)))))
 
+(ert-deftest roost-x-stops-background-work-before-retiring ()
+  "Its turn has ended, and waiting it out needn't ever end: `x' offers to stop."
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (append '((ahead . 0) (dirty) (landed . t) (live . t))
+                                                (roost-test--task nil "background"))))
+         acted question)
+     (cl-letf (((symbol-function 'roost--act)
+                (lambda (task action &optional _parameters callback &rest _)
+                  (push (cons action (roost--field task 'status)) acted)
+                  ;; Its host stops it, and the retire follows that reply.  A
+                  ;; copy, as the task here goes on reporting background work.
+                  (when (and (equal action "stop") callback)
+                    (funcall callback (cons '(status . "stopped")
+                                            (assq-delete-all 'status (copy-alist task)))))))
+               ((symbol-function 'y-or-n-p) (lambda (prompt &rest _) (setq question prompt) t)))
+       ;; One question, which says the agent stops.
+       (roost-retire task)
+       (should (string-match-p "stopping its agent and removing its worktree" question))
+       (should (equal (nreverse acted) '(("stop" . "background") ("retire" . "stopped"))))
+       ;; Said no: nothing happens.
+       (setq acted nil)
+       (cl-letf (((symbol-function 'y-or-n-p) (lambda (&rest _) nil)))
+         (roost-retire task))
+       (should-not acted))
+     ;; The panel names `x' there, once its work is merged, and the menu
+     ;; offers it.
+     (should (equal (roost--field task 'status) "background"))
+     (should (string-match-p "x stops its background work and retires it"
+                             (or (roost--next-step task) "")))
+     (should (roost--action-applies-p task 'roost-retire))
+     ;; Mid-turn it is still refused, and `K' is the way.
+     (dolist (status '("starting" "running" "permission"))
+       (let ((busy (roost--cache-task "dev" (roost-test--task "f0f0f0f0f0f0f0f0" status))))
+         (should-error (roost-retire busy) :type 'user-error)
+         (should-not (roost--action-applies-p busy 'roost-retire)))))))
+
 (ert-deftest roost-a-forgotten-host-is-no-longer-watched ()
   (roost-test--isolated
    (let* ((roost-hosts '(nil))
