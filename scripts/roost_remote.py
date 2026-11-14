@@ -2447,7 +2447,7 @@ def make_task(store, request, create_id):
     # Its pull request, once it has one, is left to its agent, as `leave`
     # leaves one: whatever the agent, as Roost does the telling.
     if request.get("leavePr") is True and not conversation:
-        task.update(prLeft=True, prLeftAt=now())
+        task.update(prLeft=True, prLeftAt=now(), prLeftGen=uuid.uuid4().hex[:12])
     # The task whose agent offered this one, which shows it under that, and
     # the offer it was made from, which waits no more once it is saved.
     parent, offer = request.get("parent"), text(request.get("offer"))
@@ -4618,6 +4618,8 @@ def leave(store, task, on):
     else:
         task.pop("prLeft", None)
     task.pop("prTold", None)
+    # Left afresh, the same failure is told again, under another send ID.
+    task["prLeftGen"] = uuid.uuid4().hex[:12]
     task["prLeftAt"] = now()
     store.save(task)
     return task
@@ -4656,19 +4658,26 @@ def tell(store, task, verdict, key, number, count=None, gitlab=False):
     # an update left half merged.
     require_not_removing(store, task, "send")
     words = told_words(verdict, number, count, gitlab is True)
-    # The ID is this telling's alone: pasted, with the record of it lost,
-    # as when the helper is killed between the two, it is not pasted again.
-    send(store, task, words,
-         send_id=hashlib.sha256(("%s %d %s %s" % (task["id"], number, verdict, key)).encode()).hexdigest()[:32])
-    # Those of this pull request all stay, as they are counted: only what
-    # was told of others, as of one its worktree's branch had, goes.
+    # Recorded before it is pasted: a helper that dies between the two
+    # leaves an agent that may not have been told, which then waits on you,
+    # and never one told twice. Those of this pull request all stay, as
+    # they are counted: only what was told of others goes.
     others = [entry for entry in entries if entry["number"] != number]
     task["prTold"] = (others[-TOLD_KEPT:] + [entry for entry in entries if entry["number"] == number]
                       + [dict(number=number, verdict=verdict, key=key, at=now(), said=words)])
     task["prLeftAt"] = now()
-    # It went, as a prompt of yours does, and a full disk is no reason to
-    # say otherwise.
-    store.note(task)
+    store.save(task)
+    try:
+        # The ID is this telling's alone, of this time the pull request was
+        # left: a prompt of yours with the same words is another.
+        send(store, task, words, send_id=hashlib.sha256(
+            ("%s %s %d %s %s" % (task["id"], task.get("prLeftGen"), number, verdict, key)).encode()).hexdigest()[:32])
+    except RoostError:
+        # Nothing went: untold, for Emacs to say it waits on you.
+        task["prTold"] = entries
+        task["prLeftAt"] = now()
+        store.note(task)
+        raise
     return task
 
 

@@ -28,6 +28,7 @@ import textwrap
 import threading
 import time
 import unittest
+import unittest.mock
 import uuid
 from unittest.mock import patch
 
@@ -263,6 +264,16 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(self.request("leave", id=task["id"], on=True)["ok"])
         self.assertTrue(self.tell_agent(task, key="e" * 40, count=7)["ok"])
         self.rested(task, "Roost: 7 checks failed on #12")
+        # Of what it was told before, too: pasted again, not only recorded.
+        self.assertTrue(self.tell_agent(task, key="%040d" % 0, count=1)["ok"])
+        self.wait_for_pastes(task, "Roost: A check failed on #12", 2)
+        self.assertEqual(self.pastes(task, "Roost: A check failed on #12"), 2)
+        self.wait(task, "ready", "Stop")
+        # What can't be pasted is not recorded as told.
+        before = roost.Store(str(self.state)).read(task["id"])["prTold"]
+        with unittest.mock.patch.object(roost, "send", side_effect=roost.RoostError("no pane")):
+            self.assertEqual(self.tell_agent(task, key="9" * 40)["error"], "no pane")
+        self.assertEqual(roost.Store(str(self.state)).read(task["id"])["prTold"], before)
         # One you stopped mid-turn waits for you, and so does one that asks,
         # is at work or is gone.
         store = roost.Store(str(self.state))

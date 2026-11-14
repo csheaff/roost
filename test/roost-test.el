@@ -11332,6 +11332,14 @@ Each is (ACTION PARAMETERS SUCCESS FAILURE), and nobody watches a task."
                             (apply #'roost-test--left-task failed)))
            (should (= (length (roost-test--tells requests)) 1))
            (should-not (roost--turn (gethash '("dev" "0123456789abcdef") roost--tasks)))
+           ;; Its agent did something since and rests with it as it was,
+           ;; or is gone: yours at once.
+           (let ((since (append (list (funcall told 5) '(prLeftAt . "2026-10-03T19:35:00+00:00"))
+                                (apply #'roost-test--left-task failed))))
+             (setf (alist-get 'updatedAt since) (roost-test--ago 1))
+             (should (roost--agents-turn-p (cons '(updatedAt . "2026-10-03T20:00:00+00:00") since) "ci failed"))
+             (should-not (roost--agents-turn-p since "ci failed"))
+             (should-not (roost--agents-turn-p (cons '(live) since) "ci failed")))
            ;; By this machine's clock, where it heard so; another Emacs
            ;; goes by when the record says.
            (clrhash roost--told-here)

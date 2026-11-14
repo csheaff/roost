@@ -8287,7 +8287,13 @@ or told it less than `roost--pr-grace' seconds ago, by when an agent
 that takes it up is at work."
   (and turn
        (or (roost--tell-due-p task turn)
-           (when-let* ((entry (and (roost--left-p task) (roost--told-entry task turn)))
+           (when-let* ((entry (and (roost--left-p task) (roost--agent-running-p task)
+                                   (roost--told-entry task turn)))
+                       ;; An agent that has done something since, by its
+                       ;; host's clock, had its turn: what is left is yours.
+                       ((not (when-let* ((told (roost--time (alist-get 'at entry)))
+                                         (event (roost--time (roost--field task 'updatedAt))))
+                               (time-less-p told event))))
                        ;; By this machine's clock when it heard so, where
                        ;; it did: a host's may differ from it by minutes.
                        (seconds (if-let* ((here (gethash (roost--key task) roost--told-here))

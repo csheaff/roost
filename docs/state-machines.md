@@ -2358,9 +2358,11 @@ Invariants:
   while a draft to the task is open, and for 30 s after you send it a prompt, which
   its host has yet to hear the agent took (`roost--prompting-p`).
 - I3. Once for each thing: a head for a failed check or a conflict, the newest
-  comment's time for threads. The record's `prTold` says it was told, and the send
-  ID, made of the task, the number, the verdict and the key, keeps a paste whose
-  record was lost from going twice.
+  comment's time for threads. The record's `prTold` says it was told, written
+  before the paste: a helper killed between the two leaves an agent that may not
+  have been told, which waits on you after two minutes, and never one told twice.
+  The send ID, made of the task, the time it was left (`prLeftGen`), the number,
+  the verdict and the key, stands behind it.
 - I4. Of threads once, and after that only for a comment newer than the agent's
   last event: its own answers, and threads it left open, are no news to it.
 - I5. Five times at most for one pull request and verdict (`TOLD_MOST`), so an
@@ -2380,7 +2382,7 @@ Invariants:
 | Telling | Reply | | Told | Line pasted, `prTold` grows | `tell` |
 | Telling | Refused, no reply | | Yours again | `roost--untold`; said once | `roost--tell-agent` |
 | Told | Agent starts | | Left, quiet | | its hooks |
-| Told | Two minutes, nothing moved | | Yours again | The word shows; news | `roost--agents-turn-p` |
+| Told | Two minutes, nothing moved; or the agent did something since and rests, or is gone | | Yours again | The word shows; news | `roost--agents-turn-p` |
 | Yours again | The agent pushes and it fails again, or a comment comes | under five | Due | | `roost--tell-due-p` |
 
 No Emacs running, nothing is told: only Emacs asks the forge. Roost can't see a
