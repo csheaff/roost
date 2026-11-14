@@ -35,6 +35,40 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## A pull request left to a real agent — 2026-11-14
+
+#268 was merged with only the fake agent ever told anything. One run since,
+on a Mac, on main with #268 (c90ae82), with Claude Code 2.1.325 (Sonnet 5.5,
+auto mode, as it starts with no mode set):
+
+- **The setup.** A scratch state directory and tmux socket, and a small
+  Python project whose `check.sh` wants an entry in `CHANGELOG.md` for each
+  function. A task through the helper, asked to add a function and commit it
+  without running the checks. `pr`, as `P` sends it, then `leave`, as `L`
+  does. A batch Emacs with `roost-watch-mode` on and no window did the
+  watching and the telling.
+- **GitHub was a stand-in**: a `gh` first on `PATH` over a bare repository,
+  whose one check is `check.sh` run on the commit the branch is at there, and
+  which answers `pr checks`, `pr view` and `run view --log-failed` from it.
+  So Roost's reading of a real GitHub wasn't part of this; the agent's side
+  was real.
+- **What happened.** The check failed on the agent's commit. Roost said
+  nothing for the two minutes it gives GitHub, then pasted `Roost: A check
+  failed on #21. Fix it.` into the agent's prompt, once, four minutes after
+  the pull request opened (the helper asks about a new pull request two
+  minutes in). Claude took it as a prompt, ran `gh pr checks 21`, `gh pr
+  view 21 --json headRefName,statusCheckRollup` and `gh run view 1
+  --log-failed`, fixed both things the log named, committed and pushed, and
+  stopped, twelve seconds in all. Auto mode allowed each command, the push
+  too. Two minutes later Roost had the pull request as `to merge`, and told
+  the agent nothing more.
+- **Not looked at.** What the row and notices said meanwhile (no view was
+  open; `make qa` checks that with the fake agent), a review thread, a
+  conflict, Codex, Pi and OpenCode, manual mode, where the push would have
+  waited on you, and a failure the agent can't fix.
+- A first try told nothing: asked for a function returning a long sentence,
+  Claude wrapped the line itself, and the check passed.
+
 ## Before 0.12.0 — 2026-11-12
 
 - **On a Mac**, the section below: `/code-review high` of #260, the whole
