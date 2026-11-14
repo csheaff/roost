@@ -2344,7 +2344,7 @@ stays yours: `to merge` is never the agent's.
 | Left, quiet | Left, with nothing to tell | `prLeft`, `roost--any-turn` nil or `to merge` |
 | Due | Something to tell, the agent at rest, you elsewhere | `roost--tell-due-p` |
 | Telling | Asked of the host, no reply yet | `roost--telling` has the task |
-| Told | The record says so; the agent has two minutes to start | a `prTold` entry with this key, under `roost--pr-grace` old |
+| Told | The record says so; the agent has two minutes to start | a `prTold` entry with this key, under `roost--pr-grace` old, by this Emacs's clock where it heard so (`roost--told-here`) |
 | Yours again | Told and nothing moved, told five times, refused, or the agent can't be told | `roost--agents-turn-p` nil with a turn |
 
 Invariants:
@@ -2354,7 +2354,9 @@ Invariants:
   forge itself.
 - I2. Only at rest: the helper refuses unless the status is `ready` and the last
   event no interrupt, so a paste answers no question and adds to no turn. Emacs
-  also holds off while you are at the task's terminal, where you may be typing.
+  also holds off while you are at the task's terminal, where you may be typing,
+  while a draft to the task is open, and for 30 s after you send it a prompt, which
+  its host has yet to hear the agent took (`roost--prompting-p`).
 - I3. Once for each thing: a head for a failed check or a conflict, the newest
   comment's time for threads. The record's `prTold` says it was told, and the send
   ID, made of the task, the number, the verdict and the key, keeps a paste whose

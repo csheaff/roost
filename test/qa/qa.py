@@ -3910,9 +3910,11 @@ def left_pull_request(qa, repo):
     pane = qa.emacs.eval("(roost--field %s 'paneId)" % task).strip('"')
     qa.step("A check fails, and Roost tells its agent", expect=[
         ("in one line of its own", lambda s: json.loads(qa.emacs.eval(said)) == "Roost: A check failed on #21. Fix it."),
-        ("which its agent's terminal got, once",
-         lambda s: qa.tmux("capture-pane", "-p", "-J", "-S", "-200", "-t", pane).count(
-             "Roost: A check failed on #21. Fix it.") >= 1),
+        ("which its agent's terminal got",
+         lambda s: any("Roost: A check failed on #21. Fix it." in line
+                       for line in qa.tmux("capture-pane", "-p", "-J", "-S", "-200", "-t", pane))),
+        ("and its record says it was told once",
+         lambda s: qa.emacs.eval("(length (roost--field %s 'prTold))" % task) == "1"),
         ("the task doesn't say it waits on you",
          lambda s: not sidebar_row(qa, s, name).endswith(("ci failed", "comments"))),
         ("its details say what it was told",

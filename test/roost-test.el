@@ -100,6 +100,8 @@ ROOST_TEST_MATCH, a regexp, keeps to the tests whose names match it."
          (roost--turns-sent (make-hash-table :test 'equal))
          (roost--telling (make-hash-table :test 'equal))
          (roost--untold (make-hash-table :test 'equal))
+         (roost--told-here (make-hash-table :test 'equal))
+         (roost--sent-at (make-hash-table :test 'equal))
          (roost--workload nil)
          (roost--errors (make-hash-table :test 'equal))
          (roost--installed (make-hash-table :test 'equal))
@@ -785,8 +787,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
            (funcall press "▸ Details")
            (should (equal roost--panel-open '(details)))
            (should (string-match-p (concat keys "▸ Now the logout\\. And its test\\.\n"
-                                           "▾ Details\n  Branch\ncodex/roost/fix-auth-123456, from main (B gives it a branch to merge into)\n"
-                                           "  Pull request\nwaits on you when it needs work (L leaves it to its agent)\n\\'")
+                                           "▾ Details\n  Branch\ncodex/roost/fix-auth-123456, from main (B gives it a branch to merge into)\n\\'")
                                    (buffer-string)))
            (should (looking-at-p "▾ Details"))
            (push-button)
@@ -11331,6 +11332,9 @@ Each is (ACTION PARAMETERS SUCCESS FAILURE), and nobody watches a task."
                             (apply #'roost-test--left-task failed)))
            (should (= (length (roost-test--tells requests)) 1))
            (should-not (roost--turn (gethash '("dev" "0123456789abcdef") roost--tasks)))
+           ;; By this machine's clock, where it heard so; another Emacs
+           ;; goes by when the record says.
+           (clrhash roost--told-here)
            (setq task (roost--cache-task "dev" (append (list (funcall told 600)
                                                              '(prLeftAt . "2026-10-03T19:40:00+00:00"))
                                                        (apply #'roost-test--left-task failed))))
@@ -11364,6 +11368,15 @@ Each is (ACTION PARAMETERS SUCCESS FAILURE), and nobody watches a task."
          ;; You are at its terminal, where you may be typing.
          (cl-letf (((symbol-function 'roost--watched-task)
                     (lambda () (gethash '("dev" "0123456789abcdef") roost--tasks))))
+           (yours))
+         ;; You sent it a prompt a moment ago, which its host has yet to
+         ;; say it has; or you are writing it one.
+         (puthash '("dev" "0123456789abcdef") (- (float-time) 5) roost--sent-at)
+         (yours)
+         (clrhash roost--sent-at)
+         (with-temp-buffer
+           (setq roost--send-task (roost-test--task))
+           (setf (alist-get 'host roost--send-task) "dev")
            (yours)))
        ;; Its host refuses, as when the agent started meanwhile: yours,
        ;; said once, and not asked again for the same failure.

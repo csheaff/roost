@@ -628,6 +628,13 @@ See `roost--report-turn'.")
   "For each task key, what Roost is telling its agent, until its host replies.
 As `roost--tell-occurrence' has it.")
 
+(defvar roost--told-here (make-hash-table :test 'equal)
+  "For each task key, what this Emacs heard its agent was told, and when.
+A cons of `roost--tell-occurrence' and `float-time'.")
+
+(defvar roost--sent-at (make-hash-table :test 'equal)
+  "For each task key, when you last sent its agent a prompt, as `float-time'.")
+
 (defvar roost--untold (make-hash-table :test 'equal)
   "For each task key, what Roost could not tell its agent, which waits on you.
 As `roost--tell-occurrence' has it: something else is tried again.")
@@ -1443,6 +1450,8 @@ A reply to create read before then can come after.")
              (remhash key roost--pr-verdicts)
              (remhash key roost--agent-news)
              (remhash key roost--telling)
+             (remhash key roost--told-here)
+             (remhash key roost--sent-at)
              (remhash key roost--untold))
             ((or (roost--judged-p task) (not (eq had 'unknown))) (puthash key turn roost--pr-verdicts)))
       ;; One held about it that is so no longer goes no more, though the
@@ -5214,6 +5223,8 @@ when you ask again after no reply."
                                (if (equal status "starting") "starting up" "asking for permission")))
                       (user-error "Open the task with RET to answer it")))))
     (cond ((not problem)
+           ;; Roost tells its agent nothing of its own for a moment.
+           (puthash (roost--key task) (float-time) roost--sent-at)
            (roost--act task "send" (append (list (cons 'text text))
                                            (when force (list (cons 'force t)))
                                            (when look (list (cons 'look t)))
@@ -8249,7 +8260,25 @@ open, are no news to it."
        (not (equal (gethash (roost--key task) roost--untold) (roost--tell-occurrence task turn)))
        (not (when-let* ((watched (roost--watched-task)))
               (equal (roost--key watched) (roost--key task))))
+       (not (roost--prompting-p task))
        t))
+
+(defconst roost--prompting-seconds 30
+  "Seconds after you send a task's agent a prompt in which Roost tells it nothing.
+Its host says the agent rests until the agent's own word that it has
+your prompt, which can take a moment.")
+
+(defun roost--prompting-p (task)
+  "Whether you are telling TASK's agent something yourself.
+A draft to it is open, or you sent it a prompt less than
+`roost--prompting-seconds' ago: Roost's line would land beside yours."
+  (let ((key (roost--key task)))
+    (or (when-let* ((sent (gethash key roost--sent-at)))
+          (< (- (float-time) sent) roost--prompting-seconds))
+        (seq-some (lambda (buffer)
+                    (when-let* ((to (buffer-local-value 'roost--send-task buffer)))
+                      (equal (roost--key to) key)))
+                  (buffer-list)))))
 
 (defun roost--agents-turn-p (task turn)
   "Whether TURN of TASK's pull request is its agent's for now, and not yours.
@@ -8259,7 +8288,12 @@ that takes it up is at work."
   (and turn
        (or (roost--tell-due-p task turn)
            (when-let* ((entry (and (roost--left-p task) (roost--told-entry task turn)))
-                       (seconds (roost--seconds-since (alist-get 'at entry))))
+                       ;; By this machine's clock when it heard so, where
+                       ;; it did: a host's may differ from it by minutes.
+                       (seconds (if-let* ((here (gethash (roost--key task) roost--told-here))
+                                          ((equal (car here) (roost--tell-occurrence task turn))))
+                                    (- (float-time) (cdr here))
+                                  (roost--seconds-since (alist-get 'at entry)))))
              (< seconds roost--pr-grace)))
        t))
 
@@ -8273,7 +8307,8 @@ As `roost--tell-due-p' has it.  Its host writes the line, from what
 waits, the pull request's number and how many checks or threads, and
 pastes it once.  What it refuses, as when the agent has started since,
 or can't be asked, waits on you instead."
-  (when-let* ((turn (roost--any-turn task))
+  (when-let* (((roost--left-p task))
+              (turn (roost--any-turn task))
               ((roost--tell-due-p task turn))
               (key (roost--key task))
               ((not (gethash key roost--telling))))
@@ -8296,6 +8331,7 @@ or can't be asked, waits on you instead."
                         (gitlab . ,(if (equal (alist-get 'forge pr) "gitlab") t :false)))
                       (lambda (_)
                         (funcall done)
+                        (puthash key (cons occurrence (float-time)) roost--told-here)
                         (message "Told %s's agent: %s" name reason))
                       (lambda (err)
                         (funcall done)
@@ -11726,8 +11762,10 @@ UNDER means under the line that folds it, which is its heading."
                                           (if-let* ((other (roost--other-branch task)))
                                               (format "; the worktree is on %s" (roost--branch-label other))
                                             "")))
-                           ;; Whose turn it is when a check fails or a thread waits.
-                           ("Pull request" . ,(roost--left-detail task))))
+                           ;; Whose turn it is when a check fails or a thread
+                           ;; waits, once there is one, or it is left already.
+                           ,@(when (or (roost--left-p task) (roost--field task 'pr))
+                               `(("Pull request" . ,(roost--left-detail task))))))
                      ;; One of several tasks a draft made from one prompt.
                      ,@(when-let* ((attempt (roost--attempt-detail task)))
                          `(("Attempt" . ,attempt)))

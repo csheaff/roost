@@ -221,6 +221,9 @@ class Lifecycle(unittest.TestCase):
             self.assertTrue(self.tell_agent(task, **args)["ok"], words)
             self.rested(task, words)
         # Taken back, nothing is told, and what was counts no more.
+        self.assertEqual(self.request("leave", id=task["id"])["error"],
+                         "Say whether to leave this task's pull request to its agent")
+        self.assertIs(roost.Store(str(self.state)).read(task["id"])["prLeft"], True)
         back = self.request("leave", id=task["id"], on=False)["result"]
         self.assertNotIn("prLeft", back)
         self.assertNotIn("prTold", back)

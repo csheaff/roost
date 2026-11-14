@@ -582,8 +582,9 @@ as Roost does the telling.
   commit the agent pushes, review threads once, and after that only when a
   comment came since the agent last did anything.
 - Only while the agent rests at its prompt after a turn it ended itself,
-  and you aren't at its terminal. One that asks, one you stopped and one
-  that has exited wait for you.
+  and you aren't at its terminal, writing it a prompt, or just done
+  sending one. One that asks, one you stopped and one that has exited wait
+  for you.
 - Five times at most for each kind on one pull request. After that, or when
   the agent stops with the pull request as it was, the task waits on you as
   before, with its word and a notification. `L` twice starts the count again.

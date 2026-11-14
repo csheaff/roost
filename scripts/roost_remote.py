@@ -4611,6 +4611,8 @@ def leave(store, task, on):
     since."""
     if task.get("conversation") is True:
         raise RoostError("A conversation has no pull request to leave to its agent")
+    if not isinstance(on, bool):
+        raise RoostError("Say whether to leave this task's pull request to its agent")
     if on is True:
         task["prLeft"] = True
     else:
@@ -4658,7 +4660,11 @@ def tell(store, task, verdict, key, number, count=None, gitlab=False):
     # as when the helper is killed between the two, it is not pasted again.
     send(store, task, words,
          send_id=hashlib.sha256(("%s %d %s %s" % (task["id"], number, verdict, key)).encode()).hexdigest()[:32])
-    task["prTold"] = (entries + [dict(number=number, verdict=verdict, key=key, at=now(), said=words)])[-TOLD_KEPT:]
+    # Those of this pull request all stay, as they are counted: only what
+    # was told of others, as of one its worktree's branch had, goes.
+    others = [entry for entry in entries if entry["number"] != number]
+    task["prTold"] = (others[-TOLD_KEPT:] + [entry for entry in entries if entry["number"] == number]
+                      + [dict(number=number, verdict=verdict, key=key, at=now(), said=words)])
     task["prLeftAt"] = now()
     # It went, as a prompt of yours does, and a full disk is no reason to
     # say otherwise.
