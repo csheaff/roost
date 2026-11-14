@@ -3919,7 +3919,8 @@ def left_pull_request(qa, repo):
          lambda s: not sidebar_row(qa, s, name).endswith(("ci failed", "comments"))),
         ("its details say what it was told",
          lambda s: "told at" in qa.emacs.eval("(roost--left-detail %s)" % task))])
-    qa.keys("C-c r L")
+    # By name: from the dashboard, L acts on the row at point.
+    qa.emacs.eval("(progn (roost-leave-pull-request %s) nil)" % task)
     qa.wait("it is yours", lambda s: qa.emacs.eval("(roost--left-p %s)" % task) == "nil")
     qa.step("L again takes it back", expect=[
         ("its details say it waits on you",
