@@ -196,6 +196,41 @@ A hook run when the session's windows are first listed, and a way to attach with
 
 ---
 
+## Posted 2026-11-14, against 70c9507
+
+dakra closed #17 with 33c746f and 70c9507. Both were posted that day.
+
+### On #17: confirmation
+
+Confirmed on 70c9507 with Ghostel 0.65.0, same setup (0.3 s round trip, Emacs 30.2, tmux 3.6a).
+
+| | 8d5328a | 70c9507 |
+|---|---|---|
+| Attach, `M-x` before the pane shows, `C-g` | The pane is in no window | The window keeps `*scratch*` while `M-x` is open and shows the pane once it closes, 4 times of 4, direct async on and off |
+| The same in a window of another session's split | Three windows for the two panes | The split stays while `M-x` is open, then makes way for the new pane as it does with no question open, 2 times of 2 |
+
+Thanks.
+
+### On #5: a command given before tmux has started
+
+One more for the "send tmux a command" row, met on a real host.
+
+Since 8d5328a an attach returns before tmux has started, so a command given to `ghostel-tmux--queue-command` right then is written before tmux runs. Over TRAMP without direct async it is often lost. TRAMP starts tmux from a shell on a terminal it has taken out of line mode (`stty -icanon`, for a process on a pipe), and that shell reads ahead of the line that starts tmux: what arrived with the line goes with it. The queue then waits for a reply that never comes, so the session's windows are never asked for and no pane arrives.
+
+A command queued as soon as `ghostel-tmux-attach` returned:
+
+| Host | Lost, with no pane after |
+|---|---|
+| Ubuntu 26.04, `/bin/sh` is dash, tmux 3.7c, over a LAN, TRAMP as it comes | 7 of 10 attaches |
+| The same, direct async on | 0 of 10 |
+| My delayed link (macOS, `/bin/sh` is bash 3.2), TRAMP as it comes, Roost's `select-window` | 3 of 29 |
+
+The shell alone shows it: on a terminal with `stty -icanon`, given `exec cat` and a second line in one write, `cat` never gets the second line, 3 times of 3. Written apart, or in line mode, it does.
+
+Roost sends `select-window` right after it connects, which is how I met it. The adapter now keeps its commands until `%session-changed`. A public send would need the same, or the queue could keep what it is given until tmux's first line.
+
+---
+
 ## Held back: a pane out of step after a split
 
 Not ready to file: no steps that show it every time.

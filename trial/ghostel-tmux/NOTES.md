@@ -181,10 +181,81 @@ The layer calls these private names now: `ghostel-tmux--attach-pane`,
 - Roost itself would have to turn direct async on for its hosts, or say
   so in its manual: it is a TRAMP setting per host, off as TRAMP comes.
 
+## 2026-11-14: #17, on main at 70c9507
+
+dakra closed #17 with 33c746f and 70c9507: a change to the windows that
+tmux asks for while a minibuffer is open is kept, and made once it has
+closed. Main is 0.3.0 now and needs Ghostel 0.65.0, its module too.
+
+ghostel-tmux alone over the delayed link:
+
+| | 8d5328a | 70c9507 |
+|---|---|---|
+| Attach, `M-x` before the pane shows, `C-g` | The window shows `*scratch*` again, the pane in no window (5 of 5) | The window keeps `*scratch*` while `M-x` is open and shows the pane once it closes (4 of 4, direct async on and off) |
+| The same in a window of another session's split | Three windows for the two panes, one pane twice, the new pane in none (1 of 1) | The split stays while `M-x` is open, then makes way for the new pane, as it does with no question open (2 of 2) |
+
+The layer and the QA harness needed nothing for 0.3.0. The layer still
+waits for the minibuffer itself, as it is the layer that puts the pane
+where its stand-in shows.
+
+### A command sent before tmux has started is lost
+
+Rerunning the remote journeys, about 1 run in 10 left the stand-in in
+the window for good: 3 of 29 runs of `answer` with TRAMP as it comes.
+Not new with 0.3.0. The layer has had it since the attach stopped
+waiting, and four runs on 2026-11-13 missed it.
+
+Roost sends `select-window` as soon as it has connected, which is now
+before tmux runs on the host. Without direct async, TRAMP starts tmux
+from a shell on a terminal it has taken out of line mode (`stty
+-icanon`, for a process on a pipe). That shell reads ahead of the line
+that starts tmux, and what arrived with the line goes with it.
+ghostel-tmux sends one command at a time: it waits for a reply that
+never comes, never asks for the session's windows, and no pane arrives.
+
+- A shell on a terminal out of line mode, given `exec cat` and a second
+  line in one write: `cat` never gets the second line, 3 of 3. Written
+  apart, or in line mode, it does.
+- `test/qa/fake_ssh.py` takes `QA_SSH_JOIN` now, the seconds it waits
+  for more of what was written before it sends it on in one piece, as a
+  network does. With 0.02 the layer as committed fails `answer` 4 of 4.
+- The layer now keeps its commands until tmux names its session
+  (`%session-changed`). With that, joined: `answer` and `shell` 3 of 3
+  with TRAMP as it comes and 1 of 1 with direct async; not joined, 1 of
+  1. NEEDS a public send that waits until tmux is there.
+
+Local, on the layer as changed and 70c9507: 11 journeys, 53 steps, no
+problems.
+
+On a real host it is the usual case. claylien (Ubuntu 26.04, `/bin/sh`
+is dash, tmux 3.7c, over the LAN), ghostel-tmux alone, a command queued
+as soon as attach returned:
+
+| | Lost, with no pane after | Emacs blocked | Pane shown after |
+|---|---|---|---|
+| TRAMP as it comes | 7 of 10 | 1.2 to 1.3 s (first 2.9 s) | 1.4 s |
+| Direct async on | 0 of 10 | 0.0 to 0.1 s (first 1.7 s) | 0.5 to 0.8 s |
+| TRAMP as it comes, nothing sent early | 0 of 3 | 1.2 to 1.3 s (first 2.7 s) | 1.4 s |
+
+Also found there: tmux is a snap in `/snap/bin`, which the path TRAMP
+gives its shell on the host leaves out, so every attach ended with
+"tmux: not found" until `ghostel-tmux-program` named the full path.
+Roost would have to tell ghostel-tmux where tmux is on each host, or
+have you add `tramp-own-remote-path` to `tramp-remote-path`.
+
+The layer calls these private names now: `ghostel-tmux--attach-pane`,
+`--display-pane-in-window`, `--queue-command`, `--select-pane-buffer`,
+`--tile-windows`, `--tile-leaf`, `--tile-collapse`,
+`--get-or-create-pane`, `--receive-window-rows` and
+`--on-session-changed` (the last three advised); reads `--panes`,
+`--pane-id`, `--window-id`, `--session-id`, `--controller-buffer`,
+`--controller-process`; and clears `--auto-host-window`.
+
 ## Not tried
 
 - The journeys that press tmux-control's own commands: panes, tabs,
   window_buffers, reconnect_away, the scrollback pager.
 - The walk_away grid, and the ERT suite, which stubs tmux-control.
 - A real agent inside Roost (Claude's TUI passed in ghostel-tmux alone
-  on 2026-11-06), a real remote host, a connection that drops.
+  on 2026-11-06), Roost itself on a real remote host (ghostel-tmux alone
+  ran on one on 2026-11-14), a connection that drops.

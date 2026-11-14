@@ -11,6 +11,7 @@ can't be reached, as with ssh."""
 import os
 import pty
 import queue
+import select
 import subprocess
 import sys
 import threading
@@ -19,6 +20,11 @@ import tty
 
 HOST = "qa-remote"
 LATENCY = float(os.environ.get("QA_SSH_LATENCY", "0.15"))
+# How long to wait for more of what was written before sending it on, as
+# one packet: a network joins writes made close together.  A program on
+# the host then finds them together, where this machine alone gives it
+# one at a time.
+JOIN = float(os.environ.get("QA_SSH_JOIN", "0"))
 # The host's home: short, as tmux's socket paths in it must be.
 HOME = os.environ.get("QA_REMOTE_HOME") or os.environ.get("HOME", "/")
 ENV = dict(os.environ, HOME=HOME)
@@ -76,6 +82,16 @@ def relay(source, sink, done):
                 data = os.read(source, 65536)
             except OSError:
                 data = b""
+            if data and JOIN:
+                time.sleep(JOIN)
+                while select.select([source], [], [], 0)[0]:
+                    try:
+                        more = os.read(source, 65536)
+                    except OSError:
+                        more = b""
+                    if not more:
+                        break
+                    data += more
             pending.put((time.monotonic() + LATENCY, data))
             if not data:
                 return

@@ -1,8 +1,8 @@
 ;;; tmux-control.el --- Trial: what Roost calls of tmux-control, on ghostel-tmux  -*- lexical-binding: t; -*-
 
 ;; Version: 99.0
-;; Package-Requires: ((emacs "30.1") (ghostel "0.64.0") (ghostel-tmux "0.2.0"))
-;; Written against ghostel-tmux main at 8d5328a (2026-11-13).
+;; Package-Requires: ((emacs "30.1") (ghostel "0.65.0") (ghostel-tmux "0.3.0"))
+;; Written against ghostel-tmux main at 70c9507 (2026-11-14).
 
 ;;; Commentary:
 
@@ -289,11 +289,12 @@ With SEED, tmux lists the session's windows for the first time.
 NEEDS a hook for that, and an attach that claims no window: the pane is
 shown here, in place of its stand-in, so ghostel-tmux's own claim,
 `ghostel-tmux--auto-host-window', is withdrawn first.
-NEEDS a pane that waits for the minibuffer to close before it takes a
-window.  Emacs puts the windows back as they were when a question in
-the minibuffer is answered or quit (`read-minibuffer-restore-windows'),
-which takes the pane out of its window again and leaves a split shown
-twice.  `tmux-control--arrived' waits.
+The pane waits for the minibuffer to close before it takes a window.
+Emacs puts the windows back as they were when a question in the
+minibuffer is answered or quit (`read-minibuffer-restore-windows'),
+which would take the pane out of its window again.  ghostel-tmux waits
+by itself since 33c746f; `tmux-control--arrived' has to as well, as it
+is this file that places the pane.
 NEEDS an attach that says nothing.  ghostel-tmux says \"Attached to
 SESSION\" here, which is after Roost has said in the echo area why it
 brought you to a task.  `inhibit-message' would not do: a message it
@@ -344,22 +345,46 @@ Attaching makes its sealed pane buffers live again."
 
 ;;; Commands to tmux
 
+(defvar-local tmux-control--early nil
+  "In a controller: what was asked of tmux before it answered, newest first.
+Each is (COMMAND . CONT), as `ghostel-tmux--queue-command' takes them.")
+
+(defun tmux-control--queue (controller command &optional cont)
+  "Have CONTROLLER send tmux COMMAND and call CONT with its reply.
+NEEDS a public way to send a command, one that waits until tmux is
+there: `ghostel-tmux--queue-command' writes at once.  Since an attach
+returns before tmux has started, what Roost sends right after it can
+reach the host first.  Over TRAMP the shell that starts tmux reads ahead
+and takes the command with it, as TRAMP has the terminal out of line
+mode for a process on a pipe.  ghostel-tmux then waits for a reply that
+never comes and sends nothing more: the session gets no panes.  So a
+command waits here until tmux names its session."
+  (with-current-buffer controller
+    (if ghostel-tmux--session-id
+        (ghostel-tmux--queue-command command cont)
+      (push (cons command cont) tmux-control--early))))
+
+(define-advice ghostel-tmux--on-session-changed
+    (:after (&rest _) tmux-control-early)
+  "Send what was asked of the session before tmux answered."
+  (pcase-dolist (`(,command . ,cont)
+                 (nreverse (prog1 tmux-control--early
+                             (setq tmux-control--early nil))))
+    (ghostel-tmux--queue-command command cont)))
+
 (defun tmux-control-send-command (command)
-  "Send tmux COMMAND over the current buffer's connection.
-NEEDS a public way to send a command: `ghostel-tmux--queue-command'."
+  "Send tmux COMMAND over the current buffer's connection."
   (when-let* ((controller (tmux-control--controller)))
-    (with-current-buffer controller
-      (ghostel-tmux--queue-command command))))
+    (tmux-control--queue controller command)))
 
 (defun tmux-control-query (command callback)
   "Send tmux COMMAND and call CALLBACK with its reply's lines, or nil.
 NEEDS the same as `tmux-control-send-command', with the reply."
   (when-let* ((controller (tmux-control--controller)))
-    (with-current-buffer controller
-      (ghostel-tmux--queue-command
-       command
-       (lambda (output)
-         (funcall callback (and output (split-string output "\n" t))))))))
+    (tmux-control--queue
+     controller command
+     (lambda (output)
+       (funcall callback (and output (split-string output "\n" t)))))))
 
 (defun tmux-control-select-pane (&optional pane)
   "Show and select PANE, a pane id such as \"%3\", of the current session.
@@ -374,8 +399,7 @@ NEEDS a public way to show a pane by its id in a window:
       (if (not (buffer-live-p buffer))
           ;; Not told of the pane yet: tmux's report of the selection
           ;; shows it.
-          (with-current-buffer controller
-            (ghostel-tmux--queue-command (format "select-pane -t %s" pane)))
+          (tmux-control--queue controller (format "select-pane -t %s" pane))
         (ghostel-tmux--select-pane-buffer buffer)))))
 
 
