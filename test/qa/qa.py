@@ -3232,7 +3232,9 @@ def own_workspace(qa, repo):
              lambda s: s["echo"] == "Sidebar on; it shows where a task is open"),
             ("no sidebar", lambda s: not qa_sidebar(s))])
         name = start_task(qa, "Mind the sidebar")
-        screen = qa.wait("the sidebar", lambda s: qa_sidebar(s) and selected_terminal(s))
+        # Its pane too: a buffer that stands in for the terminal until its
+        # pane is there has another name, and goes.
+        screen = qa.wait("the sidebar", lambda s: qa_sidebar(s) and (selected_terminal(s) or {}).get("pane"))
         terminal = selected_terminal(screen)["buffer"]
         qa.step("A task's workspace", expect=[
             ("its terminal", lambda s: (s.get("task") or {}).get("name") == name and selected_terminal(s)),
@@ -3243,8 +3245,9 @@ def own_workspace(qa, repo):
         qa.plain_terminals.add(plain)
         qa.tmux("new-session", "-d", "-s", "plain")
         qa.emacs.eval("(tmux-control-connect %s %s \"plain\")" % (lisp(qa.host) if qa.host else "nil", lisp(qa.name)))
-        screen = qa.wait("your terminal", lambda s: any(w.get("terminal") == plain for w in s["windows"]))
-        mine_terminal = next(w["buffer"] for w in screen["windows"] if w.get("terminal") == plain)
+        mine = lambda s: [w for w in s["windows"] if w.get("terminal") == plain and w.get("pane")]
+        screen = qa.wait("your terminal", mine)
+        mine_terminal = mine(screen)[0]["buffer"]
         # The whole of the frame: a panel steps aside for a split.
         qa.emacs.eval("(progn (select-window (get-buffer-window %s)) (delete-other-windows))" % lisp(mine_terminal))
         qa.step("A plain tmux terminal there", expect=[

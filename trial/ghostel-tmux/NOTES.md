@@ -251,6 +251,75 @@ The layer calls these private names now: `ghostel-tmux--attach-pane`,
 `--pane-id`, `--window-id`, `--session-id`, `--controller-buffer`,
 `--controller-process`; and clears `--auto-host-window`.
 
+## 2026-11-14, later: pull request #19, at fdbf32b
+
+dakra answered #5 with pull request #19, not merged yet: functions and
+hooks for packages that build on ghostel-tmux, and a second commit that
+holds commands until tmux has started. Its base is main at 56f2dd4,
+where an attach to a session attached already returns its controller.
+
+The layer is moved to it and calls nothing private of ghostel-tmux:
+
+| Was | Is |
+|---|---|
+| Advice on `--receive-window-rows`, clearing `--auto-host-window` | `ghostel-tmux-attach` with NO-DISPLAY, and `ghostel-tmux-attach-hook`. The hook waits for the minibuffer, so the layer's own wait is gone |
+| `message` wrapped to drop "Attached to" | `inhibit-message` around the attach |
+| Advice on `--get-or-create-pane` | `ghostel-tmux-pane-mode-hook`: the buffer knows its controller and ids when it runs |
+| `--queue-command`, held until `%session-changed` by advice on `--on-session-changed` | `ghostel-tmux-command`, which holds a command until tmux's first line |
+| `--attach-pane`, `--display-pane-in-window` | `ghostel-tmux-active-pane` and `switch-to-buffer`: ghostel-tmux fits a pane to a window that comes to show it |
+| `--select-pane-buffer`, `--panes` | `ghostel-tmux-pane-buffer`, `ghostel-tmux-select-pane` |
+| `--tile-leaf`, `--tile-windows`, `--tile-collapse` | `ghostel-tmux-window-split`, and `delete-window` on its other windows |
+| `--pane-id`, `--window-id`, `--controller-buffer`, `--controller-process`, `--session-id` | `ghostel-tmux-pane-id`, `-window-id`, `-controller`, `-controllers` |
+| `(ghostel-tmux-detach t)` in the controller | `(ghostel-tmux-detach t CONTROLLER)` |
+
+Roost's journeys on it (Emacs 30.2, tmux 3.6a, Ghostel 0.65.0):
+
+- Local, the eleven: 53 steps, no problems.
+- Remote, writes joined (`QA_SSH_JOIN=0.02`), `answer` and `shell`: 2
+  of 2 with TRAMP as it comes, 1 of 1 with direct async. On the pull
+  request's first commit, 0c9a615, which has `ghostel-tmux-command` but
+  not the hold, they fail 2 of 2, the stand-in left in the window.
+
+claylien, ghostel-tmux alone, a `ghostel-tmux-command` given as soon as
+the attach returned:
+
+| | Lost, with no pane after |
+|---|---|
+| 0c9a615, TRAMP as it comes | 6 of 10 |
+| fdbf32b, TRAMP as it comes | 0 of 10 |
+| fdbf32b, direct async on | 0 of 5 |
+
+### Found on the way
+
+- A command given before tmux has started goes ahead of ghostel-tmux's
+  own first listing of windows, so the first pane waits a round trip for
+  each. Over the delayed link (0.3 s round trip), from the attach's
+  return to the pane: 0.83 to 0.88 s with none (4 of 4), 1.16 to 1.19 s
+  with one (2 of 2), 1.45 to 1.51 s with two (4 of 4). Roost gives two.
+  The layer of d55f7fe sent its own after the listing. If ghostel-tmux
+  keeps this order, the layer can keep its two until the attach hook.
+- A buffer of the layer's in a window of another session's split. Left
+  there, it keeps its window when a pane of the split is resized, and
+  loses it when the session gets another pane: the split is built again
+  over it. With the split's other windows deleted first, the window
+  leaves the split by itself and keeps the buffer when the session is
+  split again. So the layer deletes them, and needs no function of
+  ghostel-tmux to collapse a split.
+- A message hidden by `inhibit-message` still clears the echo area.
+  Roost says why it brought you to a task after it connects, so nothing
+  goes: next_waiting passes.
+- `ghostel-tmux-command` signals a `user-error` for a session that is
+  not attached or whose tmux is leaving. The layer catches it.
+- tmux 3.7c has floating panes (`new-pane`). For a session whose active
+  pane is one, the attach hook finds it as the active pane, with a
+  buffer, with and without NO-DISPLAY (1 of 1 each, on claylien).
+- The harness. own_workspace read the name of the selected terminal's
+  buffer as soon as the sidebar showed, which could be the stand-in's:
+  it stopped the first local run, and an earlier run that passed had
+  read the plain terminal's stand-in the same way ("Wrong type argument:
+  window-live-p, nil" in the echo area). It waits for the terminal's
+  pane now: 3 of 3 alone, and in the eleven.
+
 ## Not tried
 
 - The journeys that press tmux-control's own commands: panes, tabs,

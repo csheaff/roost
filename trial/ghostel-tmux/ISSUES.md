@@ -231,6 +231,52 @@ Roost sends `select-window` right after it connects, which is how I met it. The 
 
 ---
 
+## Posted 2026-11-14, on pull request #19 at fdbf32b
+
+dakra asked on #5 whether pull request #19 would do for Roost. Posted that day on the pull request.
+
+### On pull request #19: the adapter moved to it
+
+I moved Roost's adapter onto this branch (fdbf32b). It calls nothing private any more; before, it called ten private functions, three of them advised, and read six variables. Roost's journeys pass on it: eleven local ones (53 steps) and the remote ones over my delayed link.
+
+**The second commit, on the host from #5** (Ubuntu 26.04, `/bin/sh` is dash, tmux 3.7c, over a LAN). A `ghostel-tmux-command` given as soon as the attach returned:
+
+| | Lost, with no pane after |
+|---|---|
+| 0c9a615, TRAMP as it comes | 6 of 10 attaches |
+| fdbf32b, TRAMP as it comes | 0 of 10 |
+| fdbf32b, direct async on | 0 of 5 |
+
+Roost's remote journeys say the same. With the writes joined on my delayed link, which is how I get the loss here, they fail on 0c9a615 (2 of 2) and pass on fdbf32b (2 of 2, and 1 of 1 with direct async).
+
+**What replaced what**
+
+- NO-DISPLAY and `ghostel-tmux-attach-hook`: my advice on the first rows. The hook waits for the minibuffer, so my own wait went too.
+- `ghostel-tmux-pane-mode-hook`: my advice for a new pane buffer. The buffer knows its controller and ids when the hook runs, which is all I need.
+- `ghostel-tmux-command`: my queue that held commands until `%session-changed`.
+- `ghostel-tmux-window-split`: enough for the row you left out. I delete the split's other windows and show my buffer. The window then leaves the split by itself, and keeps my buffer when the session gets another pane. Left inside the split, my buffer lost its window then. Maybe a line for the README; no function needed.
+- The accessors, `ghostel-tmux-select-pane`, `ghostel-tmux-detach` with a BUFFER and `inhibit-message` around the attach did what they say. Keeping the socket and host myself is fine.
+
+**Suggestions**
+
+1. A command given before tmux has started is sent ahead of ghostel-tmux's own first listing of windows, so the first pane waits one round trip for each. Over a 0.3 s round trip, from the attach's return to the pane:
+
+   | Commands given at once | Pane shown after |
+   |---|---|
+   | none | 0.83 to 0.88 s (4 of 4) |
+   | one | 1.16 to 1.19 s (2 of 2) |
+   | two | 1.45 to 1.51 s (4 of 4) |
+
+   Roost gives two, `select-window` and `select-pane`. If the listing went first, asking early would cost nothing.
+2. `ghostel-tmux-command` signals a `user-error` for a session that is not attached or whose tmux is leaving. I call it where I cannot know, and catch it. A word in its docstring would do.
+3. A message hidden with `inhibit-message` still clears the echo area, so what a package said there just before the attach goes. It does not bite Roost. With NO-DISPLAY, saying nothing might be simpler.
+
+Not used, so not tested: `ghostel-tmux-notification-functions`, `ghostel-tmux-detach-hook`, and a takeover.
+
+Thanks for this.
+
+---
+
 ## Held back: a pane out of step after a split
 
 Not ready to file: no steps that show it every time.
