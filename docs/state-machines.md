@@ -2390,9 +2390,18 @@ No Emacs running, nothing is told: only Emacs asks the forge. Roost can't see a
 prompt you left half typed in the agent's terminal while you were elsewhere: the
 line would join it.
 
-Open: no model yet. The table above was checked by tests (`roost-tells-the-agent-*`,
-`test_a_pull_request_left_to_its_agent_is_told_of_once`, the late-reply sweep's
-`leave` and `tell`, the crash scenarios `Leave` and `Tell`), not by TLC.
+Model: `test/formal/pull_request_left`, by `.claude/skills/verify-pull-request-left`.
+It holds I2 to I7; I1 is `test_an_agent_is_told_only_what_roost_writes_and_only_at_rest`.
+
+Open, found by the model, both of one cause: Emacs judges by the copy it holds, and
+`tell` doesn't know what that copy was.
+
+- You prompt the agent from where Roost doesn't see it, it takes a turn and rests
+  again before Emacs hears of it, and Roost tells it of what stood before that turn
+  (`LeftPullRequest.finding-told-after-a-turn.cfg`). S4: one line too many, once.
+- The same with a thread it answered in that turn, and a paste tmux took and said
+  failed: the agent is then told of its own answer
+  (`LeftPullRequestThreads.finding-told-of-its-own-answer.cfg`). S4.
 
 ### Merges reported
 
