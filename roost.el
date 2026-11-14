@@ -1340,7 +1340,7 @@ you took back."
     (if (not (and (stringp changed)
                   (string< (or (roost--field task 'prLeftAt) "") changed)))
         task
-      (dolist (field '(prLeft prTold prLeftAt) task)
+      (dolist (field '(prLeft prTold prLeftAt prLeftGen) task)
         (setq task (assq-delete-all field task))
         (when-let* ((cell (assq field old)))
           (setq task (cons cell task)))))))
@@ -8216,8 +8216,11 @@ comment in them.  Its host tells the agent once for each."
 
 (defun roost--tell-occurrence (task turn)
   "TURN of TASK's pull request, as one thing to tell its agent.
-A list of TURN, the pull request's number and `roost--tell-key'."
-  (list turn (alist-get 'number (roost--field (roost--pr-view task) 'pr)) (roost--tell-key task turn)))
+A list of TURN, the pull request's number, `roost--tell-key', and which
+time the pull request was left this is: left afresh, as by another
+Emacs, what was refused before is another thing."
+  (list turn (alist-get 'number (roost--field (roost--pr-view task) 'pr)) (roost--tell-key task turn)
+        (roost--field task 'prLeftGen)))
 
 (defun roost--told (task turn)
   "What Roost told TASK's agent of TURN, oldest first.

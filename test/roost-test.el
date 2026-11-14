@@ -11395,12 +11395,17 @@ Each is (ACTION PARAMETERS SUCCESS FAILURE), and nobody watches a task."
        (let ((task (roost--cache-task "dev" (apply #'roost-test--left-task failed))))
          (should (= (length (roost-test--tells requests)) 1))
          (should (equal (roost--turn task) "ci failed")))
+       ;; Left afresh, as by another Emacs, it is another thing to tell.
+       (roost--cache-task "dev" (append '((prLeftGen . "0a1b2c3d4e5f") (prLeftAt . "2026-10-03T19:10:00+00:00"))
+                                        (apply #'roost-test--left-task failed)))
+       (should (= (length (roost-test--tells requests)) 2))
+       (funcall (nth 3 (car requests)) "The agent is not at rest")
        ;; Nor is it its agent's because its host recorded the telling
        ;; before the paste that failed.
        (let ((task (roost--cache-task
                     "dev" (append `((prTold . (((number . 12) (verdict . "ci failed") (key . "a1")
                                                 (at . ,(roost-test--ago 5)))))
-                                    (prLeftAt . "2026-10-03T19:30:00+00:00"))
+                                    (prLeftGen . "0a1b2c3d4e5f") (prLeftAt . "2026-10-03T19:30:00+00:00"))
                                   (apply #'roost-test--left-task failed)))))
          (should (equal (roost--turn task) "ci failed")))))))
 
