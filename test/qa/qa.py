@@ -3870,6 +3870,60 @@ def pull_request(qa, repo):
         ("the sidebar says merged", lambda s: sidebar_row(qa, s, name).endswith("merged"))])
 
 
+@journey("A pull request left to its agent")
+def left_pull_request(qa, repo):
+    """L leaves a task's pull request to its agent. When a check then
+    fails on it, and you are elsewhere, Roost tells the agent itself, in one
+    line of its own, rather than say the task waits on you; the panel says
+    whose the pull request is and what the agent was told."""
+    origin(qa, repo)
+    name = new_task(qa, "ask printf 'Paid\\n' > PAID.md && git add PAID.md && git commit -qm 'Add what is paid'")
+    answer_yes(qa, name)
+    settled = time.monotonic() + 31
+    qa.wait("its commit", lambda s: "Committed" in panel_text(qa, s))
+    qa.keys("C-c r P")
+    qa.wait("the pull request's draft", lambda s: (qa.window(s, "roost-pr-mode") or {}).get("selected"))
+    qa.click_in("header", " Create draft ")
+    qa.wait("its pull request", lambda s: "#21" in panel_text(qa, s))
+    task = "(seq-find (lambda (task) (equal (roost--field task 'name) %s)) (roost-tasks))" % lisp(name)
+    qa.keys("C-c r L")
+    qa.wait("it is left", lambda s: qa.emacs.eval("(roost--left-p %s)" % task) == "t")
+    qa.step("L leaves its pull request to its agent", expect=[
+        ("its record says so", lambda s: qa.emacs.eval("(roost--left-p %s)" % task) == "t"),
+        ("and its details, with the key that takes it back",
+         lambda s: "left to its agent" in qa.emacs.eval("(roost--left-detail %s)" % task))])
+    branch = qa.git(repo, "branch", "--list", "--format=%(refname:short)", "roost/%s-*" % name)
+    tip = qa.git(repo, "rev-parse", branch)
+    # Elsewhere: Roost types nothing into a terminal you are at.
+    qa.keys("C-c r S")
+    qa.wait("the dashboard", lambda s: (qa.window(s, "roost-dashboard-mode") or {}).get("selected"))
+    time.sleep(max(0, settled - time.monotonic()))
+    failed = dict(__typename="CheckRun", name="lint", status="COMPLETED", conclusion="FAILURE",
+                  completedAt="2026-01-01T00:00:00Z")
+    github(qa, list=[dict(number=21, url="https://github.com/qa/notes/pull/21", state="OPEN", headRefOid=tip,
+                          statusCheckRollup=[failed])],
+           reviews={"21": dict(mergeable="MERGEABLE", reviewRequests=dict(nodes=[]),
+                               reviewThreads=dict(totalCount=0, nodes=[]))})
+    qa.keys("g")
+    said = "(alist-get 'said (car (last (append (roost--field %s 'prTold) nil))))" % task
+    qa.wait("Roost to tell its agent", lambda s: "A check failed" in qa.emacs.eval(said), 60)
+    pane = qa.emacs.eval("(roost--field %s 'paneId)" % task).strip('"')
+    qa.step("A check fails, and Roost tells its agent", expect=[
+        ("in one line of its own", lambda s: json.loads(qa.emacs.eval(said)) == "Roost: A check failed on #21. Fix it."),
+        ("which its agent's terminal got, once",
+         lambda s: qa.tmux("capture-pane", "-p", "-J", "-S", "-200", "-t", pane).count(
+             "Roost: A check failed on #21. Fix it.") >= 1),
+        ("the task doesn't say it waits on you",
+         lambda s: not sidebar_row(qa, s, name).endswith(("ci failed", "comments"))),
+        ("its details say what it was told",
+         lambda s: "told at" in qa.emacs.eval("(roost--left-detail %s)" % task))])
+    qa.keys("C-c r L")
+    qa.wait("it is yours", lambda s: qa.emacs.eval("(roost--left-p %s)" % task) == "nil")
+    qa.step("L again takes it back", expect=[
+        ("its details say it waits on you",
+         lambda s: "waits on you" in qa.emacs.eval("(roost--left-detail %s)" % task))])
+
+
 @journey("A merge request on GitLab")
 def merge_request(qa, repo):
     """With the project's origin on GitLab, P opens a merge request, !4,
@@ -4295,7 +4349,7 @@ JOURNEYS = [sweep, answer, next_waiting, fold, resize, merge, review, notes, sin
             walk_away,
             frames, draft_frames, org, drafts, draft_fields, by_clicks, conversation, clicks, overlap, region, tabs,
             own_workspace,
-            forget, rename, fork, offer, show, show_page, other_branch, switched_branch, merged, large, pull_request, merge_request, exits,
+            forget, rename, fork, offer, left_pull_request, show, show_page, other_branch, switched_branch, merged, large, pull_request, merge_request, exits,
             include, slow_create,
             unreachable,
             doctor, scrollback,
