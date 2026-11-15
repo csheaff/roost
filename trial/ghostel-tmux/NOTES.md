@@ -362,11 +362,44 @@ likely the harness disturbed, not proven, not reproduced, and nothing
 that points at ghostel-tmux.
 Nothing reported to dakra. Keep the watcher on later runs.
 
+## 2026-11-15, later: a real agent, here and on a real host
+
+Claude Code on Haiku in manual mode, one task driven from Lisp
+(`roost--create-task`, `roost-open-task`, `roost--act`), typing into the
+pane as you would. Nine steps: made, shown in a ghostel-tmux pane,
+started, Roost says `permission` when Claude asks to run a command,
+Emacs shows what `tmux capture-pane` has, `1` typed in the pane ends
+the turn at `ready`, the line is in the worktree, a second prompt sent
+from Emacs is answered, stop ends it.
+
+| Where | TRAMP | Runs that passed all nine |
+|---|---|---|
+| This Mac (Claude 2.1.325) | none | 1 of 1 |
+| claylien (Claude 2.1.325) | direct async on | 3 of 3 |
+| claylien | as it comes | 1 of 7 |
+
+With TRAMP as it comes, on the real host, Roost stalls a few seconds
+after the task opens: the pane buffer stays blank and the task stays
+at `starting`, while on the host Claude has drawn its screen and the
+helper has recorded `permission`. Emacs is not blocked: timers run, no
+question is open. Roost's refresh of the host is in flight for good
+(`roost--refreshing` set, its `roost-rpc` process exited), and nothing
+more comes from ghostel-tmux's control process, which still runs.
+TRAMP reports a caught error from inside `roost--ssh-share-options`,
+which shows Roost's poll starting its ssh inside one of TRAMP's waits.
+Not traced further. The delayed fake ssh does not show it: the same
+journeys pass there with TRAMP as it comes.
+
+So on a real host Roost on ghostel-tmux needs
+`tramp-direct-async-process` for the host, as the table of 2026-11-14
+already said of ghostel-tmux alone, and `ghostel-tmux-program` naming
+tmux where TRAMP's path leaves it out (`/snap/bin/tmux` on claylien).
+The layer sets neither; a Roost that shipped this would have to.
+
 ## Not tried
 
 - The journeys that press tmux-control's own commands: panes, tabs,
   window_buffers, reconnect_away, the scrollback pager.
 - The walk_away grid, and the ERT suite, which stubs tmux-control.
-- A real agent inside Roost (Claude's TUI passed in ghostel-tmux alone
-  on 2026-11-06), Roost itself on a real remote host (ghostel-tmux alone
-  ran on one on 2026-11-14), a connection that drops.
+- A real agent for longer than two turns, the journeys against a real
+  host, a connection that drops.
