@@ -119,7 +119,24 @@ def relay(source, sink, done):
     return writer
 
 
+def forward(argv):
+    """Stand in for `ssh -N -L LOCAL:REMOTE HOST': the host is this machine,
+    so LOCAL is a link to the socket REMOTE, until this is killed.  The
+    Rex trial forwards a server's socket so; what goes through is not
+    delayed."""
+    local, _, remote = argv[argv.index("-L") + 1].partition(":")
+    time.sleep(2 * LATENCY)
+    os.symlink(remote, local)
+    try:
+        while True:
+            time.sleep(3600)
+    finally:
+        os.unlink(local)
+
+
 def main():
+    if "-L" in sys.argv:
+        return forward(sys.argv)
     host, command, control, terminal = parse(sys.argv[1:])
     if host.split("@")[-1] != HOST:
         sys.stderr.write("ssh: Could not resolve hostname %s: nodename nor servname provided, "

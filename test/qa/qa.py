@@ -189,8 +189,10 @@ class Run:
             # The host's home, apart from Emacs's as on another machine, and
             # short enough for tmux's sockets in it, which tmux finds by
             # their real path.
-            self.remote_home = Path("/tmp") / self.name
-            self.remote_home.mkdir()
+            # Rex trial: a block has its server's home, not the helper's,
+            # so the server is started with the host's home, QA_REX_HOME.
+            self.remote_home = Path(os.environ.get("QA_REX_HOME") or Path("/tmp") / self.name)
+            self.remote_home.mkdir(exist_ok=True)
             self.env["QA_REMOTE_HOME"] = str(self.remote_home)
             self.host = "qa-remote"
             self.tmux_env = dict(self.env, TMUX_TMPDIR=str(self.remote_home / ".tmux-sock"))

@@ -141,7 +141,13 @@ second block of its session."
               ((not (get-buffer-window buffer t)))
               (window (tmux-control--shown-of place buffer)))
     (ignore-errors
-      (set-window-buffer (split-window window nil t) buffer))))
+      (let ((new (split-window window nil t)))
+        (set-window-buffer new buffer)
+        ;; As tmux makes a new pane the active one: the helper's reply,
+        ;; which has Roost select it, can come after the block does, and
+        ;; what you type meanwhile is for the shell you asked for.
+        (when (and (eq window (selected-window)) (not (active-minibuffer-window)))
+          (select-window new))))))
 
 (defun tmux-control--block-gone ()
   "Give the window of a block that closed back to the block beside it."
@@ -219,6 +225,62 @@ SHOWN if it is one for PLACE already, else a new one."
           (insert why "\n"))))
     (message "%s" why)))
 
+;; A Rex server on a host Roost reaches over SSH: its Unix socket is
+;; forwarded to one on this machine, by an ssh of its own that lasts as
+;; long as Emacs, and rexel dials that.  Rex can also serve its API on a
+;; tailnet, which `rexel-hosts' reaches with no forward; not tried here.
+
+(defvar tmux-control-forward-directory (format "/tmp/roost-rex-%d/" (user-uid))
+  "Where the forwarded sockets of remote Rex servers are kept.
+Short, since a Unix socket's path is.")
+
+(defvar tmux-control--forwards (make-hash-table :test #'equal)
+  "The ssh forwarding each remote server's socket, by (HOST . PATH).")
+
+(defun tmux-control--forward (host path callback)
+  "Call CALLBACK with a socket on this machine that reaches PATH on HOST.
+With nil and why not, when ssh could not forward it."
+  (let* ((key (cons host path))
+         (local (expand-file-name (concat (substring (md5 (format "%S" key)) 0 12) ".sock")
+                                  tmux-control-forward-directory))
+         (process (gethash key tmux-control--forwards)))
+    (if (and (process-live-p process) (file-exists-p local))
+        (funcall callback local nil)
+      (unless (process-live-p process)
+        (with-file-modes #o700
+          (make-directory tmux-control-forward-directory t))
+        (when (file-exists-p local)
+          (delete-file local))
+        (setq process
+              (make-process
+               :name (format "roost-rex-forward %s" host)
+               :buffer (generate-new-buffer (format " *roost-rex-forward %s*" host))
+               :command (list "ssh" "-N" "-T" "-o" "BatchMode=yes"
+                              "-o" "ExitOnForwardFailure=yes"
+                              "-L" (concat local ":" path) host)
+               :connection-type 'pipe :noquery t))
+        (puthash key process tmux-control--forwards))
+      (let ((tries 100) timer)
+        (setq timer
+              (run-at-time
+               0.1 0.1
+               (lambda ()
+                 (cond ((file-exists-p local)
+                        (cancel-timer timer)
+                        (funcall callback local nil))
+                       ((or (not (process-live-p process))
+                            (< (setq tries (1- tries)) 0))
+                        (cancel-timer timer)
+                        (let ((said (and (buffer-live-p (process-buffer process))
+                                         (with-current-buffer (process-buffer process)
+                                           (string-trim (buffer-string))))))
+                          (when (process-live-p process)
+                            (delete-process process))
+                          (funcall callback nil
+                                   (format "No way to the Rex server on %s: %s" host
+                                           (if (string-empty-p (or said ""))
+                                               "ssh did not forward its socket" said)))))))))))))
+
 (defun tmux-control--attach (place)
   "Attach the Rex session at PLACE.  Its blocks' buffers come later.
 NEEDS: `rexel--connect', `rexel--find-session', `rexel--request' and
@@ -227,9 +289,25 @@ label on a server at a given address, without showing or asking, and
 says when it has or why it could not, would replace all four.
 `rexel--attach' says nothing to its caller of a session that is gone."
   (ghostel-ensure-module)
+  (let ((host (nth 0 place))
+        (path (tmux-control--endpoint (nth 1 place))))
+    (if (not host)
+        (tmux-control--attach-at place (list nil path))
+      ;; The server's files are the host's, as TRAMP names them.
+      (setf (alist-get host rexel-tramp-hosts nil nil #'equal)
+            (format "/ssh:%s:" host))
+      (tmux-control--forward
+       host path
+       (lambda (local why)
+         (if local
+             (tmux-control--attach-at place (list host local))
+           (tmux-control--failed place why)))))))
+
+(defun tmux-control--attach-at (place server)
+  "Attach the Rex session at PLACE on SERVER, a (LABEL SOCKET) of rexel's."
   (let ((label (nth 2 place)))
     (rexel--connect
-     (list nil (tmux-control--endpoint (nth 1 place)))
+     server
      (lambda (conn)
        (rexel--find-session
         conn label
@@ -266,10 +344,8 @@ of now: tmux-control's one terminal swaps a session's panes as a whole."
   "Show Rex SESSION of the server SOCKET-NAME in the selected window.
 An attached session is shown at once.  Otherwise the window shows a
 buffer that stands in for its block until the server has answered."
-  (when (and host (not (string-empty-p host)))
-    (user-error "This trial reaches a Rex server only on this machine"))
   (let* ((socket (or socket-name tmux-control-default-socket-name))
-         (place (list nil socket session))
+         (place (list (and host (not (string-empty-p host)) host) socket session))
          (window (selected-window))
          (shown (window-buffer window))
          (block (tmux-control--main-block place))

@@ -2,7 +2,8 @@
 
 Not for main. Started 2026-11-15 on branch `rexel-trial`, cut from
 `ghostel-tmux-trial`. Rex 0.1.0-preview.19 (API revision 14) on this
-Mac, rexel 0.5.0 at 02d495d, Ghostel 0.65.0, Emacs 30.
+Mac, rexel 0.5.0 at 02d495d, Ghostel 0.65.0, Emacs 30. On claylien
+(Ubuntu), Rex 0.0.1794757024-g23c764, API revision 16.
 
 The ghostel-tmux trial swapped only the Emacs side: tmux still held the
 tasks. Rexel shows Rex blocks, not tmux sessions, so this one swaps the
@@ -18,7 +19,9 @@ host side too.
   lines: `rex_inventory`, `rex_spawn`, `kill_window`, `kill_pane`, and a
   branch each in `spawn`, `send`, `rename`, `shell` and the runner.
 - **Layer** (`trial/rexel/tmux-control.el`): the names Roost calls of
-  tmux-control, on rexel. Local server at a Unix socket only.
+  tmux-control, on rexel. A server at a Unix socket, on this machine
+  or on a host Roost reaches over SSH: there the layer keeps an
+  `ssh -N -L` that forwards the socket to one here, which rexel dials.
 - **Roost** (`roost.el`): one line. Opening a task refused a window or
   pane ID that was not tmux's `@N` and `%N`; it now takes Rex's too.
 - **Harness** (`test/qa`, `test/test_remote.py`): `QA_REX=ADDRESS` and
@@ -51,6 +54,34 @@ To run, with a scratch server (never the one Rex's app runs):
   look. None traced to the helper doing the wrong thing with a task.
 - The terminal Emacs shows matched `rex capture` at every checked step.
 
+## Results, a remote host
+
+- claylien, for real: a task made from this Mac in a Rex server there
+  (revision 16, two ahead of the Mac's), with the fake agent. Seven
+  steps of seven: made, shown in a rexel block, the same screen as
+  `rex capture` on the host, a prompt sent, a shell beside it, typing
+  reaching the shell, the agent ended by stop. One run, driven from
+  Lisp (`roost--create-task`, `roost-open-task`, `roost--act`,
+  `roost-shell`), not through the journeys, which need this machine's
+  files on the host.
+- The helper's lifecycle tests on claylien with tasks in Rex: 379 of
+  449, the failures of the same two kinds as on the Mac. Rex's CLI at
+  revision 16 answered the helper as revision 14 does.
+- The eleven journeys with `--remote` (the helper 0.15 s away each way
+  behind the fake ssh, Rex on this Mac): 53 of 53 steps, one whole run.
+  The fake ssh stands in for the forward with a link to the socket, so
+  what rexel streams is not delayed there; on claylien it was real.
+- Met on the way: a shell's block can show before the helper's reply
+  that has Roost select it, and what was typed meanwhile went to the
+  agent. The layer now selects a new block beside the selected one, as
+  tmux makes a new pane the active one.
+- A block has its server's environment, not the helper's. Over real
+  SSH they are one user's; the harness starts its server with the
+  host's home (`QA_REX_HOME`).
+- claylien's `rex` had been Ubuntu's unrelated Perl package since an apt
+  upgrade on 2026-10-30, which counts as newer than Superlogical's.
+  Clay put Superlogical's back and held it (`apt-mark hold rex`).
+
 ## What rexel would need (for dakra)
 
 Rexel 0.5.0's public Lisp is lookups: `rexel-block-p`, `-block-id`,
@@ -68,6 +99,11 @@ calls five private names, each marked NEEDS in the file:
    first screen is on its way: `rexel-block-live-p` is nil for both.
 3. No public way to ask the server anything (`rexel--request`). The
    layer gets by without, since the helper does that through the CLI.
+
+4. A server reached at a Unix socket over SSH. Rexel reaches a remote
+   server at a network address, such as Rex's Tailscale one. Roost has
+   only an SSH host, so the layer forwards the socket itself: about
+   fifty lines, and an ssh process a host that Emacs has to keep.
 
 Other things met:
 
@@ -115,8 +151,7 @@ Other things met:
 
 ## Not tried
 
-A real agent. A remote host: claylien's `rex` is Ubuntu's unrelated
-package since an apt upgrade on 2026-10-30, and rexel reaches a remote
-server by Tailscale or a forwarded socket, which the layer does not do
-yet. Many tasks at once. A dropped connection and rexel's redial.
+A real agent. The journeys against a real host. Rex's Tailscale
+address in place of the forward. Many tasks at once. A dropped
+connection, the forward's ssh ending, and rexel's redial.
 Roost's program-status from Rex. The other QA journeys.
