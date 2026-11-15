@@ -320,6 +320,37 @@ the attach returned:
   window-live-p, nil" in the echo area). It waits for the terminal's
   pane now: 3 of 3 alone, and in the eleven.
 
+## 2026-11-15: #19 merged, main at 359eeeb
+
+dakra merged the pull request with the three suggestions (22bfc71: the
+session's windows are asked for ahead of commands given early, an attach
+with NO-DISPLAY says nothing in the echo area, and the README names the
+`user-error`s of `ghostel-tmux-command` and how to show a buffer in
+place of a split). Three commits follow it: a bare `ghostel-tmux-attach`
+takes the session `tmux attach` would, `C-t s` switches sessions (the
+pane picker is on `C-t w`), and `ghostel-tmux-skip-sessions-regexp`
+keeps sessions out of the bare attach. The layer names its session, so
+none of these reach it.
+
+The layer is unchanged and byte-compiles on main with no warnings.
+
+- Remote, writes joined (`QA_SSH_JOIN=0.02`), `answer` and `shell`: 2
+  of 2.
+- claylien, ghostel-tmux alone, a `ghostel-tmux-command` given as soon
+  as the attach returned: none lost in 10 with TRAMP as it comes, none
+  in 5 with direct async.
+- Local, the eleven, nine whole runs: seven with no problems, and two
+  where Emacs stopped answering the harness, once for 19 s after a task
+  with no work retired and once for 60 s after the commit of the merge
+  journey. Both were among the first three runs; the six after, with a
+  watcher to sample Emacs when it went quiet, passed, so nothing says
+  what Emacs was doing. On fdbf32b: six whole runs, no problems (one
+  the day before, five beside these). The retire journey alone: 3 of 3
+  on main, 2 of 2 on fdbf32b.
+
+Two stops in nine against none in six does not settle whether main
+brought them. Not explained.
+
 ## Not tried
 
 - The journeys that press tmux-control's own commands: panes, tabs,
