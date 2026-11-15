@@ -1385,7 +1385,7 @@ A reply to create read before then can come after.")
 (defun roost--cache-task (host task)
   "Cache TASK from HOST and notify only on attention transitions."
   (setf (alist-get 'host task) host)
-  (dolist (field '(pushed alreadySent alreadyMade alreadyTold note))
+  (dolist (field '(pushed alreadySent alreadyMade alreadyTold stale note))
     (setq task (assq-delete-all field task)))
   (when-let* ((old (gethash (roost--key task) roost--tasks)))
     ;; Looks and the agent's events move apart: the newer of each counts.
@@ -5028,9 +5028,11 @@ terminal the action ended closes."
              (roost--discard-terminal terminals)
              (cl-incf (gethash host roost--revisions 0))
              ;; `pushed' is transient: the callback sees it, the cache does not.
-             ;; So is `note', what there is to say of a change of branch.
+             ;; So is `note', what there is to say of a change of branch,
+             ;; and `stale', that the agent did something since.
              (let ((pushed (assq 'pushed updated))
                    (note (assq 'note updated))
+                   (stale (assq 'stale updated))
                    (already (alist-get 'alreadySent updated))
                    (torn (alist-get 'teardownFailure updated))
                    (output (alist-get 'teardownOutput updated))
@@ -5041,7 +5043,7 @@ terminal the action ended closes."
                (when-let* ((said (cdr (assoc action roost--action-messages))))
                  (message (if already "Already sent to %s" said) (roost--field task 'name)))
                (when callback
-                 (funcall callback (append (delq nil (list pushed note)) updated)))
+                 (funcall callback (append (delq nil (list pushed note stale)) updated)))
                (when left
                  (message "%s" (string-join (delq nil (list (current-message)
                                                             (concat "left in place: " (string-join left ", "))))
@@ -8319,7 +8321,9 @@ that takes it up is at work."
 As `roost--tell-due-p' has it.  Its host writes the line, from what
 waits, the pull request's number and how many checks or threads, and
 pastes it once.  What it refuses, as when the agent has started since,
-or can't be asked, waits on you instead."
+or can't be asked, waits on you instead.  An agent that did something
+since what Emacs holds of it, and rests again, is told nothing: its host
+says how it stands now, and Roost judges by that."
   (when-let* (((roost--left-p task))
               (turn (roost--any-turn task))
               ((roost--tell-due-p task turn))
@@ -8341,10 +8345,16 @@ or can't be asked, waits on you instead."
                         (count . ,(pcase turn
                                     ("ci failed" (alist-get 'failing (alist-get 'checks status)))
                                     ("comments" (alist-get 'threads status))))
-                        (gitlab . ,(if (equal (alist-get 'forge pr) "gitlab") t :false)))
-                      (lambda (_)
+                        (gitlab . ,(if (equal (alist-get 'forge pr) "gitlab") t :false))
+                        ;; What this judged by: its host tells an agent
+                        ;; nothing that has done something since.
+                        (asOf . ,(roost--field task 'updatedAt)))
+                      (lambda (updated)
                         (funcall done)
-                        (message "Told %s's agent: %s" name reason))
+                        (if (alist-get 'stale updated)
+                            ;; Nothing was told, so nothing was heard here.
+                            (remhash key roost--told-here)
+                          (message "Told %s's agent: %s" name reason)))
                       (lambda (err)
                         (funcall done)
                         (puthash key occurrence roost--untold)

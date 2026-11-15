@@ -36,6 +36,9 @@ the section's invariants in `docs/state-machines.md`:
   the agent's own.
 - **CacheLeftNewest** (I7). An older reply undoes no leaving, taking back
   or telling in Emacs.
+- **NothingSinceJudged** (I8). The agent has done nothing since what Emacs
+  judged by. Harm if broken: an agent told of a failure it fixed, or of its
+  own answer in a thread, in a turn Emacs had not heard of.
 - **RefusedIsYours**, **HadItsTurnIsYours** (I6). What Roost knows it did
   not tell the agent, and what the agent was told, acted on and left
   standing, wait on you at once, not after the two minutes.
@@ -64,7 +67,7 @@ the order of `roost--newer-events` and `roost--newer-left`, is theirs.
 python3 test/formal/check.py pull_request_left
 ```
 
-About a minute. Every line must say `ok`. `LeftPullRequest.cfg`,
+About three minutes. Every line must say `ok`. `LeftPullRequest.cfg`,
 `LeftPullRequestThreads.cfg` and `LeftPullRequestHost.cfg` must pass; each
 `Name.VARIANT.cfg` must fail as its first line says, which proves the rule
 can still fail, or, for a finding, that the bug is still there. `make formal`
@@ -87,7 +90,7 @@ never.
 | Model | Code |
 | --- | --- |
 | `Leave` | `leave`: `prLeft`, `prTold` dropped, a new `prLeftGen`, `prLeftAt` |
-| `Take` | `tell`, to where it writes the record: its refusals in the code's order, `alreadyTold`, `TOLD_MOST`, at rest, the pane |
+| `Take` | `tell`, to where it writes the record: its refusals in the code's order, `alreadyTold`, `TOLD_MOST`, at rest, `stale` when the record's `updatedAt` is not the request's `asOf`, the pane |
 | `Recorded`, `Kept` | `prTold` written before the paste, every entry kept |
 | `Paste`, `Record`, `SendId` | `send` under `tell`'s ID: the paste, tmux taking the line or not and saying it failed, the ID written after |
 | `Killed` | the helper killed after the record, or after the paste |
@@ -95,7 +98,7 @@ never.
 | `Turn` | `roost--any-turn` of `roost--pr-verdict`: the forge asked after the agent's last event (`roost--pr-status`), and the agent not at work |
 | `Key`, `Occ`, `ToldOf`, `Entries` | `roost--tell-key`, `roost--tell-occurrence`, `roost--told`, `roost--told-entry` |
 | `Due`, `AgentsTurn` | `roost--tell-due-p`, `roost--agents-turn-p` |
-| `Tells`, `Reply`, `NoReply` | `roost--tell-agent`: `roost--telling`, its success, and `roost--untold` on a refusal or no reply |
+| `Tells`, `Reply`, `NoReply` | `roost--tell-agent`: `roost--telling`, the `asOf` it sends, its success, a `stale` reply cached with nothing said, and `roost--untold` on a refusal or no reply |
 | `Merge` | `roost--cache-task`: `roost--newer-events`, then `roost--newer-left`, and `prStatus` from the reply that has it |
 | `Deliver` with `mine` | the reply to your own `L`, which forgets `roost--untold` |
 | `GraceEnds`, `expired` | `roost--pr-grace` over, by `roost--told-here` or the entry's time |
@@ -108,12 +111,13 @@ Three configs, as the whole is too large for one:
   two tellings, two lists, one prompt of your own, and requests the helper
   takes after Emacs stopped waiting (`LateTake`).
 - `LeftPullRequestThreads.cfg`: one Emacs, two comments, the agent's or a
-  reviewer's, and no push or prompt of your own.
+  reviewer's, one prompt of your own, a list that asks the forge after it
+  read the record (`PollSplit`), and no push.
 - `LeftPullRequestHost.cfg`: the helper alone, asked by any Emacs at any
   time and killed at any step: two pushes, `L` twice, three tellings.
 
-Checked once and in no config, for its two minutes: `LeftPullRequest.cfg`
-with `PollSplit` passes (60 million states).
+Checked once and in no config, for its three minutes: `LeftPullRequest.cfg`
+with `PollSplit` passes (40 million states).
 
 Assumed: the forge's clock and the host's agree. A comment's time is the
 forge's and `updatedAt` the host's, and `roost--tell-due-p` compares them:
@@ -142,30 +146,18 @@ the action and point its comment at the code that rules the step out.
 
 ### Findings
 
-Open, all of one cause: Emacs judges by the copy it holds, and `tell`
-doesn't know what that copy was.
+None open.
 
-- `LeftPullRequest.finding-told-after-a-turn.cfg` (NothingSinceJudged). A
-  check has failed and the agent rests. You prompt the agent from where
-  Roost doesn't see it, as from another terminal or Remote Control. It takes
-  a turn, perhaps fixing the failure, and rests again before Emacs has
-  heard of the turn. Emacs asks `tell` by what it held, the helper finds
-  the agent at rest, and the agent is told of what stood before its turn.
-  One line too many, once. A fix: Emacs sends the `updatedAt` it judged by,
-  and `tell` refuses when the record's is another.
-- `LeftPullRequestThreads.finding-told-of-its-own-answer.cfg`
-  (ThreadsNoEcho). The same, with a thread: told after a turn in which it
-  answered there, by a paste tmux took and said failed, so that Emacs
-  holds no word of the telling; Emacs then takes the agent's own answer
-  for the first news of the thread, and the agent is told of it. The fix
-  above ends this path.
-- `LeftPullRequestThreads.finding-answered-while-a-list-asks.cfg`
-  (ThreadsNoEcho). With no prompt of yours: a list reads the record of an
-  agent at rest, just told of a thread. While the list asks the forge, the
-  agent takes the line, answers in the thread and rests again. Emacs then
-  holds its answer beside the time of its event before, which makes the
-  answer news, and the agent is told of it. It needs a whole turn within
-  one list's asking. The fix above ends this too: the record has moved.
+Fixed, and kept as the variants that undo the fix (`AsOf` false):
+`LeftPullRequest.no-as-of.cfg`, `LeftPullRequestThreads.no-as-of.cfg` and
+`LeftPullRequestThreads.no-as-of-while-a-list-asks.cfg`. Emacs judged by
+the copy it held, and `tell` didn't know what that copy was: an agent that
+took a turn Emacs had not heard of, on a prompt from another terminal or
+within one list's asking of the forge, was told of what stood before it, or
+of its own answer in a thread. Emacs now sends the `updatedAt` it judged
+by, and `tell` tells nothing when the record's is another
+(`test_an_agent_that_did_something_since_emacs_judged_is_not_told`,
+`roost-judges-afresh-when-the-agent-did-something-since`).
 
 Fixed before the model, each kept as the variant that undoes it:
 `LeftPullRequestHost.record-after-paste.cfg`,
@@ -186,4 +178,6 @@ and keep it. To fix a finding, follow `.claude/skills/fix-a-finding`.
 Once the model describes the code at a new commit and every line is `ok`,
 move `SYNC` in `covered.py` to that commit. Only then.
 
-Last confirmed at `6476f2f`, where the model was written.
+Last confirmed at `4e0a586`, with the `asOf` and `stale` of `tell`,
+`roost--tell-agent`, `roost--act` and `roost--cache-task` that came with
+this line.

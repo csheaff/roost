@@ -4624,7 +4624,7 @@ def leave(store, task, on):
     return task
 
 
-def tell(store, task, verdict, key, number, count=None, gitlab=False):
+def tell(store, task, verdict, key, number, count=None, gitlab=False, as_of=None):
     """Tell TASK's agent that its pull request NUMBER needs it for VERDICT,
     one of TOLD: paste the line `told_words` gives, as `send` pastes yours.
     Only while the pull request is left to the agent (`leave`), and while
@@ -4634,7 +4634,10 @@ def tell(store, task, verdict, key, number, count=None, gitlab=False):
     the same while there is nothing new to tell: asked again, as by another
     Emacs or after no reply, the record says the agent was told, and it is
     not told twice. And TOLD_MOST times at most for one pull request and
-    VERDICT."""
+    VERDICT. AS_OF is the `updatedAt` of the copy Emacs judged by: an agent
+    that has done anything since, as on a prompt from another terminal, is
+    told nothing, and the reply says `stale`, with the record as it is now
+    for Emacs to judge by afresh."""
     if task.get("prLeft") is not True:
         raise RoostError("This task's pull request is not left to its agent")
     if verdict not in TOLD:
@@ -4645,6 +4648,8 @@ def tell(store, task, verdict, key, number, count=None, gitlab=False):
         raise RoostError("Invalid pull request number")
     if verdict != "conflicts" and not counted(count, TOLD_COUNTS):
         raise RoostError("Invalid count")
+    if parse_time(as_of) is None:
+        raise RoostError("Invalid time")
     entries = told(task)
     same = [entry for entry in entries if entry["number"] == number and entry["verdict"] == verdict]
     if any(entry["key"] == key for entry in same):
@@ -4653,6 +4658,12 @@ def tell(store, task, verdict, key, number, count=None, gitlab=False):
         raise RoostError("Roost has told this agent of it %d times; the pull request is left to you" % TOLD_MOST)
     if task["status"] != "ready" or task.get("lastEvent") == "Interrupt":
         raise RoostError("The agent is not at rest")
+    # At rest, but after a turn Emacs has not heard of, in which it may have
+    # fixed what Emacs saw or answered in the thread. Its hooks stamp the
+    # record under the lock this holds, so none comes between this and the
+    # paste.
+    if task.get("updatedAt") != as_of:
+        return dict(task, stale=True)
     # As for a prompt of yours, which an agent would act on in a worktree
     # an update left half merged.
     require_not_removing(store, task, "send")
@@ -8676,7 +8687,7 @@ TASK_ACTIONS = {
     "leave": lambda store, task, request: leave(store, task, request.get("on")),
     "tell": lambda store, task, request: tell(store, task, request.get("verdict"), request.get("key"),
                                               request.get("number"), request.get("count"),
-                                              request.get("gitlab") is True),
+                                              request.get("gitlab") is True, request.get("asOf")),
     "retire": lambda store, task, request: retire(store, task, merged_head=request.get("mergedHead"),
                                                   teardown=text(request.get("teardown")),
                                                   still_open=request.get("stillOpen") is True,

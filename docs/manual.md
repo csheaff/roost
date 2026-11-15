@@ -585,6 +585,10 @@ as Roost does the telling.
   and you aren't at its terminal, writing it a prompt, or just done
   sending one. One that asks, one you stopped and one that has exited wait
   for you.
+- An agent you prompted from somewhere Roost doesn't see, such as another
+  terminal or the Claude app, is told nothing of how the pull request was
+  before that turn: Roost looks again, and tells it only of what is still
+  there.
 - Five times at most for each kind on one pull request. After that, or when
   the agent stops with the pull request as it was, the task waits on you as
   before, with its word and a notification. `L` twice starts the count again.

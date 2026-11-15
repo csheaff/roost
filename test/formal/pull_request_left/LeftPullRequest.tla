@@ -30,6 +30,7 @@ CONSTANTS
   UntoldHides,       \* `roost--agents-turn-p` leaves what was refused to you
   EventEndsGrace,    \* and what the agent has done something since
   NewerCommentsOnly, \* `roost--tell-due-p`: threads again only for a comment since the agent's last event
+  AsOf,              \* `tell` tells nothing to an agent that did something since what Emacs judged by
   \* Scope.
   Kills,      \* a helper killed between the record and the paste, or after it
   OtherEmacs, \* `tell` asked by another Emacs, with no guard of this one's
@@ -262,6 +263,9 @@ Take(r) ==
         THEN /\ UNCHANGED <<clock, rec>> /\ Handled(r, "refused")
         ELSE IF \E i \in same : rec.told[i].key = reqs[r].key
         THEN /\ UNCHANGED <<clock, rec>> /\ Handled(r, "already")
+        \* `asOf`: the record's `updatedAt` is not the one Emacs judged by.
+        ELSE IF AsOf /\ rec.updatedAt # reqs[r].asOf
+        THEN /\ UNCHANGED <<clock, rec>> /\ Handled(r, "stale")
         ELSE /\ IF RecordFirst THEN Recorded(r) ELSE UNCHANGED <<clock, rec>>
              /\ reqs' = [reqs EXCEPT ![r].state = "recorded"]
   /\ UNCHANGED <<inbox, sendIds, pastes>> /\ HostQuiet
@@ -340,7 +344,8 @@ Reply(r) ==
   /\ r \in waits /\ reqs[r].state = "handled"
   /\ waits' = waits \ {r}
   /\ telling' = <<>>
-  /\ IF reqs[r].result \in {"told", "already"}
+  \* A stale one brings the record as it is, and nothing waits on you for it.
+  /\ IF reqs[r].result \in {"told", "already", "stale"}
      THEN Cached(reqs[r].snap) /\ UNCHANGED untold
      ELSE untold' = reqs[r].occ /\ UNCHANGED <<cache, seenLeft>>
   /\ UNCHANGED <<reqs, mail, expired>> /\ EmacsQuiet
@@ -436,8 +441,7 @@ HadItsTurnIsYours ==
               /\ \A i \in Entries(cache, t) : cache.told[i].at < cache.updatedAt)
     => ~AgentsTurn(cache)
 
-\* Not kept by the code: see LeftPullRequest.finding-told-after-a-turn.cfg.
-\* The agent has done nothing since what Emacs judged by.
+\* I8: the agent has done nothing since what Emacs judged by.
 NothingSinceJudged == \A i \in Pastes : pastes[i].since
 
 =============================================================================
