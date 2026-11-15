@@ -291,6 +291,8 @@ class Tell(KeepsTask):
     def prepare(self, box):
         super().prepare(box)
         box.helper("leave", id=self.task["id"], on=True)
+        # What Emacs judged by: nothing the agent does comes between.
+        self.args = dict(self.args, asOf=box.record(self.task["id"])["updatedAt"])
 
     def holds(self, box, problems):
         super().holds(box, problems)

@@ -25,6 +25,11 @@ What each release changes, and what to do when upgrading. Newest first.
   Emacs runs, and Roost still never merges. Off unless you turn it on.
   Restart Emacs after updating for the `L` key; nothing else to do when
   upgrading.
+- An agent that has done something Roost had yet to hear of, as on a
+  prompt from another terminal or the Claude app, is no longer told of a
+  failed check or a review thread as it stood before that: Roost looks
+  again first, and tells it only of what is still there. Nothing to do
+  when upgrading.
 - An agent can show you a page it writes, once you turn it on with
   `roost-agent-pages`: ask a Claude task for a diagram of what it changed,
   a mock-up or something to try, and it opens beside the task's terminal as

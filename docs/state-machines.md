@@ -171,6 +171,7 @@ fails in its place.
 | FORGE-14 | S4 | A branch named in another Emacs, or by a `B` whose reply was lost, goes unmeasured while Git's stamp stays, and the row keeps saying "merged" | [Task measurement](#task-measurement) | Fixed, `roost-a-branch-to-merge-into-named-elsewhere-is-measured-against` |
 | FORGE-15 | S3 | After `B` makes a commit of the task's own its start, by naming what has some of its commits, a reset of its branch reads wrong: `x` retires a task that is ahead, or one merged reads as not | [Landed](#landed) | Fixed: `test_a_task_reset_to_a_commit_of_its_own_after_retargeting_still_has_unmerged_commits`, `test_a_task_reset_to_a_merged_commit_of_its_own_after_retargeting_reads_as_merged`, `test_a_task_reset_to_where_it_started_after_retargeting_reads_as_never_committed` |
 | VIEWS-15 | S3 | Several attempts at one prompt are made from two, when the draft's own request is lost or refused, you change the prompt, and ask again | [The creation ID](#the-creation-id) | Fixed: `roost-a-draft-changed-between-asks-makes-its-attempts-from-one-wording`, `test_the_attempts_of_one_draft_are_made_from_one_wording`, `test_attempts_asked_for_at_once_in_other_words_make_one_wording` |
+| LEFT-1 | S4 | An agent that took a turn Emacs had not heard of, as on a prompt from another terminal, is told of what stood before it, or of its own answer in a thread | [A pull request left to its agent](#a-pull-request-left-to-its-agent) | Fixed: `test_an_agent_that_did_something_since_emacs_judged_is_not_told`, `roost-judges-afresh-when-the-agent-did-something-since` |
 | LC-10 | S4 | An offer its agent makes after you were asked goes with a task you finish, unnamed | [Finishing a task](#finishing-a-task) | Fixed: `test_an_offer_made_since_you_were_asked_keeps_its_task`, `test_an_offer_made_while_git_merges_keeps_its_task`, `roost-finishing-a-task-tells-its-host-which-offers-its-question-named` |
 | STATUS-12 | S4 | Closing Codex's plan menu says nothing, so its task reads `permission` until your next prompt | [Agent status](#agent-status) | Accepted: `AgentStatus.PlanMenuClosed.cfg` |
 
@@ -2384,6 +2385,13 @@ Invariants:
   for two minutes, or with the agent gone, it waits on you, and is news then.
 - I7. Leaving and telling are no events of the agent's: `updatedAt` stays, and
   `prLeftAt` keeps an older reply from undoing them (`roost--newer-left`).
+- I8. By what Emacs judged: Emacs sends the `updatedAt` of the copy it judged by
+  (`asOf`), and `tell` tells nothing when the record's is another. An agent that
+  took a turn Emacs has not heard of, as on a prompt from another terminal, may
+  have fixed the failure or answered in the thread. The reply says `stale` and
+  has the record as it is, and Emacs judges afresh once the forge has been asked
+  after that turn. The agent's hooks stamp the record under the lock `tell`
+  holds, so none comes between the check and the paste.
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
@@ -2393,6 +2401,7 @@ Invariants:
 | Due | Task cached | not telling, not untold | Telling | `tell` asked | `roost--tell-agent` |
 | Telling | Reply | | Told | Line pasted, `prTold` grows | `tell` |
 | Telling | Refused, no reply | | Yours again | `roost--untold`; said once | `roost--tell-agent` |
+| Telling | Reply `stale` | the record's `updatedAt` is not `asOf` | Left, quiet | Nothing pasted or said; the record cached as it is | `tell`, `roost--tell-agent` |
 | Told | Agent starts | | Left, quiet | | its hooks |
 | Told | Two minutes, nothing moved; or the agent did something since and rests, or is gone | | Yours again | The word shows; news | `roost--agents-turn-p` |
 | Yours again | The agent pushes and it fails again, or a comment comes | under five | Due | | `roost--tell-due-p` |
@@ -2402,20 +2411,7 @@ prompt you left half typed in the agent's terminal while you were elsewhere: the
 line would join it.
 
 Model: `test/formal/pull_request_left`, by `.claude/skills/verify-pull-request-left`.
-It holds I2 to I7; I1 is `test_an_agent_is_told_only_what_roost_writes_and_only_at_rest`.
-
-Open, found by the model, all of one cause: Emacs judges by the copy it holds, and
-`tell` doesn't know what that copy was.
-
-- You prompt the agent from where Roost doesn't see it, it takes a turn and rests
-  again before Emacs hears of it, and Roost tells it of what stood before that turn
-  (`LeftPullRequest.finding-told-after-a-turn.cfg`). S4: one line too many, once.
-- The same with a thread it answered in that turn, and a paste tmux took and said
-  failed: the agent is then told of its own answer
-  (`LeftPullRequestThreads.finding-told-of-its-own-answer.cfg`). S4.
-- The same with no prompt of yours: the agent takes what it was told, answers and
-  rests again while a list that read its record before asks the forge
-  (`LeftPullRequestThreads.finding-answered-while-a-list-asks.cfg`). S4.
+It holds I2 to I8; I1 is `test_an_agent_is_told_only_what_roost_writes_and_only_at_rest`.
 
 Assumed, and not in the model: the forge's clock and the host's agree. I4 compares a
 comment's time, the forge's, with `updatedAt`, the host's.

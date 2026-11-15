@@ -11350,7 +11350,7 @@ Each is (ACTION PARAMETERS SUCCESS FAILURE), and nobody watches a task."
               (task (roost--cache-task "dev" (apply #'roost-test--left-task failed))))
          (should (equal (roost-test--tells requests)
                         '(((id . "0123456789abcdef") (verdict . "ci failed") (key . "a1") (number . 12)
-                           (count . 1) (gitlab . :false)))))
+                           (count . 1) (gitlab . :false) (asOf . "2026-10-03T20:00:00+00:00")))))
          ;; Its agent's turn, so no word on its row, nothing to notify of,
          ;; and nothing asked twice while its host has yet to answer.
          (should-not (roost--turn task))
@@ -11444,6 +11444,40 @@ Each is (ACTION PARAMETERS SUCCESS FAILURE), and nobody watches a task."
                                     (prLeftGen . "0a1b2c3d4e5f") (prLeftAt . "2026-10-03T19:30:00+00:00"))
                                   (apply #'roost-test--left-task failed)))))
          (should (equal (roost--turn task) "ci failed")))))))
+
+(ert-deftest roost-judges-afresh-when-the-agent-did-something-since ()
+  ;; Found by the model (LeftPullRequest.no-as-of.cfg).  Emacs says what it
+  ;; judged by.  An agent that took a turn it has not heard of, as on a
+  ;; prompt from another terminal, is told nothing by its host, which says
+  ;; how it stands now: no word that it was told, and not yours for it.
+  (roost-test--isolated
+   (let (requests)
+     (roost-test--telling requests
+       (let* ((failed `((checks . ((passing . 2) (failing . 1) (pending . 0))) (failedAt . ,(roost-test--ago 300))))
+              (key '("dev" "0123456789abcdef"))
+              (since (lambda (&rest status)
+                       (let ((task (apply #'roost-test--left-task status)))
+                         (setf (alist-get 'updatedAt task) "2026-10-03T20:05:00+00:00")
+                         task))))
+         (roost--cache-task "dev" (apply #'roost-test--left-task failed))
+         (should (equal (alist-get 'asOf (car (roost-test--tells requests))) "2026-10-03T20:00:00+00:00"))
+         (let ((inhibit-message t) (message-log-max t))
+           (with-current-buffer (get-buffer-create "*Messages*")
+             (let ((inhibit-read-only t)) (erase-buffer)))
+           (funcall (nth 2 (car requests)) (cons '(stale . t) (assq-delete-all 'prStatus (funcall since))))
+           (with-current-buffer "*Messages*"
+             (should-not (string-match-p "Told" (buffer-string)))))
+         (should-not (gethash key roost--telling))
+         (should-not (gethash key roost--untold))
+         (should-not (gethash key roost--told-here))
+         (should-not (assq 'stale (gethash key roost--tasks)))
+         ;; Nothing to judge until GitHub is asked after that turn.
+         (should (= (length (roost-test--tells requests)) 1))
+         (should-not (roost--turn (gethash key roost--tasks)))
+         ;; The check still fails then: told, by what Emacs holds now.
+         (roost--cache-task "dev" (apply since '(checkedAt . "2026-10-03T20:06:00+00:00") failed))
+         (should (= (length (roost-test--tells requests)) 2))
+         (should (equal (alist-get 'asOf (car (roost-test--tells requests))) "2026-10-03T20:05:00+00:00")))))))
 
 (ert-deftest roost-tells-the-agent-of-review-threads-new-to-it ()
   ;; Once of the threads there are, and then only of a comment that came

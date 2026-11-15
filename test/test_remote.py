@@ -170,8 +170,10 @@ class Lifecycle(unittest.TestCase):
 
     def tell_agent(self, task, **args):
         """Ask the helper to tell TASK's agent of its pull request, #12."""
-        return self.request("tell", id=task["id"], **dict(dict(verdict="ci failed", key="a" * 40, number=12, count=2),
-                                                         **args))
+        return self.request("tell", id=task["id"], **dict(
+            dict(verdict="ci failed", key="a" * 40, number=12, count=2,
+                 # What Emacs judged by: the agent's last event, as it holds it.
+                 asOf=(roost.Store(str(self.state)).read(task["id"]) or {}).get("updatedAt")), **args))
 
     def rested(self, task, words):
         """Wait until TASK's agent has had WORDS and rests again."""
@@ -236,6 +238,37 @@ class Lifecycle(unittest.TestCase):
         self.assertNotIn("prLeft", talk)
         self.assertEqual(self.request("leave", id=talk["id"], on=True)["error"],
                          "A conversation has no pull request to leave to its agent")
+
+    def test_an_agent_that_did_something_since_emacs_judged_is_not_told(self):
+        # Found by the model (LeftPullRequest.no-as-of.cfg): Emacs judges by
+        # the copy it holds. You prompt the agent from where Roost doesn't
+        # see it, it takes a turn and rests again before Emacs hears of it:
+        # at rest, as `tell` wants, with what Emacs saw perhaps fixed.
+        task = self.create()
+        self.assertTrue(self.request("leave", id=task["id"], on=True)["ok"])
+        store = roost.Store(str(self.state))
+        judged = store.read(task["id"])["updatedAt"]
+        roost.tmux(self.socket, "send-keys", "-t", task["paneId"], "-l", "from another terminal")
+        roost.tmux(self.socket, "send-keys", "-t", task["paneId"], "Enter")
+        self.rested(task, "from another terminal")
+        self.assertGreater(store.read(task["id"])["updatedAt"], judged)
+        stale = self.tell_agent(task, asOf=judged)
+        self.assertTrue(stale["ok"], stale)
+        self.assertIs(stale["result"]["stale"], True)
+        # Emacs has the record as it is now, to judge by afresh.
+        self.assertEqual(stale["result"]["updatedAt"], store.read(task["id"])["updatedAt"])
+        time.sleep(0.3)
+        self.assertEqual(self.pastes(task, "Roost:"), 0)
+        self.assertNotIn("prTold", store.read(task["id"]))
+        self.assertNotIn("stale", store.read(task["id"]))
+        # Judged by what its record says now, it is told.
+        self.assertNotIn("stale", self.tell_agent(task)["result"])
+        self.rested(task, "Roost: 2 checks failed on #12. Fix them.")
+        # Asked again of what it was told, by a copy older still: told already.
+        self.assertIs(self.tell_agent(task, asOf=judged)["result"]["alreadyTold"], True)
+        # Emacs always says what it judged by.
+        for value in (None, 12, "", "yesterday"):
+            self.assertEqual(self.tell_agent(task, key="b" * 40, asOf=value)["error"], "Invalid time", value)
 
     def test_an_agent_is_told_only_what_roost_writes_and_only_at_rest(self):
         task = self.create()
