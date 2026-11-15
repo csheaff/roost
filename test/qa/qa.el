@@ -872,9 +872,11 @@ doesn't."
 
 (defun qa--ghostel-pane-p (buffer)
   "Whether BUFFER is a live pane buffer of ghostel-tmux, in its trial."
-  (and (boundp 'ghostel-tmux--pane-id)
-       (buffer-local-value 'ghostel-tmux--pane-id buffer)
-       (buffer-live-p (buffer-local-value 'ghostel-tmux--controller-buffer buffer))))
+  (or (and (boundp 'ghostel-tmux--pane-id)
+           (buffer-local-value 'ghostel-tmux--pane-id buffer)
+           (buffer-live-p (buffer-local-value 'ghostel-tmux--controller-buffer buffer)))
+      ;; Or a block buffer of rexel, in its trial.
+      (and (fboundp 'rexel-block-p) (rexel-block-p buffer))))
 
 (defun qa--mode (buffer)
   "BUFFER's major mode by name; a pane of ghostel-tmux counts as tmux-control's."
@@ -951,7 +953,8 @@ A window parameter of that name takes the buffer's place, as in redisplay."
   (with-current-buffer (window-buffer window)
     (when-let* (((derived-mode-p 'tmux-control-mode))
                 ;; ghostel-tmux, in its trial, has its tabs in the tab line.
-                (line (qa--line window (if (qa--ghostel-pane-p (current-buffer))
+                (line (qa--line window (if (and (qa--ghostel-pane-p (current-buffer))
+                                                (not (bound-and-true-p rexel-block-mode)))
                                            'tab-line-format
                                          'header-line-format))))
       (let ((shown "") (start 0))

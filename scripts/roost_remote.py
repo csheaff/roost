@@ -250,6 +250,102 @@ def enable_extended_keys(socket):
         tmux(socket, "set-option", "-s", "extended-keys", "on", check=False)
 
 
+# Trial: a socket named "rex:ADDRESS" keeps its tasks in a Rex server at
+# ADDRESS (as `rex -S` takes it) rather than in tmux. A task is a Rex session
+# of one terminal block: the record's paneId is the block, its windowId the
+# session, and the block's label holds the task's ID, as @roost_task_id does.
+REX = "rex:"
+REX_MAC = "/Applications/Rex Beta.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex"
+
+
+def rex_socket(socket):
+    return isinstance(socket, str) and socket.startswith(REX)
+
+
+def rex(socket, *args, check=True, input=None, timeout=TMUX_SECONDS):
+    """Run the Rex CLI against SOCKET's server, never starting one. Rex's
+    app on a Mac keeps its `rex` inside itself, off PATH."""
+    arguments = ["--autostart=false", "-S", socket[len(REX):], *args]
+    if os.path.isfile(REX_MAC):
+        return execute(["/Applications/Rex Beta.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex",
+                        *arguments], check=check, input=input, timeout=timeout)
+    return execute(["rex", *arguments], check=check, input=input, timeout=timeout)
+
+
+def rex_json(socket, *args, **options):
+    result = rex(socket, *args, **options)
+    if result.returncode:
+        return None
+    with contextlib.suppress(ValueError):
+        return json.loads(result.stdout)
+    return None
+
+
+def rex_inventory(socket):
+    """Rex's blocks as `pane_inventory` gives tmux's panes: {} with no
+    server, None when it did not answer."""
+    result = rex(socket, "ls", "--json", check=False, timeout=INVENTORY_SECONDS)
+    if result.returncode:
+        return {} if "no Rex server is running" in result.stderr else None
+    try:
+        sessions = json.loads(result.stdout).get("sessions") or []
+    except ValueError:
+        return None
+    panes = {}
+    for session in sessions:
+        session_id = session.get("session_id")
+        listed = rex_json(socket, "block", "ls", "-s", session_id, "--json", check=False,
+                          timeout=INVENTORY_SECONDS) or {}
+        for block in listed.get("blocks") or []:
+            process = rex_json(socket, "block", "call", "-s", session_id, "-b", block["block_id"], "process",
+                               check=False, timeout=INVENTORY_SECONDS) or {}
+            child = process.get("child") or {}
+            panes[block["block_id"]] = dict(window=session_id, index=0, session=session_id,
+                                            dead=not child, task=block.get("label") or "",
+                                            session_name=session.get("label") or "", pid=child.get("pid"))
+    return panes
+
+
+def rex_spawn(socket, session, name, worktree, argv, task_id):
+    """Start ARGV in a Rex session labelled SESSION, in a new window of the
+    one there if any. Return what `spawn` reads from tmux."""
+    listed = rex_json(socket, "ls", "--json") or {}
+    there = [each["session_id"] for each in listed.get("sessions") or [] if each.get("label") == session]
+    options = ["-c", worktree, "--keep-open", "--shell", "none", "--json", "--", *argv]
+    if there:
+        session_id = there[0]
+        made = json.loads(rex(socket, "run", "-s", session_id, "--focus=false", *options).stdout)
+        block = made.get("block_id") or made["block_ids"][0]
+    else:
+        made = json.loads(rex(socket, "new", session, *options).stdout)
+        session_id, block = made["session_id"], made["initial_windows"][0]["block_ids"][0]
+    rex(socket, "block", "rename", "-s", session_id, block, task_id)
+    rex(socket, "window", "rename", "-s", session_id, "1", name, check=False)
+    pid = None
+    for _ in range(20):
+        process = rex_json(socket, "block", "call", "-s", session_id, "-b", block, "process", check=False) or {}
+        pid = (process.get("child") or {}).get("pid")
+        if pid or process.get("last_exit"):
+            break
+        time.sleep(0.1)
+    return session_id, block, 0, pid, session
+
+
+def kill_window(socket, window, check=True):
+    if rex_socket(socket):
+        return rex(socket, "kill", window, check=check)
+    return tmux(socket, "kill-window", "-t", window, check=check)
+
+
+def kill_pane(socket, pane_id, check=True):
+    if rex_socket(socket):
+        pane = (rex_inventory(socket) or {}).get(pane_id)
+        if not pane:
+            return None
+        return rex(socket, "block", "close", "-s", pane["window"], pane_id, check=check)
+    return tmux(socket, "kill-pane", "-t", pane_id, check=check)
+
+
 def session_name(repo, task_id):
     """The tmux session for one task, named after its project and task so
     tmux and Emacs show which task a session holds. Tasks started before
@@ -544,6 +640,8 @@ def pane_inventory(socket):
     example a client/server version mismatch after upgrading tmux). Each
     poll asks this holding the registry lock, so it gives up sooner than
     any other call, within what agents' hooks wait."""
+    if rex_socket(socket):
+        return rex_inventory(socket)
     result = tmux(socket, "list-panes", "-a", "-F",
                   "#{pane_id}\t#{window_id}\t#{window_index}\t#{session_id}\t#{pane_dead}\t#{@roost_task_id}\t#{pane_pid}\t#{session_name}",
                   check=False, timeout=INVENTORY_SECONDS)
@@ -576,7 +674,10 @@ def owned_pane(task, inventory):
     # The tag goes with the pane wherever you move it, and stays on what tmux
     # starts in it after the runner, as `respawn-pane` does, which is no agent.
     # A task from before Roost noted the runner's process is taken as it is.
-    if pane and pane["task"] == task["id"] and task.get("panePid", pane["pid"]) == pane["pid"]:
+    # Rex never uses a block's ID again, and says no process of one that
+    # ended: its label is enough.
+    if pane and pane["task"] == task["id"] and (rex_socket(task.get("socket"))
+                                                 or task.get("panePid", pane["pid"]) == pane["pid"]):
         return pane
     return None
 
@@ -594,10 +695,10 @@ def close_panes(task, inventory, check=True):
     for window in sorted({inventory[pane_id]["window"] for pane_id in ours}):
         beside = {pane_id for pane_id, pane in inventory.items() if pane["window"] == window}
         if beside <= ours:
-            tmux(task["socket"], "kill-window", "-t", window, check=check)
+            kill_window(task["socket"], window, check=check)
         else:
             for pane_id in sorted(beside & ours):
-                tmux(task["socket"], "kill-pane", "-t", pane_id, check=check)
+                kill_pane(task["socket"], pane_id, check=check)
 
 
 def check_worktree(store, task, branch=True):
@@ -1913,6 +2014,16 @@ def spawn(store, task, resume=False, size=()):
     window_options = ["-P", "-F", "#{window_id}\t#{pane_id}\t#{window_index}\t#{pane_pid}\t#{session_name}",
                       "-n", task["name"].replace("#", "##"), "-c", task["worktree"].replace("#", "##"),
                       shlex.join(argv)]
+    if rex_socket(socket):
+        window, pane, index, pid, session = rex_spawn(socket, session, task["name"], task["worktree"], argv,
+                                                      task["id"])
+        task.update(windowId=window, paneId=pane, windowIndex=index, session=session, panePid=pid,
+                    status="starting", updatedAt=now(), error=None)
+        task["helper"] = script
+        store.save(task)
+        with contextlib.suppress(OSError, TypeError, ValueError):
+            prune_helpers(store)
+        return
     if tmux(socket, "has-session", "-t", "=" + session, check=False).returncode:
         # The task's own session holds only its agent's window, so stopping
         # or retiring the task, which closes that window, ends the session.
@@ -2523,7 +2634,7 @@ def abandon(store, task):
     # Asked for again, it is made anew.
     task.pop("createId", None)
     if task.get("windowId"):
-        tmux(task["socket"], "kill-window", "-t", task["windowId"], check=False)
+        kill_window(task["socket"], task["windowId"], check=False)
     # Never force-remove: a runner could already have written real work.
     # Git removes untracked files with it when your config's
     # status.showUntrackedFiles hides them, so they count here.
@@ -4449,7 +4560,9 @@ def rename(store, task, name):
     store.save(task)
     # Not saved, but Emacs takes the reply for what the task is now.
     task["live"] = bool(pane and not pane["dead"])
-    if pane:
+    if pane and rex_socket(task["socket"]):
+        rex(task["socket"], "window", "rename", "-s", pane["window"], "1", name, check=False)
+    elif pane:
         # A name may start with -, which tmux would take for an option.
         tmux(task["socket"], "rename-window", "-t", pane["window"], "--", name.replace("#", "##"),
              check=False)
@@ -4517,6 +4630,15 @@ def send(store, task, text, force=False, send_id=None):
                          "as a key; nothing was sent" % (text.count("\n", 0, text.index(control)) + 1, name))
     if not text.strip():
         raise RoostError("Empty prompt")
+    if rex_socket(task["socket"]):
+        # A paste event, which Rex brackets for a program that asked.
+        rex(task["socket"], "api", "call", "-s", pane["window"], "block.event", "-",
+            input=json.dumps({"block_id": task["paneId"], "event": {"type": "paste", "payload": {"text": text}}}))
+        rex(task["socket"], "send-key", "-s", pane["window"], "-b", task["paneId"], "enter")
+        if send_id:
+            task["sendIds"] = (sent + [send_id])[-SEND_IDS_KEPT:]
+            store.note(task)
+        return task
     buffer = "roost-" + uuid.uuid4().hex
     tmux(task["socket"], "load-buffer", "-b", buffer, "-", input=text)
     try:
@@ -5288,7 +5410,16 @@ def shell(store, task):
         if not Path(task["worktree"]).is_dir():
             raise RoostError("Task worktree is gone")
         if pane and pane["dead"]:
-            tmux(task["socket"], "kill-pane", "-t", task["shellPaneId"])
+            kill_pane(task["socket"], task["shellPaneId"])
+        if rex_socket(task["socket"]):
+            made = json.loads(rex(task["socket"], "split", "-s", owner["window"], "-b", task["paneId"],
+                                  "--focus=false", "-c", task["worktree"], "--json").stdout)
+            pane_id = made.get("block_id") or made["block_ids"][0]
+            rex(task["socket"], "block", "rename", "-s", owner["window"], pane_id, task["id"])
+            task["shellPaneId"] = pane_id
+            task.update(session=owner["session_name"], windowIndex=owner["index"], windowId=owner["window"])
+            store.save(task)
+            return task
         # tmux reads the directory as a format, where # starts one.
         pane_id = tmux(task["socket"], "split-window", "-h", "-d", "-P", "-F", "#{pane_id}",
                        "-t", task["paneId"], "-c", task["worktree"].replace("#", "##")).stdout.strip()
@@ -8366,7 +8497,11 @@ def runner(root, task_id, run_id, resume_conversation=False):
         if task.get("runId") != run_id:
             # The request that made this window stopped before saying so:
             # nothing knows of it, so it mustn't stay once this exits.
-            if os.environ.get("TMUX_PANE"):
+            if rex_socket(task["socket"]):
+                if os.environ.get("REX_BLOCK") and os.environ.get("REX_SESSION"):
+                    rex(task["socket"], "block", "close", "-s", os.environ["REX_SESSION"],
+                        os.environ["REX_BLOCK"], check=False)
+            elif os.environ.get("TMUX_PANE"):
                 tmux(task["socket"], "set-option", "-p", "-t", os.environ["TMUX_PANE"], "remain-on-exit", "off",
                      check=False)
             return 0

@@ -257,7 +257,7 @@ class Run:
 ;; opens an Org file would otherwise count as Emacs not responding.
 (require 'org)
 (setq roost-state-directory %(state)s
-      roost-socket-name %(server)s
+      roost-socket-name %(socket)s
       roost-hosts '(%(hosts)s)
       roost-agent-commands '(("claude" %(python)s %(fake)s))
       roost-workspace nil
@@ -299,6 +299,7 @@ class Run:
            load=" ".join(lisp(str(Path(p).expanduser())) for p in self.args.load_path),
            checkout=lisp(str(CHECKOUT)), test=lisp(str(CHECKOUT / "test")), qa=lisp(str(HERE)),
            server=lisp(self.name),
+           socket=lisp("rex:" + os.environ["QA_REX"] if os.environ.get("QA_REX") else self.name),
            # Each host's own, in its home, as with Roost's default, when
            # there is more than one: here they share a file system.
            state=lisp("~/.local/share/roost" if self.host else str(self.work / "state")),
@@ -380,6 +381,8 @@ class Run:
                 self.process.wait(10)
             except subprocess.TimeoutExpired:
                 self.process.kill()
+        if os.environ.get("QA_REX"):
+            self.rex_as_tmux(["kill-server"])
         subprocess.run(["tmux", "-L", self.name, "kill-server"], capture_output=True, env=self.tmux_env)
         # tmux leaves the socket's file.
         socket = Path(self.tmux_env.get("TMUX_TMPDIR") or "/tmp") / ("tmux-%d" % os.getuid()) / self.name
@@ -457,8 +460,50 @@ class Run:
                            r"__psynch_cvwait|recvfrom|__open)\b", out)
         return ", ".join(dict.fromkeys(calls))
 
+    REX = "/Applications/Rex Beta.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex"
+
+    def rex(self, *args):
+        """What Rex's CLI says to ARGS on the trial's server, or None if it refused."""
+        reply = subprocess.run([os.environ.get("ROOST_REX", self.REX), "--autostart=false", "-S",
+                                os.environ["QA_REX"], *args], capture_output=True, text=True)
+        return None if reply.returncode else reply.stdout
+
+    def rex_as_tmux(self, args):
+        """The few tmux commands the journeys ask, answered by Rex: trial."""
+        args = list(args)
+        target = args[args.index("-t") + 1] if "-t" in args else None
+        if args[0] == "capture-pane":
+            said = self.rex("capture", "-b", target, *(["--unwrap"] if "-J" in args else []))
+            return (said or "").split("\n")[:-1]
+        if args[0] == "display-message" and "#{pane_dead}" in args:
+            said = self.rex("block", "call", "-b", target, "process")
+            return [] if said is None else ["0" if json.loads(said).get("child") else "1"]
+        if args[0] == "list-sessions":
+            sessions = json.loads(self.rex("ls", "--json") or "{}").get("sessions") or []
+            return [each["session_id" if "#{session_id}" in args else "label"] for each in sessions]
+        if args[0] == "list-windows" and "#W" in args:
+            names = []
+            for each in json.loads(self.rex("ls", "--json") or "{}").get("sessions") or []:
+                view = json.loads(self.rex("api", "call", "-s", each["session_id"], "session.view") or "{}")
+                names += [window.get("label", "") for window in (view.get("view") or view).get("windows") or []]
+            return names
+        if args[0] == "new-session":
+            self.rex("new", args[args.index("-s") + 1], "--keep-open")
+            return []
+        if args[0] == "kill-session":
+            self.rex("kill", target)
+            return []
+        if args[0] == "kill-server":
+            for each in json.loads(self.rex("ls", "--json") or "{}").get("sessions") or []:
+                self.rex("kill", each["session_id"])
+            return []
+        self.notes.add("Rex trial: no answer to tmux %s" % args[0])
+        return []
+
     def tmux(self, *args):
         """What tmux on this run's socket says to ARGS, as lines."""
+        if os.environ.get("QA_REX"):
+            return self.rex_as_tmux(args)
         return subprocess.run(["tmux", "-L", self.name] + list(args), capture_output=True,
                               text=True, env=self.tmux_env).stdout.split("\n")[:-1]
 
@@ -1348,6 +1393,9 @@ def tabs_shown(screen):
     selected = selected_terminal(screen)
     if not selected:
         return ""
+    if os.environ.get("QA_REX"):
+        # rexel draws no tabs for a session's windows: nothing to check.
+        return "(rexel has no tabs)"
     return next((w["tabs"] for w in terminals(screen, selected["terminal"]) if w.get("tabs")), "")
 
 
@@ -1998,6 +2046,12 @@ def to_shell(qa):
     screen = qa.screen()
     if (selected_terminal(screen) or {}).get("pane") == (screen.get("task") or {}).get("pane"):
         # In the trial of ghostel-tmux, its own key for the next pane.
+        if qa.emacs.eval("(featurep 'rexel)") == "t":
+            # In the trial of rexel, which has no key for the next block:
+            # the window of the session's other block, as a click would.
+            qa.emacs.eval("(when-let* ((window (tmux-control--shown-of (buffer-local-value 'tmux-control--place"
+                          " (window-buffer)) (window-buffer)))) (select-window window) t)")
+            return
         qa.keys("C-t o" if qa.emacs.eval("(featurep 'ghostel-tmux)") == "t" else "C-c C-o")
 
 
@@ -3208,7 +3262,8 @@ def own_workspace(qa, repo):
     perspective = qa.emacs.eval("(roost--workspace-backend)") == "perspective"
     workspace = None if perspective else tab_per_task(qa)
     mine = "(persp-switch \"main\")" if perspective else "(tab-bar-select-tab 1)"
-    plain = "%s/%s/plain" % (qa.host or "local", qa.name)
+    plain = "%s/%s/plain" % (qa.host or "local",
+                             "rex:" + os.environ["QA_REX"] if os.environ.get("QA_REX") else qa.name)
     mine_terminal = None
 
     def to_mine():
@@ -3244,7 +3299,8 @@ def own_workspace(qa, repo):
         qa.step("Yours again", expect=[("no sidebar", lambda s: not qa_sidebar(s))])
         qa.plain_terminals.add(plain)
         qa.tmux("new-session", "-d", "-s", "plain")
-        qa.emacs.eval("(tmux-control-connect %s %s \"plain\")" % (lisp(qa.host) if qa.host else "nil", lisp(qa.name)))
+        qa.emacs.eval("(tmux-control-connect %s %s \"plain\")" % (lisp(qa.host) if qa.host else "nil",
+                                                                    lisp("rex:" + os.environ["QA_REX"] if os.environ.get("QA_REX") else qa.name)))
         mine = lambda s: [w for w in s["windows"] if w.get("terminal") == plain and w.get("pane")]
         screen = qa.wait("your terminal", mine)
         mine_terminal = mine(screen)[0]["buffer"]

@@ -2751,8 +2751,12 @@ not another task's: they keep their grid."
   ;; Explicit window hop also works before the pane map arrives on connect.
   (let ((window (roost--field task 'windowId))
         (pane (or target-pane (roost--field task 'paneId))))
-    (unless (and (stringp window) (string-match-p "\\`@[0-9]+\\'" window)
-                 (stringp pane) (string-match-p "\\`%[0-9]+\\'" pane))
+    ;; Trial: or a Rex session and block, as the helper records them for
+    ;; a task it keeps in Rex.
+    (unless (and (stringp window)
+                 (string-match-p "\\`\\(?:@[0-9]+\\|session:[0-9a-f-]+\\)\\'" window)
+                 (stringp pane)
+                 (string-match-p "\\`\\(?:%[0-9]+\\|block:[0-9a-f-]+\\)\\'" pane))
       (user-error "Invalid tmux target"))
     (with-current-buffer (window-buffer (selected-window))
       (tmux-control-send-command (format "select-window -t %s" window))

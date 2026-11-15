@@ -57,6 +57,9 @@ class Lifecycle(unittest.TestCase):
         self.repo.mkdir()
         self.state = self.root / "state"
         self.socket = "roost-test-" + uuid.uuid4().hex[:12]
+        # Trial: with ROOST_TEST_REX, a Rex server's address, tasks live there.
+        if os.environ.get("ROOST_TEST_REX"):
+            self.socket = "rex:" + os.environ["ROOST_TEST_REX"]
         self.git("init", "-b", "main")
         self.git("config", "user.name", "Roost Test")
         self.git("config", "user.email", "roost@example.invalid")
@@ -66,8 +69,12 @@ class Lifecycle(unittest.TestCase):
         self.git("commit", "-m", "base")
 
     def tearDown(self):
-        roost.tmux(self.socket, "kill-server", check=False)
-        tmux_socket_path(self.socket).unlink(missing_ok=True)
+        if roost.rex_socket(self.socket):
+            for session in (roost.rex_json(self.socket, "ls", "--json", check=False) or {}).get("sessions") or []:
+                roost.rex(self.socket, "kill", session["session_id"], check=False)
+        else:
+            roost.tmux(self.socket, "kill-server", check=False)
+            tmux_socket_path(self.socket).unlink(missing_ok=True)
         try:
             self.temp.cleanup()
         except OSError:
