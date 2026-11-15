@@ -339,17 +339,28 @@ The layer is unchanged and byte-compiles on main with no warnings.
 - claylien, ghostel-tmux alone, a `ghostel-tmux-command` given as soon
   as the attach returned: none lost in 10 with TRAMP as it comes, none
   in 5 with direct async.
-- Local, the eleven, nine whole runs: seven with no problems, and two
-  where Emacs stopped answering the harness, once for 19 s after a task
-  with no work retired and once for 60 s after the commit of the merge
-  journey. Both were among the first three runs; the six after, with a
-  watcher to sample Emacs when it went quiet, passed, so nothing says
-  what Emacs was doing. On fdbf32b: six whole runs, no problems (one
-  the day before, five beside these). The retire journey alone: 3 of 3
-  on main, 2 of 2 on fdbf32b.
+- Local, the eleven, seventeen whole runs: fifteen with no problems, and
+  two where Emacs stopped answering the harness. Once for 19 s while
+  the retire journey made its next task, so while a new session was
+  being attached; once for 60 s as the merge journey pressed its merge
+  keys after the commit, with the task's session still alive. Both were
+  among the first three runs, between about 06:36 and 07:00. The
+  fourteen after passed in a row, with a watcher to sample Emacs and
+  ask it for a backtrace when it went quiet, which never had cause to
+  fire. On fdbf32b: six whole runs, no problems (one the day before,
+  five beside these). The retire journey alone: 3 of 3 on main, 2 of 2
+  on fdbf32b.
 
-Two stops in nine against none in six does not settle whether main
-brought them. Not explained.
+What is known of the two stops: Emacs had no Git, tmux or helper call
+outstanding at either, and the command queue that 22bfc71 changed has
+no loop and no blocking wait. They came at different points, one in an
+attach and one not. Clay was at the Mac in that half hour and his own
+Emacs started at 06:37; a macOS Emacs runs no Lisp while its window is
+dragged or a menu is held open, which would look the same to the
+harness. He thinks he may have clicked on the test window once. So:
+likely the harness disturbed, not proven, not reproduced, and nothing
+that points at ghostel-tmux.
+Nothing reported to dakra. Keep the watcher on later runs.
 
 ## Not tried
 
