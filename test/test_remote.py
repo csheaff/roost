@@ -3385,15 +3385,14 @@ class Lifecycle(unittest.TestCase):
                       roost.tmux(self.socket, "capture-pane", "-p", "-t", task["paneId"]).stdout)
 
     def test_resume_waits_for_an_agent_you_started_outside_roost(self):
-        # A program by the agent's name, as when you type claude --resume. It
-        # is a shell and not sleep, which on Ubuntu 26.04 is one program of
-        # many names that refuses a name it doesn't know.
+        # A program by the agent's name, as when you type claude --resume.
+        # A shell waiting to read a line: sleep and its like can be one
+        # program under many names, which won't run under another.
         bin_dir = Path(tempfile.mkdtemp(prefix="roostbin", dir="/tmp"))
         self.addCleanup(shutil.rmtree, bin_dir, True)
         (bin_dir / "claude").symlink_to(shutil.which("bash"))
         claude = str(bin_dir / "claude")
-        # The shell waits for sleep, rather than become it.
-        waiting = claude + " -c 'sleep 30; true'"
+        waiting = claude + " -c 'read line'"
 
         def started():
             deadline = time.monotonic() + 8

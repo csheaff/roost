@@ -170,6 +170,12 @@ def lines():
     yield from sys.stdin
 
 
+# Teammates: named agents Claude can send to. One idles as soon as its
+# work is done, and Claude goes on reporting it among a turn's background
+# tasks, status "running" and no sign that it idles, until the session
+# ends (Claude Code 2.1.322, captured for roost issue #265).
+teammates = []
+
 for line in lines():
     # Once it takes the mouse, tmux sends presses and releases along with
     # what is typed.
@@ -298,9 +304,13 @@ for line in lines():
     elif line.strip() == "exit":
         break
     else:
+        if line.strip() == "teammate":
+            teammates.append(dict(id="t%d" % len(teammates), type="teammate", status="running",
+                                  description="Look at the tests"))
         print("PROMPT " + line.rstrip(), flush=True)
         record("assistant", "PROMPT " + line.rstrip())
-        event("Stop", last_assistant_message="PROMPT " + line.rstrip())
+        event("Stop", last_assistant_message="PROMPT " + line.rstrip(),
+              **(dict(background_tasks=teammates) if teammates else {}))
         status("done")
 status("clear")
 event("SessionEnd", reason="prompt_input_exit")
