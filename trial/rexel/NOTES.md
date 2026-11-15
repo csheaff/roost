@@ -98,6 +98,12 @@ driven from Lisp as on claylien, typing into the block as you would.
 - Auto mode, as Clay's Claude starts: Claude's question about trusting
   the folder showed and was answered with Down and Enter in the block,
   the turn ran to `ready`.
+- On claylien, manual mode, Claude Code 2.1.322 in the Rex server
+  there (revision 16), from this Mac over the forwarded socket: the
+  same, step for step. Trust asked and answered, `permission` twelve
+  seconds in, Emacs and `rex capture` on the host alike, `1` typed in
+  the block, `ready`, the line in the worktree on the host, a second
+  prompt answered, stopped. One run.
 - So Claude's hooks reach the helper from inside a Rex block, its
   full-screen drawing comes through rexel as Rex has it, and keys typed
   in Emacs reach its menus. Two runs, a turn or two each. Not seen:
@@ -173,8 +179,8 @@ Other things met:
 
 ## Not tried
 
-A real agent for longer than two turns, or on the remote host. The
-journeys against a real host. Rex's Tailscale
+A real agent for longer than two turns. The journeys against a real
+host. Rex's Tailscale
 address in place of the forward. Many tasks at once. A dropped
 connection, the forward's ssh ending, and rexel's redial.
 Roost's program-status from Rex. The other QA journeys.
