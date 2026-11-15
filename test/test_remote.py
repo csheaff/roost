@@ -3385,11 +3385,15 @@ class Lifecycle(unittest.TestCase):
                       roost.tmux(self.socket, "capture-pane", "-p", "-t", task["paneId"]).stdout)
 
     def test_resume_waits_for_an_agent_you_started_outside_roost(self):
-        # A program by the agent's name, as when you type claude --resume.
+        # A program by the agent's name, as when you type claude --resume. It
+        # is a shell and not sleep, which on Ubuntu 26.04 is one program of
+        # many names that refuses a name it doesn't know.
         bin_dir = Path(tempfile.mkdtemp(prefix="roostbin", dir="/tmp"))
         self.addCleanup(shutil.rmtree, bin_dir, True)
-        (bin_dir / "claude").symlink_to(shutil.which("sleep"))
+        (bin_dir / "claude").symlink_to(shutil.which("bash"))
         claude = str(bin_dir / "claude")
+        # The shell waits for sleep, rather than become it.
+        waiting = claude + " -c 'sleep 30; true'"
 
         def started():
             deadline = time.monotonic() + 8
@@ -3404,7 +3408,7 @@ class Lifecycle(unittest.TestCase):
         self.wait(task, "exited")
         self.wait_for_pane_exit(task)
         shell = self.request("shell", id=task["id"])["result"]["shellPaneId"]
-        roost.tmux(self.socket, "send-keys", "-t", shell, claude + " 30", "Enter")
+        roost.tmux(self.socket, "send-keys", "-t", shell, waiting, "Enter")
         started()
         reply = self.request("resume", id=task["id"])
         self.assertFalse(reply["ok"])
@@ -3412,7 +3416,7 @@ class Lifecycle(unittest.TestCase):
         roost.tmux(self.socket, "kill-pane", "-t", shell)
         session = roost.Store(str(self.state)).read(task["id"])["session"]
         index = roost.tmux(self.socket, "new-window", "-d", "-P", "-F", "#{window_index}",
-                           "-t", session + ":", claude + " 30").stdout.strip()
+                           "-t", session + ":", waiting).stdout.strip()
         started()
         reply = self.request("resume", id=task["id"])
         self.assertFalse(reply["ok"])
@@ -3421,7 +3425,7 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(roost.pane_inventory(self.socket)[task["paneId"]]["dead"])
         roost.tmux(self.socket, "kill-window", "-t", "%s:%s" % (session, index))
         # One in another session isn't this task's.
-        roost.tmux(self.socket, "new-session", "-d", "-s", "elsewhere", claude + " 30")
+        roost.tmux(self.socket, "new-session", "-d", "-s", "elsewhere", waiting)
         self.assertTrue(self.request("resume", id=task["id"])["ok"])
         self.wait(task, "ready")
 
