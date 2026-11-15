@@ -82,6 +82,28 @@ To run, with a scratch server (never the one Rex's app runs):
   upgrade on 2026-10-30, which counts as newer than Superlogical's.
   Clay put Superlogical's back and held it (`apt-mark hold rex`).
 
+## Results, a real agent
+
+Claude Code 2.1.325 on Haiku, on this Mac, in a scratch Rex server,
+started from a terminal that is logged in (a block has its server's
+environment, so the server is what has to be logged in). One task,
+driven from Lisp as on claylien, typing into the block as you would.
+
+- Manual mode: Claude asked to run a command, Roost said `permission`
+  about twelve seconds after the task was made, Emacs showed the same
+  screen as `rex capture`, question included, `1` typed in the block
+  answered it, the turn ended at `ready`, and the line was in the
+  task's worktree. A second prompt sent from Emacs was pasted and
+  answered. Stop ended it.
+- Auto mode, as Clay's Claude starts: Claude's question about trusting
+  the folder showed and was answered with Down and Enter in the block,
+  the turn ran to `ready`.
+- So Claude's hooks reach the helper from inside a Rex block, its
+  full-screen drawing comes through rexel as Rex has it, and keys typed
+  in Emacs reach its menus. Two runs, a turn or two each. Not seen:
+  `working` between two `ready`s of a one-second turn, which the
+  drive's poll was too slow for; a long session; images; links.
+
 ## What rexel would need (for dakra)
 
 Rexel 0.5.0's public Lisp is lookups: `rexel-block-p`, `-block-id`,
@@ -151,7 +173,8 @@ Other things met:
 
 ## Not tried
 
-A real agent. The journeys against a real host. Rex's Tailscale
+A real agent for longer than two turns, or on the remote host. The
+journeys against a real host. Rex's Tailscale
 address in place of the forward. Many tasks at once. A dropped
 connection, the forward's ssh ending, and rexel's redial.
 Roost's program-status from Rex. The other QA journeys.
