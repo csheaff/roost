@@ -174,7 +174,8 @@ class Run:
         self.host = None
         self.tmux_env = dict(self.env)
         if args.tuned:
-            self.notes.add("Emacs had pixel scrolling, a 1 GB GC threshold, idle collection and pane directories")
+            self.notes.add("Emacs had pixel scrolling and a 1 GB GC threshold" + (
+                ", idle collection and pane directories" if args.backend == "tmux-control" else ""))
         if args.popular:
             self.notes.add("Emacs had vertico in a posframe, recursive minibuffers and a perspective per task")
         if args.remote:
@@ -282,13 +283,15 @@ class Run:
   (persp-mode 1)
   (setq roost-workspace 'perspective))
 (when %(tuned)s
-  ;; Settings many configurations have, which change how Emacs scrolls,
-  ;; collects garbage and names a terminal's directory.
-  (require 'tmux-control)
+  ;; Settings many configurations have, which change how Emacs scrolls
+  ;; and collects garbage and, with tmux-control, when it collects and
+  ;; how it names a terminal's directory.
   (setq gc-cons-threshold (* 1024 1024 1024) gc-cons-percentage 0.6)
   (pixel-scroll-precision-mode 1)
-  (tmux-control-idle-gc-mode 1)
-  (add-hook 'tmux-control-mode-hook #'tmux-control-pane-directory-mode))
+  (when (eq roost-terminal-backend 'tmux-control)
+    (require 'tmux-control)
+    (tmux-control-idle-gc-mode 1)
+    (add-hook 'tmux-control-mode-hook #'tmux-control-pane-directory-mode)))
 (roost--remember-project %(project)s)
 (roost-watch-mode 1)
 (roost-sidebar-mode 1)
@@ -4432,7 +4435,7 @@ def main():
                         help="With --remote, the delay each way (default 0.15)")
     parser.add_argument("--tuned", action="store_true",
                         help="With settings many configurations have: pixel scrolling, a large GC "
-                        "threshold, tmux-control's idle collection and pane directories")
+                        "threshold and, with tmux-control, its idle collection and pane directories")
     parser.add_argument("--popular", action="store_true",
                         help="With packages many configurations have: vertico in a posframe, "
                         "recursive minibuffers and a perspective per task, from -L or --package-dir")

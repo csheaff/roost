@@ -1726,8 +1726,9 @@ the terminals' connections and TRAMP all go through it, so replies arrive as
 late as a remote host's do, which is where races between them show. Magit's
 review is left out there: over TRAMP's `ssh` method it takes most of a minute.
 `--tuned` gives Emacs settings many configurations have: pixel scrolling, a
-1 GB garbage collection threshold, tmux-control's idle collection, and pane
-directories, which make a remote terminal's directory a TRAMP one.
+1 GB garbage collection threshold and, with tmux-control, its idle
+collection and pane directories, which make a remote terminal's directory a
+TRAMP one.
 `--popular` adds packages many configurations have, from `-L` or
 `--package-dir`: vertico in vertico-posframe's popup, which hides a question
 you click away from, recursive minibuffers, and perspective.el, a
