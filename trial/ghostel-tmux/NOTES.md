@@ -394,7 +394,28 @@ So on a real host Roost on ghostel-tmux needs
 `tramp-direct-async-process` for the host, as the table of 2026-11-14
 already said of ghostel-tmux alone, and `ghostel-tmux-program` naming
 tmux where TRAMP's path leaves it out (`/snap/bin/tmux` on claylien).
-The layer sets neither; a Roost that shipped this would have to.
+
+The layer now sets both, once a host, before its first attach
+(`tmux-control--prepare-host`): it asks the host over a plain ssh, as
+Roost's helper is run, where tmux is and how long a command it takes,
+and gives both to TRAMP as connection-local values. claylien with
+nothing set by hand: 7 of 7 runs pass all nine steps.
+
+Direct async goes on only where the host's PIPE_BUF is 4096 or more.
+TRAMP holds a direct async command to that length, and on macOS it is
+512: the attach command is about 530 bytes with tmux's full path, and
+every attach to the fake host, which is this Mac, ended in "Command
+too long" when the layer turned it on regardless. So a macOS host
+keeps TRAMP as it comes. Whether the stall shows on a real macOS host
+is not known: none was tried.
+
+The eleven journeys with `--remote` after the change: 44 of 47 steps.
+The three that fail are in `next_waiting` ("Waited 40s for notes.py")
+and `merge` ("n goes to the task that asks": its panel is not beside
+the terminal), and they fail the same with the layer's host setup left
+out, 2 runs of 2 each way. They had not been run with `--remote` on
+ghostel-tmux before: only `answer` and `shell` had. Not looked into.
+The rexel trial passes both with `--remote`.
 
 ## Not tried
 
@@ -402,4 +423,5 @@ The layer sets neither; a Roost that shipped this would have to.
   window_buffers, reconnect_away, the scrollback pager.
 - The walk_away grid, and the ERT suite, which stubs tmux-control.
 - A real agent for longer than two turns, the journeys against a real
-  host, a connection that drops.
+  host, a real macOS host, a connection that drops.
+- Why `next_waiting` and `merge` fail with `--remote`.

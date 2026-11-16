@@ -122,6 +122,48 @@ A pane buffer of ghostel-tmux is one pane for good."
 (defvar tmux-control--socket-paths (make-hash-table :test #'equal)
   "The path of each remote socket, by (HOST . SOCKET).")
 
+(defvar tmux-control--prepared-hosts nil
+  "The remote hosts `tmux-control--prepare-host' has set up.")
+
+(defun tmux-control--prepare-host (host)
+  "Set up TRAMP and ghostel-tmux for HOST, once, before its first attach.
+ghostel-tmux reaches a host's tmux through TRAMP.  With TRAMP's own
+processes, on a real host, Roost stalls soon after a task opens: its
+pane stays blank and Roost's poll of the host never ends (7 runs of 8
+on 2026-11-15).  With direct async processes, which run tmux by an ssh
+of its own, it does not, where the host takes a command that long.
+And TRAMP's path on the host can leave tmux
+out, as where it is a snap: the tmux named is the one a plain ssh
+finds, which is how Roost's helper runs it."
+  (unless (member host tmux-control--prepared-hosts)
+    (push host tmux-control--prepared-hosts)
+    (let* ((name (tramp-dissect-file-name (format "/ssh:%s:" host)))
+           (profile (intern (format "tmux-control-host-%s" host)))
+           (said (with-temp-buffer
+                   (and (eql 0 (ignore-errors
+                                 (call-process "ssh" nil t nil "-o" "BatchMode=yes"
+                                               "-o" "ConnectTimeout=8" "--" host
+                                               "command -v tmux; getconf PIPE_BUF /")))
+                        (split-string (buffer-string) "\n" t "[ \t]+"))))
+           (tmux (seq-find #'file-name-absolute-p said))
+           (longest (seq-some (lambda (line)
+                                (and (string-match-p "\\`[0-9]+\\'" line)
+                                     (string-to-number line)))
+                              said)))
+      (connection-local-set-profile-variables
+       profile
+       ;; A direct async process is one command line, no longer than the
+       ;; host's PIPE_BUF, TRAMP holds: 4096 on Linux, where attaching
+       ;; fits, and 512 on macOS, where it does not.
+       `(,@(and longest (>= longest 4096)
+                '((tramp-direct-async-process . t)))
+         ,@(and tmux `((ghostel-tmux-program . ,tmux)))))
+      (connection-local-set-profiles
+       `(:application tramp :machine ,(tramp-file-name-host name)
+                      ,@(and (tramp-file-name-user name)
+                             (list :user (tramp-file-name-user name))))
+       profile))))
+
 (defun tmux-control--socket (host socket)
   "SOCKET on HOST as `ghostel-tmux-attach' takes it: a name, or a path.
 On a remote host, the path `tmux-control-remote-tmux-socket-setup' puts
@@ -129,6 +171,7 @@ it at, asked of the host once: Roost's helper runs that setup before
 tmux, and ghostel-tmux has no command to run first."
   (if (not host)
       socket
+    (tmux-control--prepare-host host)
     (or (gethash (cons host socket) tmux-control--socket-paths)
         (let ((default-directory (format "/ssh:%s:" host)))
           (with-temp-buffer
