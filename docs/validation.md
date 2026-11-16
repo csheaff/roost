@@ -71,6 +71,12 @@ left open.
   before. Eight journeys that split, resize and open a second frame,
   without `--remote`: 40 steps, 0 with problems. `make test compile`
   passes.
+- **Seen once, not explained:** in a later run of the walk-away journey
+  with `--remote`, Emacs did not answer for 19 s in one step of 98 (a
+  click on the step a panel names, with `M-x` left behind in the
+  terminal). That starter's twelve pairs passed when run again. Older QA
+  runs' processes were still on the machine, which the report notes can
+  slow a run.
 
 ## Images from Pi as Roost starts it, and from Claude Code — 2026-11-16
 

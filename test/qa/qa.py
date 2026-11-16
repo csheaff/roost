@@ -647,6 +647,10 @@ class Run:
                 if short:
                     problems.append("%s has %d rows fewer than its window, which tmux has not resized it to"
                                     % (window["buffer"], short))
+                else:
+                    # As it is at its size: what it showed above its screen
+                    # on the way there was measured less the rows it lacked.
+                    window["history"] = self.emacs.json("(json-encode (qa-history-shown %s))" % lisp(window["buffer"]))
             if window.get("history") and self.args.backend == "ghostel-tmux" and window["history"] <= 3:
                 # As in `drift': a pane made narrower keeps above its screen
                 # what tmux scrolled away.

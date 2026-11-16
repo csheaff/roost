@@ -941,6 +941,12 @@ frames do: it has one size, and the taller window shows lines above."
       (qa--rows-short window)
     0))
 
+(defun qa-history-shown (buffer)
+  "How many lines of history a window showing the terminal BUFFER names shows."
+  (if-let* ((window (and (get-buffer buffer) (get-buffer-window buffer t))))
+      (qa--history-shown window)
+    0))
+
 (defun qa--history-shown (window)
   "How many lines of history terminal WINDOW shows above its live screen."
   (with-current-buffer (window-buffer window)
