@@ -543,17 +543,32 @@ or made live again by an attach."
 
 (defvar ghostel-buffer-identification-format)
 
+(defvar roost--tasks)
+
+(defun roost-ghostel-tmux--task-name (place)
+  "The name of the task whose tmux session is at PLACE, or nil.
+The mode line asks at each redisplay, many times a second while a
+terminal streams, so this looks through the tasks as they are kept,
+without the list in order that `roost-tasks' makes."
+  (catch 'found
+    (maphash (lambda (_key task)
+               (when (and (equal (roost--field task 'session) (nth 2 place))
+                          (equal (roost--field task 'host) (nth 0 place))
+                          (equal (roost--field task 'socket) (nth 1 place)))
+                 (throw 'found (roost--field task 'name))))
+             roost--tasks)
+    nil))
+
 (defun roost-ghostel-tmux--mode-line-name ()
   "Return \"HOST › TASK\" for the mode line of the current pane buffer.
 As tmux-control names a terminal by its host and tmux window, in place
 of a buffer name that spells out the session and pane.  A session that
 is no task's has its own name for the task's."
-  (let ((place (roost-ghostel-tmux--buffer-place))
-        (task (roost--terminal-task (current-buffer))))
+  (let ((place (roost-ghostel-tmux--buffer-place)))
     (propertize (string-replace
                  "%" "%%"
                  (format "%s › %s" (or (nth 0 place) "local")
-                         (or (and task (roost--field task 'name)) (nth 2 place) "")))
+                         (or (roost-ghostel-tmux--task-name place) (nth 2 place) "")))
                 'face 'mode-line-buffer-id
                 'help-echo (buffer-name))))
 

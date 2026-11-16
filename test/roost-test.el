@@ -12470,18 +12470,23 @@ A test stubs the functions of ghostel-tmux it reaches."
              ((symbol-function 'ghostel-tmux-controllers) #'ignore))
      (with-temp-buffer
        (rename-buffer "*ghostel-tmux:roost-notes-123456:export%0*" t)
-       (let ((roost-terminal-backend 'ghostel-tmux) (named nil))
-         (cl-letf (((symbol-function 'roost--terminal-task)
-                    (lambda (_buffer) (and named (list (cons 'name named))))))
-           (cl-flet ((name () (substring-no-properties (roost-ghostel-tmux--mode-line-name))))
-             (setq roost-ghostel-tmux--place '("far" "main" "roost-notes-123456") named "export")
+       (let ((roost-terminal-backend 'ghostel-tmux))
+         (cl-flet ((name () (substring-no-properties (roost-ghostel-tmux--mode-line-name)))
+                   (task (host name)
+                     (roost--cache-task host (append `((id . ,name) (name . ,name) (socket . "main")
+                                                       (session . "roost-notes-123456"))
+                                                     (roost-test--task)))))
+           (task "far" "export")
+           (task nil "50%done")
+           (progn
+             (setq roost-ghostel-tmux--place '("far" "main" "roost-notes-123456"))
              (should (equal (name) "far › export"))
              ;; This machine has a name too, and a % stays one in a mode line.
-             (setq roost-ghostel-tmux--place '(nil "main" "roost-notes-123456") named "50%done")
+             (setq roost-ghostel-tmux--place '(nil "main" "roost-notes-123456"))
              (should (equal (name) "local › 50%%done"))
              ;; A session that is no task's has its own name.
-             (setq named nil)
-             (should (equal (name) "local › roost-notes-123456"))
+             (setq roost-ghostel-tmux--place '(nil "other" "scratch"))
+             (should (equal (name) "local › scratch"))
              ;; The whole name is there to point at.
              (should (equal (get-text-property 0 'help-echo (roost-ghostel-tmux--mode-line-name))
                             (buffer-name))))))))))
