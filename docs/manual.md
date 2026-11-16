@@ -1043,6 +1043,19 @@ header line. A failed creation keeps the draft.
   one, and a newer gathered notification the one before. A
   `roost-notify-function` of yours is called with each one's title and body;
   a gathered one's body counts the others on a second line.
+- `roost-task-opened-functions`: your own functions to run once Roost has
+  shown a task's terminal, as `RET`, `n`, `l` and a new task do, called
+  with the task in the terminal's window. For what a setup of yours does
+  on arriving in a terminal, such as a modal one entering its insert
+  state:
+
+  ```elisp
+  (add-hook 'roost-task-opened-functions
+            (lambda (_task) (my-enter-insert-state)))
+  ```
+
+  The terminal may still be connecting, and the buffer shown then stands
+  in for it.
 - `roost-task-status-functions`, `roost-task-merged-functions`: your own
   functions to run when a task's status changes, or once its work is merged.
   Each status function is called with the task, its status before and its
@@ -1095,6 +1108,9 @@ ghostel-tmux 0.3.0 or newer; `M-x roost-doctor` checks both.
 
 - A terminal's keys are ghostel-tmux's: tmux's own, after `C-t`, such as
   `C-t o` for the next pane.
+- A task's terminal is named in its mode line by its host and task, as
+  `dev › budget-alerts`; its buffer's name spells out the tmux session and
+  pane.
 - A host is reached through TRAMP. Before the first terminal on a host,
   Roost asks the host by `ssh` where its tmux is and turns on TRAMP's
   direct async processes for it if the host takes a command that long
@@ -1126,14 +1142,11 @@ from this machine or a host, when the program sends the picture itself
 rather than naming a file. tmux does not answer a program that asks
 whether its terminal draws them, so an agent has to be told:
 
-- **Pi** sends the images its tools read once its command sets
-  `PI_IMAGE_PROTOCOL`, which Pi 1.3.0 and 1.5.2 read:
-
-  ```elisp
-  (setf (alist-get "pi" roost-agent-commands nil nil #'equal)
-        '("env" "PI_IMAGE_PROTOCOL=kitty" "pi"))
-  ```
-
+- **Pi** sends the images its tools read. Roost starts it with
+  `PI_IMAGE_PROTOCOL=kitty` in its environment, which Pi 1.3.0 and 1.5.2
+  read, when a task starts or resumes with ghostel-tmux showing the
+  terminals; one you set yourself stands. With tmux-control Roost sets
+  none, as Eat would not draw them.
 - **Claude Code, Codex and OpenCode** send no images to their terminal. A
   Claude task can show you one beside its terminal instead, with Roost's
   `show_image` tool.

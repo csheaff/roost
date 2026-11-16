@@ -9,8 +9,9 @@ What each release changes, and what to do when upgrading. Newest first.
   [Ghostel](https://github.com/dakra/ghostel) 0.65.0 and
   [ghostel-tmux](https://github.com/dakra/ghostel-tmux) 0.3.0 or newer in
   place of tmux-control. A terminal draws the images an agent sends in the
-  Kitty graphics protocol, as Pi does
-  [once told to](docs/manual.md#images-in-a-terminal). Tasks, their tmux
+  Kitty graphics protocol, as [Pi does](docs/manual.md#images-in-a-terminal):
+  Roost starts Pi so that it sends them. A task's terminal is named in its
+  mode line by its host and task. Tasks, their tmux
   sessions and the helper are unchanged, and agents at work stay at work.
   When upgrading, do one of two things:
   - Install Ghostel (from MELPA) and ghostel-tmux, as
@@ -28,6 +29,9 @@ What each release changes, and what to do when upgrading. Newest first.
   [A task's terminal](docs/manual.md#a-tasks-terminal) lists what is
   untried, and that Emacs 30.2 on macOS can crash after a host's connection
   drops.
+- `roost-task-opened-functions` are your own functions to run once Roost
+  has shown a task's terminal, such as a modal setup's that enters its
+  insert state there. Nothing to do when upgrading.
 - A Pi task's latest reply is the one its turn just ended with. Roost read
   it from Pi's session file, which Pi had not always written yet, so the
   panel and the dashboard could show the reply before until the next

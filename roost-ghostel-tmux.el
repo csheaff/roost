@@ -536,7 +536,43 @@ or made live again by an attach."
               (controller (ghostel-tmux-controller))
               (place (buffer-local-value 'roost-ghostel-tmux--place controller)))
     (setq roost-ghostel-tmux--place place)
+    ;; Ghostel puts the buffer's name back at each change of title.
+    (setq-local ghostel-buffer-identification-format nil
+                mode-line-buffer-identification '((:eval (roost-ghostel-tmux--mode-line-name))))
     (run-hook-with-args 'roost-ghostel-tmux-window-buffer-functions (current-buffer))))
+
+(defvar ghostel-buffer-identification-format)
+
+(defvar roost--tasks)
+
+(defun roost-ghostel-tmux--task-name (place)
+  "The name of the task whose tmux session is at PLACE, or nil.
+Nil too for a session several tasks share, from before each had its
+own, which is no one's: see `roost--terminal-task'.  The mode line asks
+at each redisplay, many times a second while a terminal streams, so
+this looks through the tasks as they are kept, without the list in
+order that `roost-tasks' makes."
+  (let (name (found 0))
+    (maphash (lambda (_key task)
+               (when (and (equal (roost--field task 'session) (nth 2 place))
+                          (equal (roost--field task 'host) (nth 0 place))
+                          (equal (roost--field task 'socket) (nth 1 place)))
+                 (setq name (roost--field task 'name) found (1+ found))))
+             roost--tasks)
+    (and (= found 1) name)))
+
+(defun roost-ghostel-tmux--mode-line-name ()
+  "Return \"HOST › TASK\" for the mode line of the current pane buffer.
+As tmux-control names a terminal by its host and tmux window, in place
+of a buffer name that spells out the session and pane.  A session that
+is no task's has its own name for the task's."
+  (let ((place (roost-ghostel-tmux--buffer-place)))
+    (propertize (string-replace
+                 "%" "%%"
+                 (format "%s › %s" (or (nth 0 place) "local")
+                         (or (roost-ghostel-tmux--task-name place) (nth 2 place) "")))
+                'face 'mode-line-buffer-id
+                'help-echo (buffer-name))))
 
 (add-hook 'ghostel-tmux-pane-mode-hook #'roost-ghostel-tmux--pane-made)
 
