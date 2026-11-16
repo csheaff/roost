@@ -12560,6 +12560,55 @@ A test stubs the functions of ghostel-tmux it reaches."
        ;; tmux-control arranges its tiles around the view itself.
        (should-not (car (shown 'tmux-control t)))))))
 
+(ert-deftest roost-a-terminal-ghostel-tmux-puts-in-your-window-is-not-you-leaving ()
+  ;; A change of a split's layout that tmux reports late builds the split
+  ;; again in its window, over the buffer you had there, while a host
+  ;; replies to what you asked Roost to open.
+  (roost-test--isolated
+   (let ((window (selected-window))
+         (plain (generate-new-buffer "plain"))
+         (other (generate-new-buffer "other"))
+         (terminal (generate-new-buffer "terminal")))
+     (unwind-protect
+         (cl-letf (((symbol-function 'roost--tmux-buffer-p)
+                    (lambda (&optional buffer) (eq (or buffer (current-buffer)) terminal)))
+                   ((symbol-function 'roost--terminal-place) #'ignore))
+           (cl-flet ((stayed (backend now)
+                       (let ((roost-terminal-backend backend))
+                         (set-window-buffer window plain)
+                         (let ((shown (window-buffer window)))
+                           (set-window-buffer window now)
+                           (roost--still-there-p window shown nil (selected-frame) num-input-keys)))))
+             (should (stayed 'ghostel-tmux plain))
+             ;; The split came back where you were: you asked for the task still.
+             (should (stayed 'ghostel-tmux terminal))
+             ;; A buffer of your own choosing is you going elsewhere.
+             (should-not (stayed 'ghostel-tmux other))
+             ;; So is another session's terminal in place of a terminal.
+             (let ((roost-terminal-backend 'ghostel-tmux))
+               (set-window-buffer window terminal)
+               (should-not (roost--still-there-p window plain '("far" "main" "one") (selected-frame)
+                                                 num-input-keys))
+               ;; And one you chose yourself meanwhile, as with C-x b: a key
+               ;; pressed since you asked.
+               (set-window-buffer window terminal)
+               (should-not (roost--still-there-p window plain nil (selected-frame) (1- num-input-keys)))
+               ;; A caller that notes no keys keeps the rule it had.
+               (should-not (roost--still-there-p window plain nil (selected-frame))))
+             ;; tmux-control keeps a split's windows another way.
+             (should-not (stayed 'tmux-control terminal))
+             ;; Nor in another window than the one you asked from.
+             (let ((roost-terminal-backend 'ghostel-tmux))
+               (set-window-buffer window plain)
+               (let ((second (split-window)))
+                 (unwind-protect
+                     (progn (set-window-buffer window terminal)
+                            (with-selected-window second
+                              (should-not (roost--still-there-p window plain nil (selected-frame)
+                                                                num-input-keys))))
+                   (delete-window second))))))
+       (mapc #'kill-buffer (list plain other terminal))))))
+
 (ert-deftest roost-terminal-backend-is-ghostel-tmux-unless-you-choose ()
   (should (eq (eval (car (get 'roost-terminal-backend 'standard-value)) t) 'ghostel-tmux))
   ;; With its package missing, opening a task says what to install, and

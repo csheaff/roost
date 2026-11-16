@@ -29,6 +29,10 @@ What each release changes, and what to do when upgrading. Newest first.
   [A task's terminal](docs/manual.md#a-tasks-terminal) lists what is
   untried, and that Emacs 30.2 on macOS can crash after a host's connection
   drops.
+- A task you open over a slow connection opens. With ghostel-tmux, the
+  split of a task with a shell beside its agent could come back in your
+  window while the host replied, and Roost then said you had gone to
+  another window and opened nothing. Nothing to do when upgrading.
 - `roost-task-opened-functions` are your own functions to run once Roost
   has shown a task's terminal, such as a modal setup's that enters its
   insert state there. Nothing to do when upgrading.

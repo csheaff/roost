@@ -924,12 +924,42 @@ them; nil when BUFFER isn't a terminal."
           (while (and lines (string-empty-p (car lines))) (pop lines))
           (vconcat (nreverse lines))))))))
 
+(defun qa--rows-short (window)
+  "How many rows WINDOW's ghostel-tmux terminal has fewer than WINDOW shows.
+None once tmux has resized the pane to the window, and for any other
+buffer.  None either for a terminal that several windows show, as two
+frames do: it has one size, and the taller window shows lines above."
+  (with-current-buffer (window-buffer window)
+    (if (and (qa--ghostel-pane-p (current-buffer))
+             (null (cdr (get-buffer-window-list (current-buffer) nil t))))
+        (max 0 (- (window-body-height window) (or (bound-and-true-p ghostel--term-rows) 0)))
+      0)))
+
+(defun qa-rows-short (buffer)
+  "How many rows the terminal BUFFER names has fewer than a window showing it."
+  (if-let* ((window (and (get-buffer buffer) (get-buffer-window buffer t))))
+      (qa--rows-short window)
+    0))
+
+(defun qa-history-shown (buffer)
+  "How many lines of history a window showing the terminal BUFFER names shows."
+  (if-let* ((window (and (get-buffer buffer) (get-buffer-window buffer t))))
+      (qa--history-shown window)
+    0))
+
 (defun qa--history-shown (window)
   "How many lines of history terminal WINDOW shows above its live screen."
   (with-current-buffer (window-buffer window)
     (if (qa--ghostel-pane-p (current-buffer))
-        (let ((screen (or (ghostel--viewport-start) (point-min))))
-          (if (< (window-start window) screen) (count-lines (window-start window) screen) 0))
+        (let ((screen (or (ghostel--viewport-start) (point-min)))
+              ;; A window that has grown shows that many lines above the
+              ;; screen until tmux has resized the pane, which over a slow
+              ;; connection takes a moment: `qa-rows-short' is asked until
+              ;; it has.
+              (growing (qa--rows-short window)))
+          (if (< (window-start window) screen)
+              (max 0 (- (count-lines (window-start window) screen) growing))
+            0))
     (if (and (derived-mode-p 'tmux-control-mode) (bound-and-true-p tmux-control--terminal)
              (eat-term-live-p tmux-control--terminal))
         (let ((screen (save-excursion (goto-char (eat-term-display-beginning tmux-control--terminal))
@@ -1056,6 +1086,7 @@ question from another of the same prompt asked after it."
                                       (format "%s/%s" (or (roost--field task 'host) "local")
                                               (roost--field task 'id))))
                           (history . ,(qa--history-shown window))
+                          (short . ,(qa--rows-short window))
                           (pane . ,(with-current-buffer buffer
                                      (and (roost--tmux-buffer-p) (roost--tmux-bound-p "active-pane")
                                           (roost--tmux-active-pane))))

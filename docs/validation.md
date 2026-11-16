@@ -35,6 +35,49 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## A task opened over a slow connection — 2026-11-16
+
+On a Mac, Emacs 30.2, ghostel-tmux 0.3.0 (359eeeb), the tasks behind the
+slow fake SSH (`make qa` with `--remote`). What the run of that day, below,
+left open.
+
+- **The cause.** A tmux window of two panes, as a task's with a shell
+  beside its agent, shows as a split, and ghostel-tmux keeps the split's
+  windows when they come to show another buffer. tmux's word of a change
+  of its layout, late over the connection and held back while the
+  minibuffer was open for the task's name, built the split again in the
+  window you were in. Roost took that for you going elsewhere and did not
+  open the task you had asked for. Found with a log of what changed the
+  window: `ghostel-tmux--run-held-calls` to `ghostel-tmux--tile-place`.
+- **Fixed in Roost:** a terminal that ghostel-tmux puts in the window you
+  asked from is not you leaving, so the task opens. The split coming back
+  over your buffer is ghostel-tmux's
+  ([ghostel-tmux#22](https://github.com/dakra/ghostel-tmux/issues/22)).
+- **The lines above a terminal's screen** were a pane on its way to a new
+  size: for about two and a half seconds after its window grew, the
+  terminal had 17 rows in a window of 37. The journeys now leave out the
+  rows a window has over its terminal.
+- **The conversation journey** compared a terminal on this machine with
+  the fake host's pane of the same number, and left this machine's tmux
+  server running after a run with `--remote`. Both are the journeys', now
+  fixed.
+- **Only when you did nothing meanwhile.** A terminal you choose yourself
+  while the host replies, as with `C-x b`, is still you going elsewhere:
+  the rule holds only while `num-input-keys` is what it was when you
+  asked. And the journeys wait up to eight seconds for a terminal to reach
+  its window's size, and fail one that never does.
+- **After:** the walk-away and conversation journeys with `--remote`, 100
+  steps, 0 with problems; the walk-away journey stopped at its 48th pair
+  before. Eight journeys that split, resize and open a second frame,
+  without `--remote`: 40 steps, 0 with problems. `make test compile`
+  passes.
+- **Seen once, not explained:** in a later run of the walk-away journey
+  with `--remote`, Emacs did not answer for 19 s in one step of 98 (a
+  click on the step a panel names, with `M-x` left behind in the
+  terminal). That starter's twelve pairs passed when run again. Older QA
+  runs' processes were still on the machine, which the report notes can
+  slow a run.
+
 ## Images from Pi as Roost starts it, and from Claude Code — 2026-11-16
 
 On a Mac, Emacs 32.0.50, terminals through ghostel-tmux, while the README's
