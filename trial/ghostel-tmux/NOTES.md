@@ -494,7 +494,7 @@ the client ended (NEEDS in the file): the hook could say.
 - The drop on claylien again: the pane was streaming again by itself
   within about three seconds, with the lines it missed, in 8 runs of 8.
 - A task that is stopped is left alone: nothing was being tried five
-  seconds after, in the one run that got there.
+  seconds after, in the runs that got there (see below).
 - The eleven journeys with `--remote`: 53 of 53.
 
 But Emacs then crashed when the task was stopped, in 6 of those 8
@@ -502,11 +502,25 @@ runs, and in 1 of 5 runs without the reattach. The same stack each
 time, in Emacs 30.2's own macOS drawing: `-[EmacsView copyRect:to:]`
 from `ns_scroll_run`, in a redisplay that `delete-process` starts,
 which Roost calls as it ends a request. Not Lisp, and not caught. The
-rexel trial's drop did not crash in the 1 run made since. The scratch
-Emacs runs with this Mac's screen locked, which may matter to a copy
-within the frame's surface; not checked. Cause not found: why the
-reattach makes it likelier, whether an unlocked screen or Emacs 32
-shows it.
+rexel trial's drop did not crash in the 1 run made since.
+
+It is a bug in Emacs 30.2 that Emacs's master has fixed, and neither
+Roost's nor ghostel-tmux's. Each crash wrote 107,000 bytes before the
+start of the frame's pixel buffer: a scroll whose destination is above
+the top of the frame. Master's `ns_scroll_run` and `copyRect:to:` both
+clip such a scroll ("If the destination is off the top of the pixel
+buffer"); 30.2's source has neither check.
+
+| Emacs | Runs with the reattach | Crashed at stop |
+| --- | --- | --- |
+| 30.2 | 11 | 8 |
+| 32.0.50 (master) | 5 | 0 |
+
+The five runs on Emacs 32 passed all ten steps, so a stopped task being
+left alone is now seen in 7 runs. Not found: which window scrolls above
+the frame, and so why the reattach makes it likelier. The screen was
+locked for all of these but part of one, so whether a lock matters on
+30.2 is still unknown.
 
 ## Not tried
 
