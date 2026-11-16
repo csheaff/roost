@@ -15519,8 +15519,8 @@ it of the same ID's, or nil for the first."
                  (roost-compose-cancel))
                (should-not (get-buffer roost--compose-buffer))
                (should-not acted)
-               ;; Offered again with another brief, one you only looked at
-               ;; opens with the new brief.
+               ;; Offered again with another brief, or project, one you only
+               ;; looked at opens anew, from the offer as it is now.
                (roost--compose-offer task offer)
                (setq offer '((id . "0a1b2c3d") (title . "Fix add in calc.py") (brief . "add() subtracts, and so does sum().")))
                (setq task (roost--cache-task "dev" (append `((name . "budget") (repo . "/srv/ledger")

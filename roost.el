@@ -12469,7 +12469,7 @@ under the one that offered it."
 (defun roost--compose-offer (task offer)
   "Open OFFER, which TASK's agent made, as a new task draft.
 The offer waits on: its host takes it once the draft makes its task.
-Its own draft, left open, shows again as you left it.  A draft that
+Its own draft, if you changed it, shows again as you left it.  A draft that
 holds a prompt of yours, or says what became of a request of its own,
 stays as it is; one of another offer you only looked at gives way.  An
 offer's draft starts anew, as a request asked before with the one it
@@ -12479,11 +12479,9 @@ replaces would be answered with that one's task."
              (with-current-buffer buffer
                (and (equal (plist-get roost--compose-fields :parent) (roost--key task))
                     (equal (plist-get roost--compose-fields :offer) (alist-get 'id offer))
-                    ;; Unless its agent has offered it again, with another
-                    ;; brief, and you only looked at the one before.
-                    (not (and (roost--compose-looked-p)
-                              (not (equal (string-trim (alist-get 'brief offer))
-                                          (car roost--compose-offered))))))))
+                    ;; One you only looked at opens anew: its agent may have
+                    ;; offered it again since, with another brief or project.
+                    (not (roost--compose-looked-p)))))
         ;; In the window you were in, as when it first opened: not the
         ;; sidebar's, where you clicked.
         (progn (roost--leave-side-window)

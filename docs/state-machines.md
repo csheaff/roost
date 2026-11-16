@@ -2564,8 +2564,8 @@ Invariants:
 | Editing | `roost--compose` | prompt written | Editing | fields kept; a seed is dropped, and a DIRECTORY with it | `roost--compose` |
 | Editing | `roost--compose`, a DIRECTORY and no seed, as a click on a project | prompt written | Editing | moves there, or says why it stays | `roost--compose`, `roost--compose-tied` |
 | Absent, Editing | `RET` on an offer | no prompt, or another waiting offer's brief as it came; no note, not submitting | Editing | a new buffer, with the offer's title, brief and task; the offer waits | `roost--compose-offer`, `roost--compose-looked-p` |
-| Editing | `RET` on the offer the draft opened | you changed the draft, or the offer's brief is as it opened with | Editing | the draft shows as you left it | `roost--compose-offer` |
-| Editing | `RET` on the offer the draft opened | the draft is as it opened, and its agent has offered it again with another brief | Editing | a new buffer, with the new brief | `roost--compose-offer`, `roost--compose-looked-p` |
+| Editing | `RET` on the offer the draft opened | you changed the draft | Editing | the draft shows as you left it | `roost--compose-offer` |
+| Editing | `RET` on the offer the draft opened | the draft is as it opened | Editing | a new buffer, from the offer as it is now: its agent may have offered it again, with another brief or project | `roost--compose-offer`, `roost--compose-looked-p` |
 | any but Absent | `RET` on another offer | a prompt of yours, a note, or submitting | same | user-error; the offer waits | `roost--compose-offer` |
 | Editing | Dismiss offer | its offer waits; its brief as it came, or yes | Absent | `quit-window t`; the offer is taken | `roost-compose-dismiss-offer`, `roost--take-offer` |
 | Editing | edit | | Editing | idle timer redraws fields | `roost--compose-changed` |
