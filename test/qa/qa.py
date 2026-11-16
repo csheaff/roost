@@ -637,6 +637,16 @@ class Run:
                     problems.append("%s, another task's terminal, is beside %s's" % (window["buffer"], own["name"]))
             if window["mode"] == "roost-sidebar-list-mode" and window["total"] != screen["sidebar-width"]:
                 problems.append("The sidebar is %d columns wide, not %d" % (window["total"], screen["sidebar-width"]))
+            if window.get("short"):
+                # A pane on its way to its window's size, as takes a moment
+                # over a slow connection: it has to get there.
+                short, deadline = window["short"], time.monotonic() + 8
+                while short and time.monotonic() < deadline:
+                    time.sleep(0.25)
+                    short = self.emacs.json("(json-encode (qa-rows-short %s))" % lisp(window["buffer"]))
+                if short:
+                    problems.append("%s has %d rows fewer than its window, which tmux has not resized it to"
+                                    % (window["buffer"], short))
             if window.get("history") and self.args.backend == "ghostel-tmux" and window["history"] <= 3:
                 # As in `drift': a pane made narrower keeps above its screen
                 # what tmux scrolled away.

@@ -12578,7 +12578,7 @@ A test stubs the functions of ghostel-tmux it reaches."
                          (set-window-buffer window plain)
                          (let ((shown (window-buffer window)))
                            (set-window-buffer window now)
-                           (roost--still-there-p window shown nil (selected-frame))))))
+                           (roost--still-there-p window shown nil (selected-frame) num-input-keys)))))
              (should (stayed 'ghostel-tmux plain))
              ;; The split came back where you were: you asked for the task still.
              (should (stayed 'ghostel-tmux terminal))
@@ -12587,7 +12587,14 @@ A test stubs the functions of ghostel-tmux it reaches."
              ;; So is another session's terminal in place of a terminal.
              (let ((roost-terminal-backend 'ghostel-tmux))
                (set-window-buffer window terminal)
-               (should-not (roost--still-there-p window plain '("far" "main" "one") (selected-frame))))
+               (should-not (roost--still-there-p window plain '("far" "main" "one") (selected-frame)
+                                                 num-input-keys))
+               ;; And one you chose yourself meanwhile, as with C-x b: a key
+               ;; pressed since you asked.
+               (set-window-buffer window terminal)
+               (should-not (roost--still-there-p window plain nil (selected-frame) (1- num-input-keys)))
+               ;; A caller that notes no keys keeps the rule it had.
+               (should-not (roost--still-there-p window plain nil (selected-frame))))
              ;; tmux-control keeps a split's windows another way.
              (should-not (stayed 'tmux-control terminal))
              ;; Nor in another window than the one you asked from.
@@ -12597,7 +12604,8 @@ A test stubs the functions of ghostel-tmux it reaches."
                  (unwind-protect
                      (progn (set-window-buffer window terminal)
                             (with-selected-window second
-                              (should-not (roost--still-there-p window plain nil (selected-frame)))))
+                              (should-not (roost--still-there-p window plain nil (selected-frame)
+                                                                num-input-keys))))
                    (delete-window second))))))
        (mapc #'kill-buffer (list plain other terminal))))))
 

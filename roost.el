@@ -2845,7 +2845,7 @@ Nil for a view of a terminal, such as its scrollback, too."
                   (session (roost--tmux-buffer-session)))
         (list (roost--tmux-buffer-host) (roost--tmux-buffer-socket-name) session)))))
 
-(defun roost--still-there-p (window shown place frame)
+(defun roost--still-there-p (window shown place frame &optional keys)
   "Whether you are still where you were: in WINDOW, which showed SHOWN.
 Or in the same terminal in FRAME, WINDOW's, at PLACE as
 `roost--terminal-place' said of SHOWN then, which tmux-control shows
@@ -2855,21 +2855,22 @@ pane's buffer, or another window the one you were in."
   (or (and (eq (selected-window) window) (eq (window-buffer window) shown))
       (and place (eq (selected-frame) frame)
            (equal (roost--terminal-place (window-buffer (selected-window))) place))
-      (and (null place) (roost--terminal-took-window-p window shown))))
+      (and (null place) keys (roost--terminal-took-window-p window shown keys))))
 
-(defun roost--terminal-took-window-p (window shown)
+(defun roost--terminal-took-window-p (window shown keys)
   "Whether WINDOW, still selected, shows a terminal in place of SHOWN.
-With ghostel-tmux, which put it there, not you.  The caller asks only
-for a SHOWN that was no terminal: one in place of another may be you
-changing its session.  A tmux window of
+With ghostel-tmux, which put it there, not you: KEYS is what
+`num-input-keys' was when you asked, and you have pressed no key and
+clicked nothing since, so the buffer is none of your choosing.  The
+caller asks only for a SHOWN that was no terminal.  A tmux window of
 several panes shows as a split, and the split keeps its windows when
 they come to show another buffer: a change of its layout that tmux
 reports late, as over a slow connection or once the minibuffer has
-closed, builds the split again there.  What you open through Roost
-meanwhile is told apart by `roost--open-generation'.
+closed, builds the split again there.
 NEEDS: ghostel-tmux to leave a window that shows another buffer out of
 its split."
   (and (eq roost-terminal-backend 'ghostel-tmux)
+       (eql keys num-input-keys)
        (eq (selected-window) window)
        (not (eq (window-buffer window) shown))
        (with-current-buffer (window-buffer window) (roost--tmux-buffer-p))))
@@ -2889,11 +2890,12 @@ a moment, as an agent's start does, must not take you from where you went."
          (window (roost--window-you-are-in))
          (shown (window-buffer window))
          (place (roost--terminal-place shown))
-         (frame (window-frame window)))
+         (frame (window-frame window))
+         (keys num-input-keys))
     (lambda ()
       (and (= generation roost--open-generation)
            (with-selected-window (roost--window-you-are-in)
-             (roost--still-there-p window shown place frame))))))
+             (roost--still-there-p window shown place frame keys))))))
 
 (defun roost--while-you-stay (task)
   "Return a function for a command that opens something of TASK's.
@@ -3239,6 +3241,7 @@ says once the terminal shows."
          (shown (window-buffer window))
          (place (roost--terminal-place shown))
          (frame (window-frame window))
+         (keys num-input-keys)
          (name (roost--field task 'name))
          (key (roost--key task))
          (listed (gethash key roost--tasks))
@@ -3259,7 +3262,7 @@ says once the terminal shows."
                               (not (when (roost--went-p key listed)
                                      (message "Roost: didn't open %s, as it is no longer listed" name)
                                      t))
-                              (or (roost--still-there-p window shown place frame)
+                              (or (roost--still-there-p window shown place frame keys)
                                   (progn
                                     (message "Roost: didn't open %s, as you went to another window or buffer while its host replied"
                                              name)
@@ -7533,6 +7536,7 @@ says changed since: see `roost--since-looked'."
          (shown (window-buffer window))
          (place (roost--terminal-place shown))
          (frame (window-frame window))
+         (keys num-input-keys)
          (key (roost--key task))
          (listed (gethash key roost--tasks))
          (open (lambda (&rest _)
@@ -7545,7 +7549,7 @@ says changed since: see `roost--since-looked'."
                         (cond ((roost--went-p key listed)
                                (message "Roost: didn't open %s for %s, as it is no longer listed"
                                         what (roost--field task 'name)))
-                              ((not (roost--still-there-p window shown place frame))
+                              ((not (roost--still-there-p window shown place frame keys))
                                (message "Roost: didn't open %s for %s, as you went to another window or buffer while its host replied"
                                         what (roost--field task 'name)))
                               (t (funcall show task))))))))))

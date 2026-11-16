@@ -61,9 +61,16 @@ left open.
   the fake host's pane of the same number, and left this machine's tmux
   server running after a run with `--remote`. Both are the journeys', now
   fixed.
+- **Only when you did nothing meanwhile.** A terminal you choose yourself
+  while the host replies, as with `C-x b`, is still you going elsewhere:
+  the rule holds only while `num-input-keys` is what it was when you
+  asked. And the journeys wait up to eight seconds for a terminal to reach
+  its window's size, and fail one that never does.
 - **After:** the walk-away and conversation journeys with `--remote`, 100
   steps, 0 with problems; the walk-away journey stopped at its 48th pair
-  before. `make test compile` passes.
+  before. Eight journeys that split, resize and open a second frame,
+  without `--remote`: 40 steps, 0 with problems. `make test compile`
+  passes.
 
 ## Images from Pi as Roost starts it, and from Claude Code — 2026-11-16
 
