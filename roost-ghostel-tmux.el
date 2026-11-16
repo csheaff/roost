@@ -536,7 +536,26 @@ or made live again by an attach."
               (controller (ghostel-tmux-controller))
               (place (buffer-local-value 'roost-ghostel-tmux--place controller)))
     (setq roost-ghostel-tmux--place place)
+    ;; Ghostel puts the buffer's name back at each change of title.
+    (setq-local ghostel-buffer-identification-format nil
+                mode-line-buffer-identification '((:eval (roost-ghostel-tmux--mode-line-name))))
     (run-hook-with-args 'roost-ghostel-tmux-window-buffer-functions (current-buffer))))
+
+(defvar ghostel-buffer-identification-format)
+
+(defun roost-ghostel-tmux--mode-line-name ()
+  "Return \"HOST › TASK\" for the mode line of the current pane buffer.
+As tmux-control names a terminal by its host and tmux window, in place
+of a buffer name that spells out the session and pane.  A session that
+is no task's has its own name for the task's."
+  (let ((place (roost-ghostel-tmux--buffer-place))
+        (task (roost--terminal-task (current-buffer))))
+    (propertize (string-replace
+                 "%" "%%"
+                 (format "%s › %s" (or (nth 0 place) "local")
+                         (or (and task (roost--field task 'name)) (nth 2 place) "")))
+                'face 'mode-line-buffer-id
+                'help-echo (buffer-name))))
 
 (add-hook 'ghostel-tmux-pane-mode-hook #'roost-ghostel-tmux--pane-made)
 
