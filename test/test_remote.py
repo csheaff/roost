@@ -12923,6 +12923,7 @@ class ProgramStatus(unittest.TestCase):
                 "   { role: 'toolResult', content: [text('a tool said this')] },\n"
                 "   say({ type: 'thinking', thinking: 'hm' }, text('\\n\\nPING'), text(' and more '))],\n"
                 "  [say({ type: 'toolCall', name: 'bash' })],\n"
+                "  [say(text('I will run the tests.')), say({ type: 'toolCall', name: 'bash' })],\n"
                 "  [{ role: 'assistant', content: 'plain' }],\n"
                 "  [{ role: 'user', content: 'Hi' }],\n"
                 "  undefined,\n"
@@ -12932,12 +12933,13 @@ class ProgramStatus(unittest.TestCase):
             env = dict(os.environ, ROOST_PYTHON=sys.executable, ROOST_HELPER=str(helper))
             subprocess.run(["node", str(driver)], env=env, check=True, timeout=30)
             events = [json.loads(line) for line in log.read_text().splitlines()]
-            # The last thing the agent said, its text only; none when it
+            # The last thing the agent said in words, its text only, though a
+            # tool call came after; none when it
             # said nothing, or on a Pi whose event has no messages.
-            self.assertEqual([event.get("reply") for event in events[:5]],
-                             ["PING\n\nand more", "", "plain", None, None])
+            self.assertEqual([event.get("reply") for event in events[:6]],
+                             ["PING\n\nand more", "", "I will run the tests.", "plain", None, None])
             # A long one is cut between characters, not inside one.
-            self.assertEqual(events[5]["reply"], "x" * 3999 + "\U0001F600")
+            self.assertEqual(events[6]["reply"], "x" * 3999 + "\U0001F600")
             self.assertTrue(all(event["event"] == "agent_end" and event["pending"] is False for event in events))
 
     @unittest.skipUnless(shutil.which("node"), "needs Node")

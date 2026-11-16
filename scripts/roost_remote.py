@@ -1454,12 +1454,15 @@ export default function (pi) {
   // What the run said last. Pi writes it to the session file too, but
   // not always before this event, so a reader of the file can see the
   // reply before.
+  // The last message of the agent's that has words: one that only
+  // calls a tool, as when you stop it there, has none.
+  const wordsOf = message => typeof message.content === "string" ? message.content.trim()
+    : message.content.filter(part => part.type === "text" && typeof part.text === "string")
+      .map(part => part.text.trim()).filter(Boolean).join("\n\n");
   const replyOf = event => {
     try {
-      const said = event.messages.filter(message => message.role === "assistant").pop();
-      if (typeof said.content === "string") return start(said.content);
-      return start(said.content.filter(part => part.type === "text" && typeof part.text === "string")
-        .map(part => part.text.trim()).filter(Boolean).join("\n\n"));
+      const said = event.messages.filter(message => message.role === "assistant").map(wordsOf);
+      return start(said.filter(Boolean).pop() ?? (said.length ? "" : undefined));
     } catch { return undefined; }
   };
   pi.on("agent_end", (event, ctx) => report("agent_end", ctx,
