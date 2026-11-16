@@ -110,6 +110,29 @@ driven from Lisp as on claylien, typing into the block as you would.
   `working` between two `ready`s of a one-second turn, which the
   drive's poll was too slow for; a long session; images; links.
 
+## Results, a connection that drops
+
+On claylien, with the fake agent streaming a line every half second:
+every ssh of the Emacs was killed, and the shared connection of
+Roost's helper with them, as a network that goes.
+
+- At first the terminal never came back. rexel said "connection lost,
+  reconnecting" and dialled the forwarded socket again, whose ssh was
+  gone; opening the task again showed the same dead block. The layer's
+  fault: it started the forward once.
+- The layer now starts the forward again when it ends, after a second,
+  then two, up to thirty, for as long as a buffer shows a session on
+  the host, and has rexel dial at once when you open a task there.
+  With that, 2 runs of 2: rexel said "reconnected" and the terminal
+  was streaming again within three seconds of the drop, by itself,
+  with the lines it had missed; it ended as the host had it; typing in
+  Emacs reached the agent; stop worked; nothing was asked.
+- Roost's own poll of the host recovered by itself both before and
+  after: the task went from running to ready when the stream ended.
+- Not tried: a network that goes quiet without ending ssh (the forward
+  now has ServerAliveInterval 15, twice), a host that stays away for
+  minutes, a Rex server that restarts.
+
 ## What rexel would need (for dakra)
 
 Rexel 0.5.0's public Lisp is lookups: `rexel-block-p`, `-block-id`,
@@ -182,5 +205,5 @@ Other things met:
 A real agent for longer than two turns. The journeys against a real
 host. Rex's Tailscale
 address in place of the forward. Many tasks at once. A dropped
-connection, the forward's ssh ending, and rexel's redial.
+connection that goes quiet, or a server that restarts.
 Roost's program-status from Rex. The other QA journeys.

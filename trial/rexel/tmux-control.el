@@ -237,29 +237,72 @@ Short, since a Unix socket's path is.")
 (defvar tmux-control--forwards (make-hash-table :test #'equal)
   "The ssh forwarding each remote server's socket, by (HOST . PATH).")
 
+(defvar tmux-control--forward-delays (make-hash-table :test #'equal)
+  "Seconds before the next try at each forward that ended, by (HOST . PATH).")
+
+(defun tmux-control--forward-socket (key)
+  "The socket on this machine for the forward KEY, a (HOST . PATH)."
+  (expand-file-name (concat (substring (md5 (format "%S" key)) 0 12) ".sock")
+                    tmux-control-forward-directory))
+
+(defun tmux-control--wanted-p (host)
+  "Non-nil if a buffer still shows, or waits for, a Rex session on HOST."
+  (seq-some (lambda (buffer)
+              (equal (car (buffer-local-value 'tmux-control--place buffer)) host))
+            (buffer-list)))
+
+(defun tmux-control--start-forward (key)
+  "Start the ssh that forwards KEY's socket, and return it.
+When it ends, as when the connection drops, it is started again after
+a second, then two, up to thirty, for as long as a buffer shows a
+session on the host: rexel dials the socket again by itself, and finds
+its server once the forward is back."
+  (let ((local (tmux-control--forward-socket key))
+        (began (float-time)))
+    (with-file-modes #o700
+      (make-directory tmux-control-forward-directory t))
+    (when (file-exists-p local)
+      (delete-file local))
+    (puthash
+     key
+     (make-process
+      :name (format "roost-rex-forward %s" (car key))
+      :buffer (generate-new-buffer (format " *roost-rex-forward %s*" (car key)))
+      :command (list "ssh" "-N" "-T" "-o" "BatchMode=yes" "-o" "ConnectTimeout=8"
+                     "-o" "ServerAliveInterval=15" "-o" "ServerAliveCountMax=2"
+                     "-o" "ExitOnForwardFailure=yes"
+                     "-L" (concat local ":" (cdr key)) (car key))
+      :connection-type 'pipe :noquery t
+      :sentinel
+      (lambda (process _event)
+        (when (and (not (process-live-p process))
+                   (eq (gethash key tmux-control--forwards) process))
+          (let ((delay (if (> (- (float-time) began) 10) 1
+                         (min 30 (* 2 (gethash key tmux-control--forward-delays 0.5))))))
+            (puthash key delay tmux-control--forward-delays)
+            (run-at-time
+             delay nil
+             (lambda ()
+               (when (eq (gethash key tmux-control--forwards) process)
+                 (when (buffer-live-p (process-buffer process))
+                   (kill-buffer (process-buffer process)))
+                 (if (tmux-control--wanted-p (car key))
+                     (tmux-control--start-forward key)
+                   (remhash key tmux-control--forwards)
+                   (remhash key tmux-control--forward-delays)))))))))
+     tmux-control--forwards)))
+
 (defun tmux-control--forward (host path callback)
   "Call CALLBACK with a socket on this machine that reaches PATH on HOST.
 With nil and why not, when ssh could not forward it."
   (let* ((key (cons host path))
-         (local (expand-file-name (concat (substring (md5 (format "%S" key)) 0 12) ".sock")
-                                  tmux-control-forward-directory))
+         (local (tmux-control--forward-socket key))
          (process (gethash key tmux-control--forwards)))
     (if (and (process-live-p process) (file-exists-p local))
         (funcall callback local nil)
       (unless (process-live-p process)
-        (with-file-modes #o700
-          (make-directory tmux-control-forward-directory t))
-        (when (file-exists-p local)
-          (delete-file local))
-        (setq process
-              (make-process
-               :name (format "roost-rex-forward %s" host)
-               :buffer (generate-new-buffer (format " *roost-rex-forward %s*" host))
-               :command (list "ssh" "-N" "-T" "-o" "BatchMode=yes"
-                              "-o" "ExitOnForwardFailure=yes"
-                              "-L" (concat local ":" path) host)
-               :connection-type 'pipe :noquery t))
-        (puthash key process tmux-control--forwards))
+        (remhash key tmux-control--forward-delays)
+        (setq process (tmux-control--start-forward key)))
       (let ((tries 100) timer)
         (setq timer
               (run-at-time
@@ -274,12 +317,21 @@ With nil and why not, when ssh could not forward it."
                         (let ((said (and (buffer-live-p (process-buffer process))
                                          (with-current-buffer (process-buffer process)
                                            (string-trim (buffer-string))))))
-                          (when (process-live-p process)
-                            (delete-process process))
                           (funcall callback nil
                                    (format "No way to the Rex server on %s: %s" host
                                            (if (string-empty-p (or said ""))
                                                "ssh did not forward its socket" said)))))))))))))
+
+(defun tmux-control--reach-again (place)
+  "Have the connection of the session at PLACE, on a host, dialled now.
+rexel waits up to thirty seconds between its tries, and you have just
+asked for the session.  NEEDS: `rexel--connect'."
+  (when-let* ((host (nth 0 place)))
+    (tmux-control--forward
+     host (tmux-control--endpoint (nth 1 place))
+     (lambda (local _why)
+       (when local
+         (ignore-errors (rexel--connect (list host local) #'ignore)))))))
 
 (defun tmux-control--attach (place)
   "Attach the Rex session at PLACE.  Its blocks' buffers come later.
@@ -353,6 +405,7 @@ buffer that stands in for its block until the server has answered."
     (tmux-control--make-room place window)
     (cond
      (block
+      (tmux-control--reach-again place)
       (unless (equal (buffer-local-value 'tmux-control--place (window-buffer window)) place)
         (tmux-control--show block window))
       ;; Its other blocks, as a task's shell, beside it again.
