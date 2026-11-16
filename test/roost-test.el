@@ -12487,6 +12487,10 @@ A test stubs the functions of ghostel-tmux it reaches."
              ;; A session that is no task's has its own name.
              (setq roost-ghostel-tmux--place '(nil "other" "scratch"))
              (should (equal (name) "local › scratch"))
+             ;; So has one that tasks share, from before each had its own.
+             (task "far" "another")
+             (setq roost-ghostel-tmux--place '("far" "main" "roost-notes-123456"))
+             (should (equal (name) "far › roost-notes-123456"))
              ;; The whole name is there to point at.
              (should (equal (get-text-property 0 'help-echo (roost-ghostel-tmux--mode-line-name))
                             (buffer-name))))))))))
