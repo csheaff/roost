@@ -1449,7 +1449,24 @@ export default function (pi) {
   // Pi waits for an input handler, so this one returns before the report.
   pi.on("input", (event, ctx) => { report("prompt", ctx, { prompt: event.text, source: event.source }); });
   pi.on("agent_start", (_event, ctx) => report("agent_start", ctx));
-  pi.on("agent_end", (_event, ctx) => report("agent_end", ctx, { pending: ctx.hasPendingMessages() }));
+  // Cut by characters, so that no half of a pair is left at the end.
+  const start = text => [...text].slice(0, 4000).join("");
+  // What the run said last. Pi writes it to the session file too, but
+  // not always before this event, so a reader of the file can see the
+  // reply before.
+  // The last message of the agent's that has words: one that only
+  // calls a tool, as when you stop it there, has none.
+  const wordsOf = message => typeof message.content === "string" ? message.content.trim()
+    : message.content.filter(part => part.type === "text" && typeof part.text === "string")
+      .map(part => part.text.trim()).filter(Boolean).join("\n\n");
+  const replyOf = event => {
+    try {
+      const said = event.messages.filter(message => message.role === "assistant").map(wordsOf);
+      return start(said.filter(Boolean).pop() ?? (said.length ? "" : undefined));
+    } catch { return undefined; }
+  };
+  pi.on("agent_end", (event, ctx) => report("agent_end", ctx,
+    { pending: ctx.hasPendingMessages(), reply: replyOf(event) }));
   // Pi 1.1.0 and later say whether you stopped the run.
   pi.on("agent_settled", (event, ctx) => report("agent_settled", ctx, { aborted: event.aborted === true }));
   // Pi 0.84.4 and later say when a dialog, such as an extension's asking
@@ -1520,6 +1537,16 @@ class PiAgent:
         if not status:
             return None
         updates = dict(status=status, updatedAt=now(), lastEvent=last)
+        if event == "agent_end":
+            # The run's last words, as Pi 1.x hands them over; without
+            # them the session file is read, which may not hold them yet.
+            reply = payload.get("reply")
+            updates["lastReply"] = (reply.strip()[:LAST_MESSAGE_LIMIT + 1]
+                                    if isinstance(reply, str) and reply.strip() else None)
+        elif event == "session_start":
+            # Another session, as after /new, or this one resumed: its
+            # file says what was said last in it, if anything.
+            updates["lastReply"] = None
         if request:
             updates["request"] = request[:REQUEST_LIMIT]
         if payload.get("session"):

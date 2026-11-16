@@ -4,6 +4,11 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A Pi task's latest reply is the one its turn just ended with. Roost read
+  it from Pi's session file, which Pi had not always written yet, so the
+  panel and the dashboard could show the reply before until the next
+  refresh. Pi now hands Roost the reply as the turn ends. Nothing to do
+  when upgrading: tasks pick it up when they next start or resume.
 - A task's terminal can be shown by ghostel-tmux, which draws with Ghostel,
   in place of tmux-control: set `roost-terminal-backend` to `ghostel-tmux`,
   with Ghostel 0.65.0 and ghostel-tmux 0.3.0 or newer installed. Tasks,

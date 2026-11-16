@@ -12859,6 +12859,89 @@ class ProgramStatus(unittest.TestCase):
                                       dict(event="agent_start", session="s")])
             self.assertIsNone(roost.PiAgent().observe(events[1]))
 
+    def test_pi_says_its_reply_as_its_turn_ends(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.pi_says_its_reply(Path(root))
+
+    def pi_says_its_reply(self, root):
+        # Pi's session file may not hold the reply yet when its turn ends,
+        # so a reader of the file would show the reply before.
+        stale = root / "session.jsonl"
+        stale.write_text(json.dumps({"type": "message", "message": {
+            "role": "assistant", "content": [{"type": "text", "text": "before"}]}}) + "\n")
+        store = roost.Store(str(root / "state"))
+        store.save(dict(id="0" * 16, agent="pi", worktree="/w", status="running", runId="run",
+                        agentSession=str(stale), lastEvent="agent_start", updatedAt="then"))
+        hook = lambda **fields: roost.update_hook(store, "0" * 16, dict(fields, session=str(stale)), "run")
+        hook(event="agent_end", pending=False, reply="  PING\n")
+        self.assertEqual(store.read("0" * 16)["lastReply"], "PING")
+        self.assertEqual(roost.last_message(store.read("0" * 16)), "PING")
+        # What you send next clears it, and a turn that ends saying nothing,
+        # or an older Pi's, leaves the session file to say.
+        hook(event="prompt", prompt="Next", source="interactive")
+        self.assertIsNone(store.read("0" * 16)["lastReply"])
+        hook(event="agent_end", pending=False, reply="again")
+        for reply in ("", None, 7):
+            with self.subTest(reply=reply):
+                hook(event="agent_end", pending=False, reply=reply)
+                self.assertIsNone(store.read("0" * 16)["lastReply"])
+                self.assertEqual(roost.last_message(store.read("0" * 16)), "before")
+        hook(event="agent_end", pending=False)
+        self.assertIsNone(store.read("0" * 16)["lastReply"])
+        self.assertEqual(roost.PiAgent().observe(dict(event="agent_end", reply="x" * 5000))["lastReply"],
+                         "x" * (roost.LAST_MESSAGE_LIMIT + 1))
+        # A session that starts, as after /new, leaves the one before's reply behind.
+        hook(event="agent_end", pending=False, reply="in the session before")
+        fresh = root / "fresh.jsonl"
+        fresh.write_text("")
+        roost.update_hook(store, "0" * 16, dict(event="session_start", session=str(fresh)), "run")
+        self.assertIsNone(store.read("0" * 16)["lastReply"])
+        self.assertIsNone(roost.last_message(store.read("0" * 16)))
+        # Only a turn's end carries one.
+        self.assertNotIn("lastReply", roost.PiAgent().observe(dict(event="agent_start", reply="no")))
+
+    @unittest.skipUnless(shutil.which("node"), "needs Node")
+    def test_pi_extension_reports_the_reply_its_run_ended_with(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            store = roost.Store(str(root / "state"))
+            roost.PiAgent().launch(store, dict(id="0" * 16, command=["pi"], prompt=None), False)
+            extension = next(store.root.glob("pi-observer-*.mjs"))
+            log = root / "log"
+            helper = root / "helper.py"
+            helper.write_text("import sys\nopen(%r, 'a').write(sys.stdin.read() + '\\n')\n" % str(log))
+            driver = root / "driver.mjs"
+            driver.write_text(
+                "const { default: observe } = await import(%s);\n"
+                "const handlers = {};\n"
+                "observe({ on: (name, handler) => { handlers[name] = handler; } });\n"
+                "const ctx = { sessionManager: { getSessionFile: () => 's' }, hasPendingMessages: () => false };\n"
+                "const say = (...content) => ({ role: 'assistant', content });\n"
+                "const text = text => ({ type: 'text', text });\n"
+                "const runs = [\n"
+                "  [{ role: 'user', content: 'Hi' }, say(text('first')),\n"
+                "   { role: 'toolResult', content: [text('a tool said this')] },\n"
+                "   say({ type: 'thinking', thinking: 'hm' }, text('\\n\\nPING'), text(' and more '))],\n"
+                "  [say({ type: 'toolCall', name: 'bash' })],\n"
+                "  [say(text('I will run the tests.')), say({ type: 'toolCall', name: 'bash' })],\n"
+                "  [{ role: 'assistant', content: 'plain' }],\n"
+                "  [{ role: 'user', content: 'Hi' }],\n"
+                "  undefined,\n"
+                "  [say(text('x'.repeat(3999) + '\\u{1F600}' + 'tail'))]];\n"
+                "for (const messages of runs) await handlers.agent_end({ messages }, ctx);\n"
+                % json.dumps(extension.as_uri()))
+            env = dict(os.environ, ROOST_PYTHON=sys.executable, ROOST_HELPER=str(helper))
+            subprocess.run(["node", str(driver)], env=env, check=True, timeout=30)
+            events = [json.loads(line) for line in log.read_text().splitlines()]
+            # The last thing the agent said in words, its text only, though a
+            # tool call came after; none when it
+            # said nothing, or on a Pi whose event has no messages.
+            self.assertEqual([event.get("reply") for event in events[:6]],
+                             ["PING\n\nand more", "", "I will run the tests.", "plain", None, None])
+            # A long one is cut between characters, not inside one.
+            self.assertEqual(events[6]["reply"], "x" * 3999 + "\U0001F600")
+            self.assertTrue(all(event["event"] == "agent_end" and event["pending"] is False for event in events))
+
     @unittest.skipUnless(shutil.which("node"), "needs Node")
     def test_opencode_plugin_reports_what_you_sent_as_a_turn_takes_it_up(self):
         with tempfile.TemporaryDirectory() as root:

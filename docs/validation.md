@@ -35,6 +35,27 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## Pi through a task, and its reply — 2026-11-16
+
+On a Mac, Emacs 32.0.50, Pi with a local model (LM Studio, qwen3.6-35b),
+terminals through ghostel-tmux.
+
+- **A real Pi 1.3.0 task.** Created with a prompt, it changed two files and
+  ran the tests, and went from `running` to `ready`. Esc from Emacs stopped
+  a long turn, shown as interrupted. A prompt typed in the terminal and one
+  from the send draft both reached it. Stopped and resumed, it kept its
+  conversation; Emacs restarted, the task was listed and its terminal came
+  back with its scrollback.
+- **Found:** after the stopped turn, the next turn ended and the task still
+  showed the stopped turn's text as its latest reply until a refresh.
+  `make contract-live CONTRACT_AGENTS=pi` failed "the reply is read" the
+  same way. Pi had not yet written the reply to its session file when it
+  said the turn had ended. Fixed by having Pi's extension report the reply.
+- **`make contract` and `make contract-live CONTRACT_AGENTS=pi`** pass with
+  the fix on Pi 1.3.0 and on Pi 1.5.2, 8 of 8 each; both captures are in
+  `test/captures`.
+- **Not checked:** Pi on a remote host as a task, and Pi's dialogs.
+
 ## Terminals through ghostel-tmux — 2026-11-15
 
 `roost-terminal-backend` lets ghostel-tmux show a task's terminal. On a
