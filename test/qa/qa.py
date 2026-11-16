@@ -827,6 +827,10 @@ def next_waiting(qa, repo):
     qa.status(asking, "permission")
     # Its turn ends while you are back in notes.py, so it waits for you.
     streaming = new_task(qa, "stream next 16 0.4")
+    # Roost opens a task it made once its host has replied, which on a slow
+    # host can be after the task is listed: go back only once it has, as
+    # you would, or it opens over notes.py.
+    qa.wait("it to open", lambda s: (s.get("task") or {}).get("name") == streaming)
     perspective = qa.emacs.eval("(roost--workspace-backend)") == "perspective"
     if perspective:
         # In a task's perspective, notes.py would count as that task's.

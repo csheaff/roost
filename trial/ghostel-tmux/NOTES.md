@@ -409,13 +409,25 @@ too long" when the layer turned it on regardless. So a macOS host
 keeps TRAMP as it comes. Whether the stall shows on a real macOS host
 is not known: none was tried.
 
-The eleven journeys with `--remote` after the change: 44 of 47 steps.
-The three that fail are in `next_waiting` ("Waited 40s for notes.py")
-and `merge` ("n goes to the task that asks": its panel is not beside
-the terminal), and they fail the same with the layer's host setup left
-out, 2 runs of 2 each way. They had not been run with `--remote` on
-ghostel-tmux before: only `answer` and `shell` had. Not looked into.
-The rexel trial passes both with `--remote`.
+The eleven journeys with `--remote` after the change: 44 of 47 steps
+at first, 53 of 53 once `next_waiting` was changed as below.
+
+The three that failed were one. `merge` failed only because
+`next_waiting` had stopped and left its tasks behind. `next_waiting`
+makes a task and goes back to a file at once, taking the task to be
+open by then. Over the delayed link a pane of ghostel-tmux takes 7 to
+8 seconds from the open to arrive (measured twice in a trace: 8.3 and
+7.0 s; about 3 s on claylien, under 1 s for tmux-control and rexel),
+and while the first task's pane was still on its way the second task
+was listed before its host's reply had Roost open it. The journey
+went back to the file, and the task then opened over it, as Roost
+means a task it made to. The journey now waits for the task to open
+before it goes back. It fails the same with direct async forced on,
+and passes on real tmux-control with `--remote` before and after the
+change, and on ghostel-tmux locally.
+
+What is ghostel-tmux's in this: the slow attach over TRAMP. For dakra,
+if it is wanted: a count of the round trips an attach makes.
 
 ## Not tried
 
@@ -424,4 +436,4 @@ The rexel trial passes both with `--remote`.
 - The walk_away grid, and the ERT suite, which stubs tmux-control.
 - A real agent for longer than two turns, the journeys against a real
   host, a real macOS host, a connection that drops.
-- Why `next_waiting` and `merge` fail with `--remote`.
+- Why an attach takes 7 to 8 seconds over the delayed link.
