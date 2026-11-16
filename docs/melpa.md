@@ -1,7 +1,10 @@
 # Submitting to MELPA
 
-Roost depends on tmux-control, so tmux-control goes first; submit Roost once
-tmux-control is on MELPA. Each submission is a pull request to
+Since 0.13.0 Roost depends on Ghostel, which is on MELPA, and ghostel-tmux,
+which is not: Roost can go once ghostel-tmux is there. tmux-control is
+optional now, and its recipe and checks below stand for when it is wanted
+there. Before that, Roost depended on tmux-control, so tmux-control went
+first, and Roost once tmux-control was on MELPA. Each submission is a pull request to
 [melpa/melpa](https://github.com/melpa/melpa) adding one file under `recipes/`.
 
 ## Recipes

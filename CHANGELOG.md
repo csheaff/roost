@@ -4,18 +4,35 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- **Terminals are drawn by Ghostel, through ghostel-tmux, by default.**
+  `roost-terminal-backend` is now `ghostel-tmux`, and Roost needs
+  [Ghostel](https://github.com/dakra/ghostel) 0.65.0 and
+  [ghostel-tmux](https://github.com/dakra/ghostel-tmux) 0.3.0 or newer in
+  place of tmux-control. A terminal draws the images an agent sends in the
+  Kitty graphics protocol, as Pi does
+  [once told to](docs/manual.md#images-in-a-terminal). Tasks, their tmux
+  sessions and the helper are unchanged, and agents at work stay at work.
+  When upgrading, do one of two things:
+  - Install Ghostel (from MELPA) and ghostel-tmux, as
+    [Install](docs/manual.md#install) shows. A terminal's keys become
+    ghostel-tmux's, tmux's own after `C-t`. A straight.el or Doom recipe
+    for Roost with `:files ("roost.el" "scripts")` needs
+    `("roost*.el" "scripts")`, for `roost-ghostel-tmux.el`.
+  - Or keep tmux-control: `(setq roost-terminal-backend 'tmux-control)`
+    before Roost opens a task. The manual's
+    [Terminals through tmux-control](docs/manual.md#terminals-through-tmux-control)
+    says what differs.
+
+  Without either, opening a task says which package is missing.
+  ghostel-tmux has been used with Roost for less time than tmux-control:
+  [A task's terminal](docs/manual.md#a-tasks-terminal) lists what is
+  untried, and that Emacs 30.2 on macOS can crash after a host's connection
+  drops.
 - A Pi task's latest reply is the one its turn just ended with. Roost read
   it from Pi's session file, which Pi had not always written yet, so the
   panel and the dashboard could show the reply before until the next
   refresh. Pi now hands Roost the reply as the turn ends. Nothing to do
   when upgrading: tasks pick it up when they next start or resume.
-- A task's terminal can be shown by ghostel-tmux, which draws with Ghostel,
-  in place of tmux-control: set `roost-terminal-backend` to `ghostel-tmux`,
-  with Ghostel 0.65.0 and ghostel-tmux 0.3.0 or newer installed. Tasks,
-  their tmux sessions and the helper are the same either way. The manual's
-  [Terminals through ghostel-tmux](docs/manual.md#terminals-through-ghostel-tmux)
-  says what differs. tmux-control stays the default. Nothing to do when
-  upgrading.
 - `x` finishes with a task whose agent reports work left in the
   background: it asks, saying it stops the agent, and stops it before
   retiring. Its turn has ended, and that work lives in the worktree `x`

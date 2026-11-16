@@ -203,7 +203,9 @@ account, with no badge or verdict.
   the other way. From dmux, workmux (`-A`), Orca and agent-deck.
 - **Review notes from file buffers**, for diff-hl users who review in the
   file rather than in Magit.
-- **Ghostel in place of Eat.** [Ghostel](https://github.com/dakra/ghostel)
+- **Ghostel in place of Eat.** In Roost now: terminals are drawn by
+  Ghostel, through ghostel-tmux, unless you choose tmux-control. What led
+  to it follows. [Ghostel](https://github.com/dakra/ghostel)
   runs Ghostty's terminal engine in Emacs as a native module, with the Kitty
   keyboard and graphics protocols and synchronized output. tmux-control
   would draw panes with it instead of Eat. Speed is no longer the reason to

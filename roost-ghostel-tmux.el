@@ -8,11 +8,11 @@
 
 ;; What Roost asks of the package that shows a task's tmux session, on
 ;; ghostel-tmux, which draws it through Ghostel.  Roost loads this file
-;; when `roost-terminal-backend' is `ghostel-tmux'; with the default,
-;; tmux-control, it is never loaded.
+;; when `roost-terminal-backend' is `ghostel-tmux', its default; with
+;; tmux-control it is never loaded.
 ;;
-;; It needs Ghostel 0.65.0 and ghostel-tmux 0.3.0 or newer, which Roost
-;; does not install.  Each function here has the name and arguments of
+;; It needs Ghostel 0.65.0 and ghostel-tmux 0.3.0 or newer.  Each
+;; function here has the name and arguments of
 ;; the one of tmux-control it stands for, after the prefix.  A definition
 ;; that still has to work around something in ghostel-tmux says so,
 ;; marked NEEDS.

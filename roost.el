@@ -4,7 +4,7 @@
 
 ;; Author: Clay Sheaff
 ;; Version: 0.12.0
-;; Package-Requires: ((emacs "29.1") (tmux-control "0.8.2") (transient "0.4.1"))
+;; Package-Requires: ((emacs "29.1") (ghostel "0.65.0") (ghostel-tmux "0.3.0") (transient "0.4.1"))
 ;; Keywords: tools, processes
 ;; URL: https://github.com/csheaff/roost
 ;; SPDX-License-Identifier: GPL-3.0-or-later
@@ -25,7 +25,8 @@
 ;;; Commentary:
 
 ;; Coding agents run in tmux on the task's host.  Roost owns task lifecycle
-;; and observational status events; tmux-control owns rendering.  JSON RPC
+;; and observational status events; ghostel-tmux draws the terminals, or
+;; tmux-control if you choose it (`roost-terminal-backend').  JSON RPC
 ;; over SSH is asynchronous.  Files and Magit use TRAMP.  Stopping an agent
 ;; keeps its work.
 
@@ -194,17 +195,19 @@ Existing tasks keep their branch."
   :type 'string)
 
 (defcustom roost-socket-name nil
-  "Tmux socket, or nil to use tmux-control's configured default."
+  "Tmux socket, or nil for \"main\", or tmux-control's when it shows the terminals."
   :type '(choice (const nil) string))
 
-(defcustom roost-terminal-backend 'tmux-control
+(defcustom roost-terminal-backend 'ghostel-tmux
   "The package that shows a task's tmux session in Emacs.
-`tmux-control' draws it through Eat.  `ghostel-tmux' draws it through
-Ghostel, and needs Ghostel 0.65.0 and ghostel-tmux 0.3.0 or newer, which
-Roost does not install.  Set it before you open a task: the terminals
-of one package are not the other's."
-  :type '(choice (const :tag "tmux-control, through Eat" tmux-control)
-                 (const :tag "ghostel-tmux, through Ghostel" ghostel-tmux)))
+`ghostel-tmux' draws it through Ghostel, and needs Ghostel 0.65.0 and
+ghostel-tmux 0.3.0 or newer.  `tmux-control' draws it through Eat, and
+needs tmux-control 0.8.2 or newer, which Roost does not install.  Set
+it before you open a task: the terminals of one package are not the
+other's."
+  :type '(choice (const :tag "ghostel-tmux, through Ghostel" ghostel-tmux)
+                 (const :tag "tmux-control, through Eat" tmux-control))
+  :package-version '(roost . "0.13.0"))
 
 ;;;; The package that shows a terminal
 
@@ -216,8 +219,18 @@ of one package are not the other's."
   "The library that holds what `roost-terminal-backend' names."
   (if (eq roost-terminal-backend 'ghostel-tmux) 'roost-ghostel-tmux 'tmux-control))
 
+(defun roost--tmux-installed-p (package)
+  "Whether PACKAGE, which shows terminals, is loaded or can be."
+  (or (featurep (roost--tmux-library)) (featurep package)
+      (locate-library (symbol-name package))))
+
 (defun roost--tmux-load ()
-  "Load the library of `roost-terminal-backend'."
+  "Load the library of `roost-terminal-backend'.
+Say which package is missing, and what else can show the terminals."
+  (let ((package (if (eq roost-terminal-backend 'ghostel-tmux) 'ghostel-tmux 'tmux-control)))
+    (unless (roost--tmux-installed-p package)
+      (user-error "Roost shows terminals with %s, which is not installed: install it, or set `roost-terminal-backend' to `%s'"
+                  package (if (eq package 'ghostel-tmux) 'tmux-control 'ghostel-tmux))))
   (require (roost--tmux-library)))
 
 (defmacro roost--tmux-bound-p (name)
@@ -2928,6 +2941,29 @@ Nil, too, when the frame shows TASK's own terminal."
   (unless (roost--task-terminal-window task)
     (roost--terminal-window-for task)))
 
+(defvar roost--beside-panes nil
+  "Non-nil while a view shows that `roost--beside-panes' keeps out of a split.
+A view with a `display-buffer' action of its own adds
+`roost--display-beside-tiles' to it then.")
+
+(defun roost--beside-panes (view)
+  "Return VIEW, a function that shows a buffer, to show it beside a split.
+With ghostel-tmux, a tmux window of several panes shows as a split, and
+a buffer shown in one of its windows loses the selection to a pane a
+moment later.  So from a pane of a split the buffer shows in a window
+that no terminal is in, or a new one, as `roost--pop-to-buffer-in-place'
+has it for Roost's own buffers.
+NEEDS: ghostel-tmux to count a window that shows another buffer out of
+its split."
+  (lambda ()
+    (if (and (eq roost-terminal-backend 'ghostel-tmux)
+             (roost--tiled-pane-window-p (selected-window)))
+        (let ((roost--beside-panes t)
+              (display-buffer-overriding-action
+               '((display-buffer-reuse-window roost--display-beside-tiles))))
+          (funcall view))
+      (funcall view))))
+
 (defun roost--in-task-frame (task view)
   "Call VIEW to show something of TASK's, such as Magit, in TASK's frame.
 A frame shows one task: with workspaces, VIEW shows in TASK's.  Where
@@ -2949,9 +2985,9 @@ frame without one: see `roost--take-frame'."
         ;; task's until then.
         (when (roost--workspace-backend)
           (roost--put-away-other-terminals task))
-        (roost--open task view))
+        (roost--open task (roost--beside-panes view)))
     (roost--take-frame task)
-    (funcall view)))
+    (funcall (roost--beside-panes view))))
 
 (defun roost--put-away-other-terminals (task)
   "Put away the terminals of tasks other than TASK in the selected frame.
@@ -10472,7 +10508,10 @@ untracked file, with nothing to compare, is opened instead."
                 (rev (or (roost--fork-point task) "HEAD")))
             (if (and (not (alist-get 'untracked file)) (require 'magit nil t))
                 (let ((display-buffer-overriding-action
-                       '(display-buffer-reuse-mode-window (mode . magit-diff-mode))))
+                       (if roost--beside-panes
+                           '((display-buffer-reuse-mode-window roost--display-beside-tiles)
+                             (mode . magit-diff-mode))
+                         '(display-buffer-reuse-mode-window (mode . magit-diff-mode)))))
                   (roost--magit-setup)
                   ;; Since the fork point moved, as when the task was
                   ;; updated, the file's old buffer shows changes that
@@ -14648,10 +14687,10 @@ RESULT is `pending', a list of checks, or (error . MESSAGE).")
         "installed")))
 
 (defconst roost--tmux-control-version "0.8.2"
-  "The oldest tmux-control Roost works with, as its Package-Requires says.")
+  "The oldest tmux-control Roost works with, when it is the terminal package.")
 
 (defconst roost--ghostel-tmux-version "0.3.0"
-  "The oldest ghostel-tmux Roost works with, when it is the terminal package.")
+  "The oldest ghostel-tmux Roost works with, as its Package-Requires says.")
 
 (defconst roost--ghostel-version "0.65.0"
   "The oldest Ghostel that ghostel-tmux works with.")

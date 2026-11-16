@@ -1,62 +1,56 @@
 # The README's screenshots
 
-The images are captures of GUI Emacs, taken while Claude Code worked on two
-small disposable projects: `notes`, a notes CLI on this machine, and
-`ledger`, an expense-ledger CLI on the host `dev`. Every agent was a real
-Claude Code session (2.1.322, `--model haiku`), in its own terminal with its
-normal permission prompts. They ran with `--permission-mode acceptEdits`, so
-they asked before commands but not before edits.
+The images are captures of GUI Emacs, taken while agents worked on two small
+disposable projects: `ledger`, an expense-ledger CLI on this machine, and
+`notes`, a notes CLI on the host `dev`. Every agent was a real session in its
+own terminal: six of Pi 1.5.2, with a model run locally (qwen3.6-35b in LM
+Studio), and one of Claude Code 2.1.325 (`--model haiku`, with
+`--permission-mode acceptEdits`, so it asked before commands but not before
+edits).
 
-The capture Emacs was a plain Emacs 29.3 configuration, so that nothing
-personal distracts: the stock `modus-vivendi` theme and mode line, DejaVu
-Sans Mono, Inter for `variable-pitch`, and Roost, tmux-control, Magit 3.3.0
-and nothing else. It had `roost-sidebar-mode` and `roost-task-panel-mode`
-on, `roost-animations` off, as it is by default, and `roost-workspace` set
-to `nil`. It used a separate state directory and tmux socket named
-`roost-demo`; a normal setup shows `~/.local/share/roost` and your
-tmux-control socket.
+The capture Emacs was a plain Emacs 32.0.50 configuration on macOS, so that
+nothing personal distracts: the stock `modus-vivendi` theme and mode line,
+Menlo, and Roost, Ghostel 0.65.0, ghostel-tmux 0.3.0, Magit and nothing
+else. It had `roost-sidebar-mode` and `roost-task-panel-mode` on,
+`roost-animations` off, as it is by default, and `roost-workspace` set to
+`none`. It used a separate state directory and tmux socket named
+`roost-demo`; a normal setup shows `~/.local/share/roost`.
 
-It ran on Linux under Xvfb, which has no window manager, so the images have
-no title bar; their corners were rounded afterwards with ImageMagick. The
-font was 22 points, a column 18 pixels wide, for images twice the size they
-are shown at. `dev` was the same machine under another home, `/home/ubuntu`,
-reached through `test/qa/fake_ssh.py` standing in for `ssh`: to Roost it is
-a host like any other, with its own helper, tmux server and task records,
-but the images don't show a second machine.
+`dev` was a Linux machine reached over SSH, with its own helper, tmux server
+and task records. Its Pi sessions used the model on this machine, through a
+port forwarded over SSH. Pi was started as
+`env PI_IMAGE_PROTOCOL=kitty PI_OFFLINE=1 pi`, which has it send the images
+it reads and leaves out its notices of updates. The title bar was cropped
+from each capture.
 
 | File | What it shows |
 | --- | --- |
-| `roost-hero.png` | Six agents on two hosts: the sidebar, with two more projects to start a task in below them, the terminal of `budget-alerts` on `dev` asking to run `python3 -m unittest`, and that task's panel |
-| `roost-new-task.png` | `plans.org` beside the draft that `C-c r c` made from its heading, which started `export` |
-| `roost-review.png` | `tag-filter`'s terminal above the diff of `notes.py`, opened from its panel, with a review note under a line |
-| `roost-dashboard.png` | The dashboard of the same six tasks, with `budget-alerts` asking and `export` at work |
+| `roost-hero.png` | Seven agents on two hosts: the sidebar, the terminal of `spending-chart`, where Pi has read the chart it drew and the picture shows above its reply, and that task's panel |
+| `roost-new-task.png` | `plans.org` beside the draft that `C-c r c` made from its heading |
+| `roost-review.png` | `spending-chart`'s terminal above the diff of `ledger.py`, with a review note under a line |
+| `roost-dashboard.png` | The dashboard of the same seven tasks, with `budget-alerts` asking |
 
 ## How they were made
 
-All four were taken on 2026-11-11, with Roost as it is after 0.11.0, with
-the quiet task panel, a status light in the shape of its status, and the
-tints and hairlines of `roost-decorate`. Five tasks were started with
-prompts that ask the agent to run the tests with `python3 -m unittest`, and
-their prompts answered in their terminals until each finished. `search`
-then offered a task of its own, the export that `plans.org` describes; the
-offer was dismissed, and `export` drafted from the heading in `plans.org`
-instead, named in the draft, and created. Two more projects, `weather` on
-`dev` and `website` on this machine, each a single commit, were remembered
-as used before, so the sidebar lists them under "Start a task in". To have
-one agent asking and one working at the moment of the hero and the
-dashboard, `budget-alerts` was asked to show amounts with a thousands
-separator and run its tests, and `export` was given a further prompt that
-needs no command, about its docstrings, just before each capture. The review note was saved on its line of the diff of
-`notes.py`, which was opened from `tag-filter`'s panel.
+All four were taken on 2026-11-16, with Roost as it is after 0.12.0 and
+terminals through ghostel-tmux. `ledger` has a `plot.py` that draws a bar
+chart as a PNG with no plotting library. `spending-chart` was asked to add a
+`chart` command that draws spending by category with it, to run it, and to
+look at the picture with Pi's read tool, which is what puts the picture in
+its terminal; it was then asked to show the picture again and say in a
+sentence what stands out, with Pi's thinking folded (`C-t` in Pi). The
+other Pi tasks were given small features with tests, and left when they
+finished. `budget-alerts`, the Claude Code task, was answered until it asked
+to run `python3 -m unittest`, and left asking. To have one agent working at
+the moment of the hero, `tag-filter` was started on `dev` just before it.
+The review note was saved on its line of the diff of `ledger.py`, which was
+opened with `roost-diff` from `spending-chart`.
 
 Each was taken at its own frame size, so that the text reads at the width
-GitHub shows the README: 172 columns by 36 lines for the hero, 142 by 23 for
-the draft, with the sidebar and panel off, 156 by 34 for the review, with the
-sidebar off, and 132 by 15 for the dashboard, with both off. The disposable
-projects, tasks and capture state were removed afterwards.
-
-`notes` and `ledger` keep their store inside the project unless told
-otherwise, as the last capture's notes asked.
+GitHub shows the README: 172 columns by 40 lines for the hero, 132 by 20 for
+the draft and 132 by 16 for the dashboard, with the sidebar and panel off,
+and 156 by 36 for the review, with the sidebar off. The disposable projects,
+tasks and capture state were removed afterwards.
 
 ## Try the same workflow
 
