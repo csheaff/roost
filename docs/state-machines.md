@@ -272,9 +272,9 @@ Invariants:
 - I4. What you read is what an agent gets: a title or brief that holds a control
   character, or one that doesn't show as itself, is refused before it is recorded.
   (`hidden_character`.)
-- I5. A task made from an offer leaves none of it waiting, though opening's take
-  failed and its creation was cut short once the task was saved: the task records the
-  offer it came from, and every listing takes such an offer. (`make_task`,
+- I5. A task made from an offer leaves none of it waiting, though its creation was
+  cut short once the task was saved: the task records the offer it came from, and
+  every listing takes such an offer. (`make_task`,
   `taken_offers`; `make crash`'s `CreateFromOffer`.)
 - I6. An offer goes with its task only if the question before named it: the request
   says which offers that question named, and its host refuses while the record holds
@@ -285,8 +285,9 @@ Invariants:
 | None, Waiting | agent offers | fewer than 3, or the title waits already | Waiting | added, or its brief replaced under its ID | `propose_task` |
 | Waiting | agent offers | 3 wait, a new title | Waiting | refused; the agent is told to mention it | `propose_task` |
 | any | agent offers | task `stopped` or `retired` | as it was | refused | `propose_task` |
-| Waiting | you open it, do it here, or dismiss it | | Waiting or None | dropped | `take_offer` |
-| Waiting | a task is made from it | its take failed | Waiting or None | dropped | `make_task`, `take_offer` |
+| Waiting | you open it | | Waiting | none: looking at it decides nothing | `roost--compose-offer` |
+| Waiting | you have its agent do it here, or dismiss it, from its row or its draft | | Waiting or None | dropped | `take_offer` |
+| Waiting | a task is made from it | | Waiting or None | dropped; Emacs lists the host again, so its row goes | `make_task`, `take_offer` |
 | Waiting | a listing | a task records it as the offer it came from | Waiting or None | dropped | `taken_offers` |
 | Waiting | task finished or forgotten | every offer it holds is one the question named | gone with the record | the question before names them, and the request says which, as `offers` | `roost--offers-sentence`, `roost--offers-named` |
 | Waiting | task finished or forgotten | it holds an offer the question didn't name, as one made while you read | Waiting | refused, naming it, and nothing changes; Emacs lists the task again, so asking again names it | `require_offers_named`, `roost--finish-refused` |
@@ -297,10 +298,13 @@ what finishing a task takes as `OffersTold`: a request is refused for an offer i
 question didn't name, and a stopped task takes no offer, so none arrives after that,
 as while its worktree goes, to go with it unseen.
 
-In Emacs, opening an offer takes it at once and opens an ordinary
-[new task draft](#the-new-task-draft): nothing ties the offer to the draft, so the
-draft's states are its own, though what it says includes the task it shows under, so
-a late reply leaves a draft moved elsewhere and back. Do it here is an ordinary
+In Emacs, opening an offer shows it as an ordinary
+[new task draft](#the-new-task-draft), and the offer waits on under its task until a
+task is made from it, its agent does it, or you dismiss it. The draft's states are its
+own, though what it says includes the task it shows under, so
+a late reply leaves a draft moved elsewhere and back. The draft knows its offer only to
+show it again as you left it, to give way to another offer while its brief is as it
+came, to close without a question then, and to dismiss it from its header. Do it here is an ordinary
 [send](#the-send-id) of a fixed line, with a send ID of the task's and the offer's IDs,
 so that asking again pastes it once, then a take. A take is asked only for a task still listed: one that went while
 Do it here's prompt went, as its host was forgotten, stays gone.
@@ -2548,8 +2552,10 @@ Invariants:
 - I6. "Roost created NAME" names the task as made, by its own name. A draft that says
   otherwise says what was made from what.
 - I7. A draft you wrote in gives way to no offer. An agent's offer opens as a draft of
-  its own, a new buffer, only where the draft holds no prompt, says nothing of a
-  request and waits on none; otherwise the offer waits. (`roost--compose-offer`.)
+  its own, a new buffer, only where the draft holds no prompt, or the brief of an offer
+  that waits still, as it came, and says nothing of a request and waits on none.
+  Opening an offer takes nothing: it waits until its task is made. (`roost--compose-offer`,
+  `roost--compose-looked-p`.)
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
@@ -2557,8 +2563,11 @@ Invariants:
 | Editing | `roost--compose` | prompt empty, or fork | Editing | fields replaced | `roost--compose` |
 | Editing | `roost--compose` | prompt written | Editing | fields kept; a seed is dropped, and a DIRECTORY with it | `roost--compose` |
 | Editing | `roost--compose`, a DIRECTORY and no seed, as a click on a project | prompt written | Editing | moves there, or says why it stays | `roost--compose`, `roost--compose-tied` |
-| Absent, Editing | `RET` on an offer | no prompt, no note, not submitting | Editing | a new buffer, with the offer's title, brief and task; then the offer is taken | `roost--compose-offer`, `roost--take-offer` |
-| any but Absent | `RET` on an offer | a prompt, a note, or submitting | same | user-error; the offer waits | `roost--compose-offer` |
+| Absent, Editing | `RET` on an offer | no prompt, or another waiting offer's brief as it came; no note, not submitting | Editing | a new buffer, with the offer's title, brief and task; the offer waits | `roost--compose-offer`, `roost--compose-looked-p` |
+| Editing | `RET` on the offer the draft opened | you changed the draft | Editing | the draft shows as you left it | `roost--compose-offer` |
+| Editing | `RET` on the offer the draft opened | the draft is as it opened | Editing | a new buffer, from the offer as it is now: its agent may have offered it again, with another brief or project | `roost--compose-offer`, `roost--compose-looked-p` |
+| any but Absent | `RET` on another offer | a prompt of yours, a note, or submitting | same | user-error; the offer waits | `roost--compose-offer` |
+| Editing | Dismiss offer | its offer waits; its brief as it came, or yes | Absent | `quit-window t`; the offer is taken | `roost-compose-dismiss-offer`, `roost--take-offer` |
 | Editing | edit | | Editing | idle timer redraws fields | `roost--compose-changed` |
 | Editing | `C-c C-x` | | Editing | how many tasks it makes, and by which agents | `roost-compose-set-attempts` |
 | Editing | `C-c C-f` | a fork | Editing | goes on with its task's conversation, or starts a new one | `roost-compose-set-conversation` |
@@ -2588,10 +2597,10 @@ Invariants:
 | Refused, NoReply | `C-c C-c` | project changed | Creating | new ID | `roost-compose-submit` |
 | Refused, NoReply | poll lists the ID | says what it asked each time with that ID | Absent | closes; opens if you are in it | `roost--compose-listed` |
 | Refused, NoReply | poll lists the ID | says otherwise now, its project too | Editing | note says what was made; ID forgotten | `roost--compose-listed`, `roost--compose-made` |
-| any | `C-c C-k` | prompt empty or yes | Absent | `quit-window t` | `roost-compose-cancel` |
+| any | `C-c C-k` | prompt empty, a waiting offer's brief as it came, or yes | Absent | `quit-window t` | `roost-compose-cancel` |
 
 Illegal or refused: `C-c C-c` in Creating, and an offer opened over a draft that holds
-anything. While busy the header has no buttons, so a
+anything of yours. While busy the header has no buttons, so a
 hand on the mouse has no Cancel; `C-c C-k` works. Fields can still be changed in
 Creating and text typed there; neither is refused.
 

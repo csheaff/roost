@@ -267,14 +267,19 @@ own status is as it would be without it.
 - Click it, or press `RET` on it, to open it as a new task draft, filled in:
   in the same project, with the same agent, starting from the branch the
   offering task merges into, named and prompted as the agent offered it.
-  Opening it takes it, so it no longer waits there; the draft is like any
-  other, and cancelling it asks before it drops the brief. The task you
-  create shows under the one that offered it, each task's panel names the
-  other, and you stay where you were.
+  Opening it only shows it: the offer waits under its task until you create
+  the task, have the agent do it, or dismiss it, so you can look and go
+  elsewhere. Open it again and the draft is as you left it. The draft is
+  like any other, with one more button, **Dismiss offer**; cancelling it
+  leaves the offer waiting, and asks first only if you changed the brief.
+  The task you create shows under the one that offered it, each task's
+  panel names the other, and you stay where you were.
 - `e` on it, or **Do it here** from its right-click menu, sends that agent
   `Do this task here: “TITLE”`, as `e` sends a prompt, and the offer no
   longer waits. The agent wrote the brief, so the title is enough.
-- `x` on it, or **Dismiss**, drops it.
+- `x` on it, **Dismiss** from its right-click menu, or **Dismiss offer** in
+  its draft, drops it. Roost can't tell whether an offer still stands, as
+  when its agent did the work since: ask the agent, or dismiss it.
 
 A task keeps at most three offers waiting, and one offered again by its
 title changes its brief. An offer goes with its task, and the question before
@@ -726,7 +731,9 @@ under the attempts that changed it and `·` under those that left it alone:
 On an offer an agent made, listed under its task in the dashboard and
 sidebar: `RET` (`roost-open-offer`) opens it as a new task draft, `e`
 (`roost-offer-here`) has that agent do it there, and `x`
-(`roost-offer-dismiss`) dismisses it; `mouse-3` offers all three. The other
+(`roost-offer-dismiss`) dismisses it; `mouse-3` offers all three. In its
+draft, the **Dismiss offer** button (`roost-compose-dismiss-offer`) dismisses
+it and closes the draft. The other
 keys act on the task it sits under.
 
 `j`/`k` or `TAB` move between tasks; `mouse-1` opens one and `mouse-3` shows its actions.

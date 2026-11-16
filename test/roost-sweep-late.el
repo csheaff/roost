@@ -801,9 +801,10 @@ dashboard the command starts from."
     (send
      :start ,(lambda () (roost-send (roost-sweep-late--mine) "Add a test."))
      :action "send" :refusals (("The agent is not running; resume the task first")))
-    (offer-open
+    ;; From its draft, which opening it shows: that asks its host nothing.
+    (offer-draft-dismiss
      :origin dashboard :fields ((offers ,roost-sweep-late--offer))
-     :start ,(lambda () (roost-sweep-late--at-offer) (roost-open-offer))
+     :start ,(lambda () (roost-sweep-late--at-offer) (roost-open-offer) (roost-compose-dismiss-offer))
      :action "take-offer" :refusals ((,roost-sweep-late--retired)))
     (offer-here
      :origin dashboard :fields ((offers ,roost-sweep-late--offer))

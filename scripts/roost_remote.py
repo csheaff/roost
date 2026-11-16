@@ -2554,9 +2554,8 @@ def make_task(store, request, create_id):
             except Exception:
                 abandon(store, task)
                 raise
-            # Made from an offer, which opening it took already, unless that
-            # failed: it waits no more either way. Cut short before this, a
-            # listing takes it (`taken_offers`).
+            # Made from an offer, which waited until now: it waits no more.
+            # Cut short before this, a listing takes it (`taken_offers`).
             if parent is not None and offer:
                 with contextlib.suppress(RoostError, OSError):
                     take_offer(store, store.read(parent), offer)
