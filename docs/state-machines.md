@@ -945,7 +945,7 @@ keeps the block, and no menu opens. "Yes, implement this plan" is a
 
 | From | Event | Guard | To | `lastEvent` |
 | --- | --- | --- | --- | --- |
-| any | `session_start` | | `ready` | `session_start` |
+| any | `session_start` | | `ready` | `session_start`; `lastReply` None |
 | any | `prompt` | not `source=extension` | unchanged | unchanged; `lastPrompt`, `lastReply` None |
 | any | `agent_start` | | `running` | `agent_start` |
 | any | `agent_end` | `pending` | `background` | `Stop`; `lastReply` its `reply`, else None |

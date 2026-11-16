@@ -1449,11 +1449,11 @@ export default function (pi) {
   // Pi waits for an input handler, so this one returns before the report.
   pi.on("input", (event, ctx) => { report("prompt", ctx, { prompt: event.text, source: event.source }); });
   pi.on("agent_start", (_event, ctx) => report("agent_start", ctx));
+  // Cut by characters, so that no half of a pair is left at the end.
+  const start = text => [...text].slice(0, 4000).join("");
   // What the run said last. Pi writes it to the session file too, but
   // not always before this event, so a reader of the file can see the
   // reply before.
-  // Cut by characters, so that no half of a pair is left at the end.
-  const start = text => [...text].slice(0, 4000).join("");
   const replyOf = event => {
     try {
       const said = event.messages.filter(message => message.role === "assistant").pop();
@@ -1540,6 +1540,10 @@ class PiAgent:
             reply = payload.get("reply")
             updates["lastReply"] = (reply.strip()[:LAST_MESSAGE_LIMIT + 1]
                                     if isinstance(reply, str) and reply.strip() else None)
+        elif event == "session_start":
+            # Another session, as after /new, or this one resumed: its
+            # file says what was said last in it, if anything.
+            updates["lastReply"] = None
         if request:
             updates["request"] = request[:REQUEST_LIMIT]
         if payload.get("session"):

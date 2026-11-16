@@ -12890,6 +12890,13 @@ class ProgramStatus(unittest.TestCase):
         self.assertIsNone(store.read("0" * 16)["lastReply"])
         self.assertEqual(roost.PiAgent().observe(dict(event="agent_end", reply="x" * 5000))["lastReply"],
                          "x" * (roost.LAST_MESSAGE_LIMIT + 1))
+        # A session that starts, as after /new, leaves the one before's reply behind.
+        hook(event="agent_end", pending=False, reply="in the session before")
+        fresh = root / "fresh.jsonl"
+        fresh.write_text("")
+        roost.update_hook(store, "0" * 16, dict(event="session_start", session=str(fresh)), "run")
+        self.assertIsNone(store.read("0" * 16)["lastReply"])
+        self.assertIsNone(roost.last_message(store.read("0" * 16)))
         # Only a turn's end carries one.
         self.assertNotIn("lastReply", roost.PiAgent().observe(dict(event="agent_start", reply="no")))
 
