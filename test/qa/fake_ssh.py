@@ -11,6 +11,7 @@ can't be reached, as with ssh."""
 import os
 import pty
 import queue
+import select
 import subprocess
 import sys
 import threading
@@ -19,6 +20,11 @@ import tty
 
 HOST = "qa-remote"
 LATENCY = float(os.environ.get("QA_SSH_LATENCY", "0.15"))
+# How long to wait for more of what was written before sending it on, as
+# one packet: a network joins writes made close together.  A program on
+# the host then finds them together, where this machine alone gives it
+# one at a time.
+JOIN = float(os.environ.get("QA_SSH_JOIN", "0"))
 # The host's home: short, as tmux's socket paths in it must be.
 HOME = os.environ.get("QA_REMOTE_HOME") or os.environ.get("HOME", "/")
 ENV = dict(os.environ, HOME=HOME)
@@ -32,6 +38,7 @@ def parse(argv):
     whether it asks for a terminal (-t), as TRAMP does."""
     control = terminal = False
     remote_command = ""
+    host = None
     i = 0
     while i < len(argv):
         arg = argv[i]
@@ -39,7 +46,13 @@ def parse(argv):
             i += 1
             break
         if not arg.startswith("-") or arg == "-":
-            break
+            if host is not None:
+                break
+            # ssh reads options after the host too, and TRAMP's direct
+            # async processes put -t there: `ssh HOST -t -t COMMAND'.
+            host = arg
+            i += 1
+            continue
         letters = arg[1:]
         control = control or letters.startswith("O")
         terminal = terminal or (letters.startswith("t") and set(letters) == {"t"})
@@ -52,8 +65,10 @@ def parse(argv):
                     i += 1
                 break
         i += 1
-    host = argv[i] if i < len(argv) else ""
-    return host, " ".join(argv[i + 1:]) or remote_command, control, terminal
+    if host is None:
+        host = argv[i] if i < len(argv) else ""
+        i += 1
+    return host, " ".join(argv[i:]) or remote_command, control, terminal
 
 
 def relay(source, sink, done):
@@ -67,6 +82,16 @@ def relay(source, sink, done):
                 data = os.read(source, 65536)
             except OSError:
                 data = b""
+            if data and JOIN:
+                time.sleep(JOIN)
+                while select.select([source], [], [], 0)[0]:
+                    try:
+                        more = os.read(source, 65536)
+                    except OSError:
+                        more = b""
+                    if not more:
+                        break
+                    data += more
             pending.put((time.monotonic() + LATENCY, data))
             if not data:
                 return

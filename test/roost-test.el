@@ -12172,6 +12172,307 @@ CachedTasks.tla found it; CachedTasks.NoNewerBranch.cfg is its trace."
          (should (equal (nth 2 check) (car case)))
          (when (nth 2 case) (should (string-match-p (nth 2 case) (nth 3 check)))))))))
 
+;;; The package that shows a terminal
+
+(ert-deftest roost-terminal-backend-names-whose-functions-roost-calls ()
+  ;; Each call Roost makes of a terminal goes to the package the option
+  ;; names, and to no other.
+  (roost-test--isolated
+   (let (called)
+     (cl-letf (((symbol-function 'tmux-control-buffer-session)
+                (lambda () (push 'tmux-control called) "one"))
+               ((symbol-function 'roost-ghostel-tmux-buffer-session)
+                (lambda () (push 'ghostel-tmux called) "two"))
+               ((symbol-function 'tmux-control-select-pane)
+                (lambda (&optional pane) (push (list 'tmux-control pane) called)))
+               ((symbol-function 'roost-ghostel-tmux-select-pane)
+                (lambda (&optional pane) (push (list 'ghostel-tmux pane) called))))
+       (let ((roost-terminal-backend 'tmux-control))
+         (should (equal (roost--tmux-buffer-session) "one"))
+         (roost--tmux-select-pane "%1")
+         (should (roost--tmux-bound-p "buffer-session")))
+       (should (equal called '((tmux-control "%1") tmux-control)))
+       (setq called nil)
+       (let ((roost-terminal-backend 'ghostel-tmux))
+         (should (equal (roost--tmux-buffer-session) "two"))
+         (roost--tmux-select-pane "%2")
+         (should (roost--tmux-bound-p "buffer-session"))
+         (should-not (roost--tmux-bound-p "no-such-function")))
+       (should (equal called '((ghostel-tmux "%2") ghostel-tmux)))))))
+
+(ert-deftest roost-terminal-backend-says-which-buffers-are-terminals ()
+  (roost-test--isolated
+   (with-temp-buffer
+     (setq major-mode 'tmux-control-mode)
+     (let ((roost-terminal-backend 'tmux-control))
+       (should (roost--tmux-buffer-p))
+       (should (roost--tmux-buffer-p (current-buffer))))
+     (let ((roost-terminal-backend 'ghostel-tmux))
+       ;; Not loaded, no buffer is one of its terminals.
+       (should-not (roost--tmux-buffer-p))
+       (cl-letf (((symbol-function 'roost-ghostel-tmux-buffer-p) (lambda () 'yes)))
+         (should (eq (roost--tmux-buffer-p) 'yes)))))
+   (with-temp-buffer
+     (let ((roost-terminal-backend 'tmux-control))
+       (should-not (roost--tmux-buffer-p))))))
+
+(ert-deftest roost-terminal-backend-sets-up-a-host-as-its-package-does ()
+  ;; The helper has to find the tmux server the terminal package attaches,
+  ;; even where that package cannot be loaded.
+  (roost-test--isolated
+   (cl-progv '(tmux-control-remote-tmux-socket-setup tmux-control-ssh-options)
+       '("export CONTROL=1" ("-o" "ConnectTimeout=3"))
+     (let* ((roost-terminal-backend 'tmux-control)
+            (argv (roost--python-command "far" "code")))
+       (should (string-prefix-p "export CONTROL=1 && exec python3" (car (last argv))))
+       (should (member "ConnectTimeout=3" argv)))
+     (let* ((roost-terminal-backend 'ghostel-tmux)
+            (argv (roost--python-command "far" "code")))
+       (should (string-prefix-p (concat roost--remote-tmux-socket-setup " && exec python3")
+                                (car (last argv))))
+       (should (string-search "export TMUX_TMPDIR=" roost--remote-tmux-socket-setup))
+       ;; tmux-control's SSH options are for its own connections.
+       (should (member "ConnectTimeout=8" argv))))))
+
+(defun roost-test--ghostel-backend ()
+  "Load roost-ghostel-tmux.el, on a ghostel-tmux in name only if none is found.
+A test stubs the functions of ghostel-tmux it reaches."
+  (unless (featurep 'roost-ghostel-tmux)
+    (unless (locate-library "ghostel-tmux")
+      (provide 'ghostel-tmux)
+      (defvar ghostel-tmux-pane-mode nil)
+      (make-variable-buffer-local 'ghostel-tmux-pane-mode))
+    (require 'roost-ghostel-tmux)))
+
+(defvar roost-ghostel-tmux--prepared-hosts)
+(defvar roost-ghostel-tmux--place)
+(defvar roost-ghostel-tmux--was-attached)
+(defvar roost-ghostel-tmux--lost)
+(defvar ghostel-tmux-program)
+(defvar ghostel-tmux-pane-mode)
+(defvar tramp-direct-async-process)
+(declare-function roost-ghostel-tmux--prepare-host "roost-ghostel-tmux" (host))
+(declare-function roost-ghostel-tmux--detached "roost-ghostel-tmux" ())
+(declare-function roost-ghostel-tmux--attach-again "roost-ghostel-tmux" (place))
+(declare-function roost-ghostel-tmux-buffer-p "roost-ghostel-tmux" ())
+(declare-function roost-ghostel-tmux--attached "roost-ghostel-tmux" ())
+(declare-function roost-ghostel-tmux-buffer-session "roost-ghostel-tmux" ())
+(declare-function roost-ghostel-tmux-buffer-host "roost-ghostel-tmux" ())
+(declare-function roost-ghostel-tmux-connect-or-switch "roost-ghostel-tmux" (host socket-name session))
+(declare-function roost-ghostel-tmux-send-command "roost-ghostel-tmux" (command))
+
+(defmacro roost-test--with-host-settings (&rest body)
+  "Run BODY with connection-local settings and prepared hosts of its own."
+  (declare (indent 0))
+  `(let ((connection-local-profile-alist nil)
+         (connection-local-criteria-alist nil)
+         (roost-ghostel-tmux--prepared-hosts nil)
+         (ghostel-tmux-program "tmux"))
+     ,@body))
+
+(defun roost-test--host-setting (host variable)
+  "VARIABLE's connection-local value on HOST, or `unset'."
+  (let ((set (seq-some (lambda (profile)
+                         (assq variable (connection-local-get-profile-variables profile)))
+                       (connection-local-get-profiles
+                        (list :application 'tramp :protocol "ssh" :machine host)))))
+    (if set (cdr set) 'unset)))
+
+(ert-deftest roost-ghostel-tmux-sets-up-a-host-by-what-it-says ()
+  (roost-test--isolated
+   (roost-test--ghostel-backend)
+   (require 'tramp)
+   (roost-test--with-host-settings
+     (let (ran)
+       (cl-letf (((symbol-function 'call-process)
+                  (lambda (program _in _out _display &rest args)
+                    (push (cons program args) ran)
+                    (insert (if (member "linux" args) "/snap/bin/tmux\n4096\n" "/opt/bin/tmux\n512\n"))
+                    0)))
+         (roost-ghostel-tmux--prepare-host "linux")
+         (roost-ghostel-tmux--prepare-host "mac")
+         ;; Once for a host.
+         (roost-ghostel-tmux--prepare-host "linux"))
+       (should (equal (length ran) 2))
+       ;; The host after `--', where ssh reads no option.
+       (dolist (command ran)
+         (should (equal (car command) "ssh"))
+         (should (equal (car (last command 3)) "--")))
+       (should (eq (roost-test--host-setting "linux" 'tramp-direct-async-process) t))
+       (should (equal (roost-test--host-setting "linux" 'ghostel-tmux-program) "/snap/bin/tmux"))
+       ;; A command as long as an attach does not fit a macOS host's pipe.
+       (should (eq (roost-test--host-setting "mac" 'tramp-direct-async-process) 'unset))
+       (should (equal (roost-test--host-setting "mac" 'ghostel-tmux-program) "/opt/bin/tmux"))
+       ;; No other host is touched.
+       (should (eq (roost-test--host-setting "other" 'tramp-direct-async-process) 'unset))))))
+
+(ert-deftest roost-ghostel-tmux-leaves-a-host-setting-you-made ()
+  (roost-test--isolated
+   (roost-test--ghostel-backend)
+   (require 'tramp)
+   (roost-test--with-host-settings
+     (connection-local-set-profile-variables
+      'mine '((tramp-direct-async-process . nil) (ghostel-tmux-program . "/home/me/bin/tmux")))
+     (connection-local-set-profiles '(:application tramp :machine "linux") 'mine)
+     (cl-letf (((symbol-function 'call-process)
+                (lambda (&rest _) (insert "/usr/bin/tmux\n4096\n") 0)))
+       (roost-ghostel-tmux--prepare-host "linux"))
+     ;; Yours are the only ones set.
+     (should-not (roost-test--host-setting "linux" 'tramp-direct-async-process))
+     (should (equal (roost-test--host-setting "linux" 'ghostel-tmux-program) "/home/me/bin/tmux"))
+     (should-not (seq-some (lambda (variable)
+                             (assq variable (connection-local-get-profile-variables
+                                             'roost-ghostel-tmux-host-linux)))
+                           '(tramp-direct-async-process ghostel-tmux-program))))))
+
+(ert-deftest roost-ghostel-tmux-sets-nothing-for-a-host-that-does-not-answer ()
+  (roost-test--isolated
+   (roost-test--ghostel-backend)
+   (require 'tramp)
+   (roost-test--with-host-settings
+     (cl-letf (((symbol-function 'call-process) (lambda (&rest _) (insert "ssh: no route\n") 255)))
+       (roost-ghostel-tmux--prepare-host "away"))
+     (should (eq (roost-test--host-setting "away" 'tramp-direct-async-process) 'unset))
+     (should (eq (roost-test--host-setting "away" 'ghostel-tmux-program) 'unset))
+     ;; Once it is back, the next attach sets it up.
+     (cl-letf (((symbol-function 'call-process)
+                (lambda (&rest _) (insert "/usr/bin/tmux\n4096\n") 0)))
+       (roost-ghostel-tmux--prepare-host "away"))
+     (should (eq (roost-test--host-setting "away" 'tramp-direct-async-process) t)))))
+
+(ert-deftest roost-ghostel-tmux-place-follows-the-session-its-controller-shows ()
+  ;; ghostel-tmux's own command can switch a controller to another session.
+  (roost-test--isolated
+   (roost-test--ghostel-backend)
+   (let ((controller (generate-new-buffer " controller"))
+         (pane (generate-new-buffer " pane"))
+         (session "one"))
+     (unwind-protect
+         (cl-letf (((symbol-function 'ghostel-tmux-controller) (lambda (&rest _) controller))
+                   ((symbol-function 'ghostel-tmux-controllers) (lambda () (list controller)))
+                   ((symbol-function 'ghostel-tmux-session-name) (lambda (&rest _) session))
+                   ((symbol-function 'ghostel-tmux-active-pane) #'ignore)
+                   ((symbol-function 'ghostel-tmux-panes) #'ignore))
+           (with-current-buffer controller
+             (setq roost-ghostel-tmux--place '("far" "main" "one"))
+             (roost-ghostel-tmux--attached))
+           (with-current-buffer pane
+             (should (equal (roost-ghostel-tmux-buffer-session) "one")))
+           (setq session "two")
+           (with-current-buffer controller (roost-ghostel-tmux--attached))
+           (with-current-buffer pane
+             (should (equal (roost-ghostel-tmux-buffer-session) "two"))
+             (should (equal (roost-ghostel-tmux-buffer-host) "far")))
+           ;; Its connection gone, a pane keeps the last place it had.
+           (cl-letf (((symbol-function 'ghostel-tmux-controllers) #'ignore))
+             (with-current-buffer pane
+               (should (equal (roost-ghostel-tmux-buffer-session) "two")))))
+       (kill-buffer controller)
+       (kill-buffer pane)))))
+
+(ert-deftest roost-ghostel-tmux-reaches-a-session-from-a-pane-it-left ()
+  ;; Opening a task from a pane its last connection left attaches it, and
+  ;; Roost sends the session commands from that pane at once.
+  (roost-test--isolated
+   (roost-test--ghostel-backend)
+   (let ((controller (generate-new-buffer " controller"))
+         (pane (generate-new-buffer " pane"))
+         (place '("far" "main" "one"))
+         sent)
+     (unwind-protect
+         (cl-letf (((symbol-function 'ghostel-tmux-controller) #'ignore)
+                   ((symbol-function 'ghostel-tmux-controllers) (lambda () (and sent (list controller))))
+                   ((symbol-function 'roost-ghostel-tmux--attach)
+                    (lambda (&rest _) (setq sent '(attached)) controller))
+                   ((symbol-function 'roost-ghostel-tmux--sweep-stand-ins) #'ignore)
+                   ((symbol-function 'ghostel-tmux-command)
+                    (lambda (command &rest _) (push command sent))))
+           (with-current-buffer pane
+             (setq roost-ghostel-tmux--place place)
+             (setq-local ghostel-tmux-pane-mode t))
+           (save-window-excursion
+             (switch-to-buffer pane)
+             (roost-ghostel-tmux-connect-or-switch "far" "main" "one")
+             (roost-ghostel-tmux-send-command "select-window -t @1"))
+           (should (equal sent '("select-window -t @1" attached))))
+       (kill-buffer controller)
+       (kill-buffer pane)))))
+
+(ert-deftest roost-ghostel-tmux-attaches-again-only-a-connection-that-dropped ()
+  (roost-test--isolated
+   (roost-test--ghostel-backend)
+   (let ((roost-ghostel-tmux--lost (make-hash-table :test #'equal))
+         again)
+     (cl-letf (((symbol-function 'roost-ghostel-tmux--attach-again)
+                (lambda (place) (push place again))))
+       (cl-flet ((detached (place attached &optional detaching)
+                   (setq again nil)
+                   (with-temp-buffer
+                     (setq roost-ghostel-tmux--place place
+                           roost-ghostel-tmux--was-attached attached)
+                     (cl-progv '(ghostel-tmux--detaching) (list detaching)
+                       (roost-ghostel-tmux--detached)))
+                   again))
+         (should (equal (detached '("far" "main" "one") t) '(("far" "main" "one"))))
+         ;; A session on this machine has no connection to drop.
+         (should-not (detached '(nil "main" "one") t))
+         ;; You, or Roost, detached it.
+         (should-not (detached '("far" "main" "one") t t))
+         ;; It never attached: nothing was shown to bring back.
+         (should-not (detached '("far" "main" "one") nil))
+         ;; A try that failed is one of a row of them.
+         (puthash '("far" "main" "one") 2 roost-ghostel-tmux--lost)
+         (should (detached '("far" "main" "one") nil)))))))
+
+(ert-deftest roost-ghostel-tmux-tries-a-lost-host-less-often-then-stops ()
+  (roost-test--isolated
+   (roost-test--ghostel-backend)
+   (let ((roost-ghostel-tmux--lost (make-hash-table :test #'equal))
+         (place '("far" "main" "one"))
+         delays)
+     (cl-letf (((symbol-function 'run-at-time)
+                (lambda (delay &rest _) (push delay delays) nil)))
+       ;; Eight tries, and a ninth call that gives up.
+       (dotimes (_ 9) (roost-ghostel-tmux--attach-again place)))
+     (should (equal (nreverse delays) '(1 2 4 8 16 30 30 30)))
+     ;; Given up: opening the task is what attaches it now.
+     (should-not (gethash place roost-ghostel-tmux--lost)))))
+
+(ert-deftest roost-ghostel-tmux-counts-only-tmux-panes-as-terminals ()
+  (roost-test--isolated
+   (roost-test--ghostel-backend)
+   (cl-letf (((symbol-function 'ghostel-tmux-controller) #'ignore)
+             ((symbol-function 'ghostel-tmux-controllers) #'ignore))
+    (with-temp-buffer
+     ;; A plain Ghostel terminal, with no tmux session.
+     (setq major-mode 'ghostel-mode)
+     (should-not (roost-ghostel-tmux-buffer-p))
+     (setq-local ghostel-tmux-pane-mode t)
+     (should (roost-ghostel-tmux-buffer-p))
+     (let ((roost-terminal-backend 'ghostel-tmux))
+       (should (roost--tmux-buffer-p))
+       (setq roost-ghostel-tmux--place '("far" "main" "one"))
+       (should (equal (roost--tmux-buffer-session) "one"))
+       (should (equal (roost--tmux-buffer-host) "far")))))))
+
+(ert-deftest roost-doctor-checks-the-terminal-backend-it-is-set-to ()
+  (roost-test--isolated
+   (cl-letf (((symbol-function 'roost--library-version)
+              (lambda (library)
+                (pcase library ("ghostel-tmux" "0.3.0") ("ghostel" "0.64.0") ("tmux-control" "0.8.2")))))
+     (let* ((roost-terminal-backend 'ghostel-tmux)
+            (checks (roost--doctor-local-checks)))
+       (should (nth 1 (assoc "ghostel-tmux" checks)))
+       (should-not (nth 1 (assoc "Ghostel" checks)))
+       (should (string-match-p "0.65.0 or newer" (nth 3 (assoc "Ghostel" checks))))
+       (should-not (assoc "tmux-control" checks))
+       (should-not (assoc "Eat" checks)))
+     (let* ((roost-terminal-backend 'tmux-control)
+            (checks (roost--doctor-local-checks)))
+       (should (nth 1 (assoc "tmux-control" checks)))
+       (should (assoc "Eat" checks))
+       (should-not (assoc "ghostel-tmux" checks))))))
+
 (ert-deftest roost-doctor-wants-the-tmux-control-package-requires-names ()
   ;; Package managers install what Package-Requires names; the doctor
   ;; flags anything older.

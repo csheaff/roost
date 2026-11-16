@@ -45,19 +45,6 @@
 (require 'transient)
 (require 'hl-line)
 
-(declare-function tmux-control-connect-or-switch "tmux-control" (host socket-name session))
-(declare-function tmux-control-send-command "tmux-control" (command))
-(declare-function tmux-control-query "tmux-control" (command callback))
-(declare-function tmux-control-select-pane "tmux-control" (&optional pane))
-(declare-function tmux-control-tile "tmux-control" ())
-(declare-function tmux-control-tiled-p "tmux-control" ())
-(declare-function tmux-control-buffer-host "tmux-control" ())
-(declare-function tmux-control-buffer-socket-name "tmux-control" ())
-(declare-function tmux-control-buffer-session "tmux-control" ())
-(declare-function tmux-control-disconnect "tmux-control" ())
-(declare-function tmux-control-reconnect "tmux-control" ())
-(declare-function tmux-control-active-pane "tmux-control" ())
-(declare-function tmux-control-window-id "tmux-control" ())
 (declare-function magit-status "magit-status" (&optional directory cache))
 (declare-function magit-diff-working-tree "magit-diff" (&optional rev args files))
 (declare-function magit-diff-setup-buffer "magit-diff" (range typearg args files &optional type locked))
@@ -124,7 +111,6 @@
 (declare-function org-entry-get "org" (epom property &optional inherit literal-nil))
 (declare-function org-entry-put "org" (epom property value))
 
-(defvar tmux-control-default-socket-name)
 (defvar magit-root-section)
 (defvar magit-diff-buffer-file-locked)
 (defvar magit-buffer-diff-files)
@@ -136,8 +122,6 @@
 (defvar magit-refresh-buffer-hook)
 (defvar magit-buffer-log-args)
 (defvar magit-insert-section--current)
-(defvar tmux-control-remote-tmux-socket-setup)
-(defvar tmux-control-ssh-options)
 (defvar tmux-control-session-activity)
 (defvar server-process)
 (defvar server-socket-dir)
@@ -212,6 +196,107 @@ Existing tasks keep their branch."
 (defcustom roost-socket-name nil
   "Tmux socket, or nil to use tmux-control's configured default."
   :type '(choice (const nil) string))
+
+(defcustom roost-terminal-backend 'tmux-control
+  "The package that shows a task's tmux session in Emacs.
+`tmux-control' draws it through Eat.  `ghostel-tmux' draws it through
+Ghostel, and needs Ghostel 0.65.0 and ghostel-tmux 0.3.0 or newer, which
+Roost does not install.  Set it before you open a task: the terminals
+of one package are not the other's."
+  :type '(choice (const :tag "tmux-control, through Eat" tmux-control)
+                 (const :tag "ghostel-tmux, through Ghostel" ghostel-tmux)))
+
+;;;; The package that shows a terminal
+
+;; Roost reaches a task's terminal through the functions below and two
+;; hooks.  Each calls the function of that name in tmux-control, or in
+;; roost-ghostel-tmux.el, which gives ghostel-tmux the same ones.
+
+(defun roost--tmux-library ()
+  "The library that holds what `roost-terminal-backend' names."
+  (if (eq roost-terminal-backend 'ghostel-tmux) 'roost-ghostel-tmux 'tmux-control))
+
+(defun roost--tmux-load ()
+  "Load the library of `roost-terminal-backend'."
+  (require (roost--tmux-library)))
+
+(defmacro roost--tmux-bound-p (name)
+  "Whether the terminal package is loaded far enough to have function NAME.
+NAME is a string, such as \"buffer-host\"."
+  `(fboundp (if (eq roost-terminal-backend 'ghostel-tmux)
+                ',(intern (concat "roost-ghostel-tmux-" name))
+              ',(intern (concat "tmux-control-" name)))))
+
+(defconst roost--remote-tmux-socket-setup
+  "fs=$(stat -f -c %T \"$HOME\" 2>/dev/null); case \"$fs\" in nfs|nfs4|lustre|gpfs|cifs|smb*|afs) d=\"/tmp/tmux-$(id -u)-sock\";; *) d=\"$HOME/.tmux-sock\";; esac; mkdir -p \"$d\" && chmod 700 \"$d\" && export TMUX_TMPDIR=\"$d\""
+  "Shell snippet run before tmux on a remote host, with ghostel-tmux.
+As tmux-control has it in `tmux-control-remote-tmux-socket-setup', so a
+host's tasks are found whichever package shows them.")
+
+(defvar tmux-control-default-socket-name)
+(defvar tmux-control-remote-tmux-socket-setup)
+(defvar tmux-control-ssh-options)
+
+(defun roost--tmux-socket-setup ()
+  "Shell snippet the helper runs before tmux on a remote host, or nil.
+The terminal package runs the same, so both find one tmux server."
+  (if (eq roost-terminal-backend 'ghostel-tmux)
+      roost--remote-tmux-socket-setup
+    (require 'tmux-control nil t)
+    (bound-and-true-p tmux-control-remote-tmux-socket-setup)))
+
+(declare-function roost-ghostel-tmux-buffer-p "roost-ghostel-tmux" ())
+
+(defun roost--tmux-buffer-p (&optional buffer)
+  "Whether BUFFER, or the current one, is in the terminal package's mode.
+Its session says whether it is a task's."
+  (with-current-buffer (or buffer (current-buffer))
+    (if (eq roost-terminal-backend 'ghostel-tmux)
+        (and (fboundp 'roost-ghostel-tmux-buffer-p) (roost-ghostel-tmux-buffer-p))
+      (derived-mode-p 'tmux-control-mode))))
+
+(defmacro roost--define-tmux (name args doc)
+  "Define roost--tmux-NAME, taking ARGS, with DOC.
+It calls tmux-control's function NAME or roost-ghostel-tmux's."
+  (declare (indent defun) (doc-string 3))
+  (let ((passed (remq '&optional args))
+        (tmux-control (intern (format "tmux-control-%s" name)))
+        (ghostel-tmux (intern (format "roost-ghostel-tmux-%s" name))))
+    `(progn
+       (declare-function ,tmux-control "tmux-control" ,args)
+       (declare-function ,ghostel-tmux "roost-ghostel-tmux" ,args)
+       (defun ,(intern (format "roost--tmux-%s" name)) ,args
+         ,doc
+         (if (eq roost-terminal-backend 'ghostel-tmux)
+             (,ghostel-tmux ,@passed)
+           (,tmux-control ,@passed))))))
+
+(roost--define-tmux connect-or-switch (host socket-name session)
+  "Show tmux SESSION from HOST and SOCKET-NAME in the selected window.")
+(roost--define-tmux send-command (command)
+  "Send tmux COMMAND over the current buffer's connection.")
+(roost--define-tmux query (command callback)
+  "Send tmux COMMAND and call CALLBACK with its reply's lines, or nil.")
+(roost--define-tmux select-pane (&optional pane)
+  "Show and select PANE, a pane id, of the current buffer's session.")
+(roost--define-tmux tile ()
+  "Show every pane of the current buffer's tmux window.")
+(roost--define-tmux tiled-p ()
+  "Whether the current buffer's tmux window shows as a split.")
+(roost--define-tmux buffer-host ()
+  "The SSH host of the current buffer's connection, nil when local.")
+(roost--define-tmux buffer-socket-name ()
+  "The tmux socket name of the current buffer's connection.")
+(roost--define-tmux buffer-session ()
+  "The tmux session name of the current buffer's connection.")
+(roost--define-tmux disconnect ()
+  "Disconnect the current buffer's client.")
+(roost--define-tmux reconnect ()
+  "Connect the session the current buffer showed again.")
+(roost--define-tmux active-pane ()
+  "The id of the tmux pane the current buffer sends input to.")
+(roost--define-tmux window-id ()
+  "The id of the tmux window holding the current buffer's pane.")
 
 (defvar roost-startup-grace 15
   "Seconds after which a task still starting is taken to be waiting at a prompt.
@@ -902,15 +987,16 @@ in, such as the temporary directory here: searching it for each module
 took seconds once it held a million files, and a module someone left
 there would run as you."
   (if host
-      (progn
-        (require 'tmux-control nil t)
+      ;; First, as it loads tmux-control, whose SSH options follow.
+      (let ((socket-setup (roost--tmux-socket-setup)))
         (append (list "ssh" "-T" "-o" "BatchMode=yes")
-                (or (bound-and-true-p tmux-control-ssh-options)
+                (or (and (eq roost-terminal-backend 'tmux-control)
+                         (bound-and-true-p tmux-control-ssh-options))
                     '("-o" "ConnectTimeout=8"))
                 (roost--ssh-share-options)
                 (list "--" host
-                      (concat (when (bound-and-true-p tmux-control-remote-tmux-socket-setup)
-                                (concat tmux-control-remote-tmux-socket-setup " && "))
+                      (concat (when socket-setup
+                                (concat socket-setup " && "))
                               "exec python3 -I -c " (shell-quote-argument code)))))
     (list "python3" "-I" "-c" code)))
 
@@ -2215,11 +2301,11 @@ A notification held about it goes no more: you have seen it."
 tmux numbers panes afresh when its server restarts, so a task whose
 agent died with the server may still list a pane ID that now belongs
 to another task.  Each task has a session of its own."
-  (and (fboundp 'tmux-control-active-pane)
-       (member (tmux-control-active-pane) (delq nil panes))
-       (equal (roost--field task 'host) (tmux-control-buffer-host))
-       (equal (roost--field task 'socket) (tmux-control-buffer-socket-name))
-       (equal (roost--field task 'session) (tmux-control-buffer-session))))
+  (and (roost--tmux-bound-p "active-pane")
+       (member (roost--tmux-active-pane) (delq nil panes))
+       (equal (roost--field task 'host) (roost--tmux-buffer-host))
+       (equal (roost--field task 'socket) (roost--tmux-buffer-socket-name))
+       (equal (roost--field task 'session) (roost--tmux-buffer-session))))
 
 (defun roost--watched-task ()
   "The task whose agent's terminal or panel is in the selected window, if any.
@@ -2230,7 +2316,7 @@ nobody is looking."
     (with-current-buffer (window-buffer (selected-window))
       (cond ((derived-mode-p 'roost-task-info-mode)
              (and roost--buffer-task-key (gethash roost--buffer-task-key roost--tasks)))
-            ((and (fboundp 'tmux-control-active-pane) (tmux-control-active-pane))
+            ((and (roost--tmux-bound-p "active-pane") (roost--tmux-active-pane))
              (seq-find (lambda (task) (roost--terminal-shows-p task (list (roost--field task 'paneId))))
                        (roost-tasks)))))))
 
@@ -2334,7 +2420,7 @@ A folder there can be named ~, which isn't your home."
       (or
        (when-let* ((id (ignore-errors (roost--org-linked-id))))
          (seq-find (lambda (task) (equal (roost--field task 'id) id)) tasks))
-       (when (and (fboundp 'tmux-control-active-pane) (tmux-control-active-pane))
+       (when (and (roost--tmux-bound-p "active-pane") (roost--tmux-active-pane))
          (seq-find (lambda (task)
                      (roost--terminal-shows-p task (list (roost--field task 'paneId)
                                                          (roost--field task 'shellPaneId))))
@@ -2593,11 +2679,12 @@ switch to the task, not only its terminal.  tmux-control flags a session
 from the buffer holding its connection, so that is where this is set."
   (dolist (buffer (buffer-list))
     (when (and (get-buffer-process buffer)
-               (fboundp 'tmux-control-buffer-session)
+               (eq roost-terminal-backend 'tmux-control)
+               (roost--tmux-bound-p "buffer-session")
                (with-current-buffer buffer
-                 (and (equal (tmux-control-buffer-session) (roost--field task 'session))
-                      (equal (tmux-control-buffer-host) (roost--field task 'host))
-                      (equal (tmux-control-buffer-socket-name) (roost--field task 'socket)))))
+                 (and (equal (roost--tmux-buffer-session) (roost--field task 'session))
+                      (equal (roost--tmux-buffer-host) (roost--field task 'host))
+                      (equal (roost--tmux-buffer-socket-name) (roost--field task 'socket)))))
       (with-current-buffer buffer
         (setq-local tmux-control-session-activity nil)))))
 
@@ -2623,7 +2710,7 @@ background joins whichever perspective is current, so the buffer list
 of one task would offer the terminals of the others.  The terminal's
 mode comes before it knows its session, and it joins the perspective
 when it is shown, later still: this looks once the reconnect is done."
-  (when (and (derived-mode-p 'tmux-control-mode)
+  (when (and (roost--tmux-buffer-p)
              (eq (roost--workspace-backend) 'perspective))
     (run-at-time 0 nil #'roost--forget-terminal-elsewhere (current-buffer))))
 
@@ -2684,24 +2771,24 @@ That is the selected frame's current perspective."
                       tasks)
       (dolist (buffer buffers)
         (when (and (buffer-live-p buffer)
-                   (provided-mode-derived-p (buffer-local-value 'major-mode buffer) 'tmux-control-mode)
+                   (roost--tmux-buffer-p buffer)
                    (with-current-buffer buffer
-                     (and (equal (tmux-control-buffer-session) session)
-                          (equal (tmux-control-buffer-host) (roost--field task 'host))
-                          (equal (tmux-control-buffer-socket-name) (roost--field task 'socket)))))
+                     (and (equal (roost--tmux-buffer-session) session)
+                          (equal (roost--tmux-buffer-host) (roost--field task 'host))
+                          (equal (roost--tmux-buffer-socket-name) (roost--field task 'socket)))))
           (persp-add-buffer buffer))))))
 
 (defun roost--task-terminal-window (task)
   "The window of the selected frame showing TASK's terminal, or nil."
-  (when (and task (fboundp 'tmux-control-window-id))
+  (when (and task (roost--tmux-bound-p "window-id"))
     (seq-find (lambda (window)
                 (with-current-buffer (window-buffer window)
-                  (and (tmux-control-window-id)
-                       (not (tmux-control-tiled-p))
-                       (equal (tmux-control-buffer-host) (roost--field task 'host))
-                       (equal (tmux-control-buffer-socket-name) (roost--field task 'socket))
-                       (equal (tmux-control-buffer-session) (roost--field task 'session))
-                       (equal (tmux-control-window-id) (roost--field task 'windowId)))))
+                  (and (roost--tmux-window-id)
+                       (not (roost--tmux-tiled-p))
+                       (equal (roost--tmux-buffer-host) (roost--field task 'host))
+                       (equal (roost--tmux-buffer-socket-name) (roost--field task 'socket))
+                       (equal (roost--tmux-buffer-session) (roost--field task 'session))
+                       (equal (roost--tmux-window-id) (roost--field task 'windowId)))))
               (window-list))))
 
 (defun roost--terminal-task (buffer)
@@ -2709,23 +2796,23 @@ That is the selected frame's current perspective."
 A session shared by tasks from before each had its own is no one's, and
 a view of a terminal, such as its scrollback, is no terminal."
   (with-current-buffer buffer
-    (when (and (derived-mode-p 'tmux-control-mode)
-               (fboundp 'tmux-control-buffer-session) (tmux-control-buffer-session))
+    (when (and (roost--tmux-buffer-p)
+               (roost--tmux-bound-p "buffer-session") (roost--tmux-buffer-session))
       (let ((tasks (seq-filter (lambda (task)
-                                 (and (equal (roost--field task 'host) (tmux-control-buffer-host))
-                                      (equal (roost--field task 'socket) (tmux-control-buffer-socket-name))
-                                      (equal (roost--field task 'session) (tmux-control-buffer-session))))
+                                 (and (equal (roost--field task 'host) (roost--tmux-buffer-host))
+                                      (equal (roost--field task 'socket) (roost--tmux-buffer-socket-name))
+                                      (equal (roost--field task 'session) (roost--tmux-buffer-session))))
                                (roost-tasks))))
         (and tasks (null (cdr tasks)) (car tasks))))))
 
 (defun roost--terminal-place (buffer)
   "The host, socket and tmux session of terminal BUFFER, or nil.
 Nil for a view of a terminal, such as its scrollback, too."
-  (when (and (buffer-live-p buffer) (fboundp 'tmux-control-buffer-session))
+  (when (and (buffer-live-p buffer) (roost--tmux-bound-p "buffer-session"))
     (with-current-buffer buffer
-      (when-let* (((derived-mode-p 'tmux-control-mode))
-                  (session (tmux-control-buffer-session)))
-        (list (tmux-control-buffer-host) (tmux-control-buffer-socket-name) session)))))
+      (when-let* (((roost--tmux-buffer-p))
+                  (session (roost--tmux-buffer-session)))
+        (list (roost--tmux-buffer-host) (roost--tmux-buffer-socket-name) session)))))
 
 (defun roost--still-there-p (window shown place frame)
   "Whether you are still where you were: in WINDOW, which showed SHOWN.
@@ -2789,17 +2876,22 @@ not another task's: they keep their grid."
 
 (defun roost--display-task (task &optional target-pane)
   "Display TASK after ownership validation, selecting TARGET-PANE if supplied."
-  (require 'tmux-control)
-  (add-hook 'tmux-control-switch-session-functions #'roost--switch-session)
+  (roost--tmux-load)
+  ;; ghostel-tmux has no command that switches a terminal's session.
+  (when (eq roost-terminal-backend 'tmux-control)
+    (add-hook 'tmux-control-switch-session-functions #'roost--switch-session))
   (add-hook 'after-change-major-mode-hook #'roost--keep-terminal-in-its-workspace 90)
-  (add-hook 'tmux-control-window-buffer-functions #'roost--gather-task-terminals)
+  (add-hook (if (eq roost-terminal-backend 'ghostel-tmux)
+                'roost-ghostel-tmux-window-buffer-functions
+              'tmux-control-window-buffer-functions)
+            #'roost--gather-task-terminals)
   (add-hook 'persp-switch-hook #'roost--gather-task-terminals)
   (roost--leave-side-window)
   (roost--activate-workspace task)
   (roost--leave-side-window)
   (when-let* ((window (roost--terminal-window-for task)))
     (select-window window))
-  (tmux-control-connect-or-switch (roost--field task 'host) (roost--field task 'socket)
+  (roost--tmux-connect-or-switch (roost--field task 'host) (roost--field task 'socket)
                                   (roost--field task 'session))
   (roost--quiet-session-activity task)
   ;; Explicit window hop also works before the pane map arrives on connect.
@@ -2809,8 +2901,8 @@ not another task's: they keep their grid."
                  (stringp pane) (string-match-p "\\`%[0-9]+\\'" pane))
       (user-error "Invalid tmux target"))
     (with-current-buffer (window-buffer (selected-window))
-      (tmux-control-send-command (format "select-window -t %s" window))
-      (tmux-control-select-pane pane)))
+      (roost--tmux-send-command (format "select-window -t %s" window))
+      (roost--tmux-select-pane pane)))
   (roost--mark-seen (or (gethash (roost--key task) roost--tasks) task))
   (unless (roost--workspace-backend)
     (roost--bring-back-drafts task))
@@ -3411,7 +3503,8 @@ EXTRA is an alist of further request fields, such as the issue."
            ,(cons 'leavePr (if roost-leave-pull-requests t :false))
            ,(cons 'size (roost--terminal-size))
            ,(cons 'socket (or roost-socket-name
-                              (bound-and-true-p tmux-control-default-socket-name)
+                              (and (eq roost-terminal-backend 'tmux-control)
+                                   (bound-and-true-p tmux-control-default-socket-name))
                               "main"))
            . ,extra)
      (lambda (task)
@@ -3982,9 +4075,9 @@ Given with no SEED, DIRECTORY moves a written draft there too, unless
 tmux-control arranges those windows itself: a buffer shown in one is
 taken back at the next change of layout, and the selection with it."
   (with-current-buffer (window-buffer window)
-    (and (derived-mode-p 'tmux-control-mode)
-         (fboundp 'tmux-control-tiled-p)
-         (tmux-control-tiled-p))))
+    (and (roost--tmux-buffer-p)
+         (roost--tmux-bound-p "tiled-p")
+         (roost--tmux-tiled-p))))
 
 (defun roost--display-beside-tiles (buffer alist)
   "Display BUFFER in a window of the frame's that no terminal is in, or a new one.
@@ -3996,7 +4089,7 @@ window is a tiled terminal's pane, which BUFFER would not keep."
                                 (not (or (window-parameter window 'window-side)
                                          (window-dedicated-p window)
                                          (with-current-buffer (window-buffer window)
-                                           (derived-mode-p 'tmux-control-mode)))))
+                                           (roost--tmux-buffer-p)))))
                               (window-list nil 'nomini))))
       (window--display-buffer buffer window 'reuse alist)
     (display-buffer-at-bottom buffer alist)))
@@ -4952,22 +5045,22 @@ Roost gave each task one outlives the task."
         (socket (roost--field task 'socket))
         (session (roost--field task 'session))
         (id (roost--field task 'id)))
-    (when-let* (((fboundp 'tmux-control-disconnect))
-                ((fboundp 'tmux-control-buffer-session))
+    (when-let* (((roost--tmux-bound-p "disconnect"))
+                ((roost--tmux-bound-p "buffer-session"))
                 ((stringp session))
                 ((stringp id))
                 ((string-suffix-p (concat "-" (substring id 0 (min 6 (length id)))) session))
                 (terminals (seq-filter (lambda (buffer)
                                          (with-current-buffer buffer
-                                           (and (equal (tmux-control-buffer-session) session)
-                                                (equal (tmux-control-buffer-host) host)
-                                                (equal (tmux-control-buffer-socket-name) socket))))
+                                           (and (equal (roost--tmux-buffer-session) session)
+                                                (equal (roost--tmux-buffer-host) host)
+                                                (equal (roost--tmux-buffer-socket-name) socket))))
                                        (buffer-list))))
       ;; Through the buffer holding the connection: a scrollback view of
       ;; it, say, holds none of its own.
       (when-let* ((connection (seq-find #'get-buffer-process terminals)))
         (with-current-buffer connection
-          (tmux-control-disconnect)))
+          (roost--tmux-disconnect)))
       terminals)))
 
 (defun roost--restore-terminal (task terminals)
@@ -4975,14 +5068,14 @@ Roost gave each task one outlives the task."
 Only where one is still shown, and once the host confirms that TASK's
 window is still there: reconnecting to an ended session would start an
 empty one.  Opening the task reconnects the rest."
-  (when (and terminals (fboundp 'tmux-control-reconnect))
+  (when (and terminals (roost--tmux-bound-p "reconnect"))
     (roost--request (roost--field task 'host) "inspect" (list (cons 'id (roost--field task 'id)))
                     (lambda (_)
                       (when-let* ((window (seq-find (lambda (window)
                                                       (memq (window-buffer window) terminals))
                                                     (window-list-1 nil 'nomini t))))
                         (with-selected-window window
-                          (tmux-control-reconnect))))
+                          (roost--tmux-reconnect))))
                     #'ignore)))
 
 (defun roost--discard-terminal (terminals)
@@ -7478,13 +7571,13 @@ questions you left open in the minibuffer, as `roost-open-task' does."
                            (lambda ()
                              (roost--display-task updated (roost--field updated 'shellPaneId))
                              (with-current-buffer (window-buffer (selected-window))
-                               (unless (tmux-control-tiled-p) (tmux-control-tile))
+                               (unless (roost--tmux-tiled-p) (roost--tmux-tile))
                                (roost--focus-shell updated roost--open-generation))))))))
 
 (defun roost--focus-shell (task generation)
   "Focus TASK's shell after queued tiling replies, unless GENERATION changed."
   (let ((frame (selected-frame)))
-    (tmux-control-query
+    (roost--tmux-query
      "display-message -p '#{window_id}'"
      (lambda (_reply)
        ;; Select outside the process filter, after its buffer/focus restoration.
@@ -7497,9 +7590,9 @@ questions you left open in the minibuffer, as `roost-open-task' does."
                      ;; Opening a file or review while tiling settles cancels
                      ;; the pending terminal focus, even within the same task.
                      (with-current-buffer (window-buffer (selected-window))
-                       (and (equal (tmux-control-buffer-host) (roost--field task 'host))
-                            (equal (tmux-control-buffer-socket-name) (roost--field task 'socket))
-                            (member (tmux-control-active-pane)
+                       (and (equal (roost--tmux-buffer-host) (roost--field task 'host))
+                            (equal (roost--tmux-buffer-socket-name) (roost--field task 'socket))
+                            (member (roost--tmux-active-pane)
                                     (list (roost--field task 'paneId)
                                           (roost--field task 'shellPaneId)))))
                      (or (not (roost--workspace-backend))
@@ -7508,10 +7601,10 @@ questions you left open in the minibuffer, as `roost-open-task' does."
                          (seq-find
                           (lambda (window)
                             (with-current-buffer (window-buffer window)
-                              (and (equal (tmux-control-buffer-host) (roost--field task 'host))
-                                   (equal (tmux-control-buffer-socket-name)
+                              (and (equal (roost--tmux-buffer-host) (roost--field task 'host))
+                                   (equal (roost--tmux-buffer-socket-name)
                                           (roost--field task 'socket))
-                                   (equal (tmux-control-active-pane)
+                                   (equal (roost--tmux-active-pane)
                                           (roost--field task 'shellPaneId)))))
                           (window-list frame))))
               (select-window window)))))))))
@@ -11000,8 +11093,8 @@ answering the agent, which RET in the terminal would answer instead."
                                  ;; Just connected, before tmux says which pane
                                  ;; is active: the task's own session holds
                                  ;; only its agent's window.
-                                 (and (fboundp 'tmux-control-active-pane)
-                                      (null (tmux-control-active-pane))
+                                 (and (roost--tmux-bound-p "active-pane")
+                                      (null (roost--tmux-active-pane))
                                       (when-let* ((shown (roost--terminal-task (current-buffer))))
                                         (equal (roost--key shown) (roost--key task)))))))
                          (window-list (window-frame window) 'nomini)))
@@ -14212,8 +14305,9 @@ Requests under way go too, as their replies would find no Roost to take them."
     (process-put process 'roost-dropped t)
     (delete-process process))
   (remove-hook 'tmux-control-switch-session-functions #'roost--switch-session)
-  (remove-hook 'after-change-major-mode-hook #'roost--keep-terminal-in-its-workspace)
   (remove-hook 'tmux-control-window-buffer-functions #'roost--gather-task-terminals)
+  (remove-hook 'roost-ghostel-tmux-window-buffer-functions #'roost--gather-task-terminals)
+  (remove-hook 'after-change-major-mode-hook #'roost--keep-terminal-in-its-workspace)
   (remove-hook 'persp-switch-hook #'roost--gather-task-terminals)
   (when roost-sidebar-mode (roost-sidebar-mode -1))
   (dolist (frame (frame-list))
@@ -14556,24 +14650,42 @@ RESULT is `pending', a list of checks, or (error . MESSAGE).")
 (defconst roost--tmux-control-version "0.8.2"
   "The oldest tmux-control Roost works with, as its Package-Requires says.")
 
+(defconst roost--ghostel-tmux-version "0.3.0"
+  "The oldest ghostel-tmux Roost works with, when it is the terminal package.")
+
+(defconst roost--ghostel-version "0.65.0"
+  "The oldest Ghostel that ghostel-tmux works with.")
+
+(defun roost--doctor-library (name oldest url &optional library)
+  "The check that LIBRARY, shown as NAME, is installed and OLDEST or newer.
+URL is where to get it.  LIBRARY is NAME unless given."
+  (let* ((library (or library name))
+         (version (roost--library-version library)))
+    (list name
+          (and version (ignore-errors (version<= oldest version)))
+          version
+          (if version
+              (format "Roost needs %s %s or newer: %s" name oldest url)
+            (format "Install %s: %s" name url))
+          (locate-library library))))
+
 (defun roost--doctor-local-checks ()
   "List the local checks, each (NAME OK DETAIL HINT PATH)."
   (let ((helper (expand-file-name "scripts/roost_remote.py" roost--package-directory)))
     (delq nil
           (list (list "Emacs" (version<= "29.1" emacs-version) emacs-version
                       "Roost needs Emacs 29.1 or newer")
-                (let ((version (roost--library-version "tmux-control")))
-                  (list "tmux-control"
-                        (and version (ignore-errors (version<= roost--tmux-control-version version)))
-                        version
-                        (if version
-                            (format "Roost needs tmux-control %s or newer: https://github.com/csheaff/tmux-control"
-                                    roost--tmux-control-version)
-                          "Install tmux-control: https://github.com/csheaff/tmux-control")
-                        (locate-library "tmux-control")))
-                (list "Eat" (locate-library "eat") (roost--library-version "eat")
-                      "Install eat from NonGNU ELPA (tmux-control renders through it)"
-                      (locate-library "eat"))
+                (if (eq roost-terminal-backend 'ghostel-tmux)
+                    (roost--doctor-library "ghostel-tmux" roost--ghostel-tmux-version
+                                           "https://github.com/dakra/ghostel-tmux")
+                  (roost--doctor-library "tmux-control" roost--tmux-control-version
+                                         "https://github.com/csheaff/tmux-control"))
+                (if (eq roost-terminal-backend 'ghostel-tmux)
+                    (roost--doctor-library "Ghostel" roost--ghostel-version
+                                           "https://github.com/dakra/ghostel" "ghostel")
+                  (list "Eat" (locate-library "eat") (roost--library-version "eat")
+                        "Install eat from NonGNU ELPA (tmux-control renders through it)"
+                        (locate-library "eat")))
                 (list "Magit" (or (locate-library "magit") 'optional) (roost--library-version "magit")
                       "Optional: review (r) falls back to Dired" (locate-library "magit"))
                 (list "Host helper" (file-readable-p helper) (if (file-readable-p helper) "found" "missing")
@@ -14841,11 +14953,11 @@ to `mode-line-format'."
   "COMMAND in a task's terminal, and nil elsewhere.
 A key filter, so that the key keeps its own meaning in other buffers,
 the terminals of other tmux sessions included."
-  (and (derived-mode-p 'tmux-control-mode)
-       (fboundp 'tmux-control-buffer-session)
-       (let ((host (tmux-control-buffer-host))
-             (socket (tmux-control-buffer-socket-name))
-             (session (tmux-control-buffer-session)))
+  (and (roost--tmux-buffer-p)
+       (roost--tmux-bound-p "buffer-session")
+       (let ((host (roost--tmux-buffer-host))
+             (socket (roost--tmux-buffer-socket-name))
+             (session (roost--tmux-buffer-session)))
          (seq-some (lambda (task)
                      (and (equal (roost--field task 'session) session)
                           (equal (roost--field task 'host) host)
