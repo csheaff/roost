@@ -71,6 +71,12 @@ ghostel-tmux has no accessor for a session's socket and host.  This file
 attached the session, so it notes what it passed: on the controller,
 and on each pane, which keeps it once its session is detached.")
 
+(defvar tmux-control--lost (make-hash-table :test #'equal)
+  "How often each place whose connection dropped has been tried again.")
+
+(defvar-local tmux-control--was-attached nil
+  "Non-nil in a controller whose session's panes have arrived.")
+
 (defvar-local tmux-control--stand-in nil
   "In a controller, the buffer that stands in for its pane until it arrives.
 `ghostel-tmux-attach' returns before any pane is there.  Roost needs a
@@ -331,6 +337,8 @@ the stand-in back in its window.  By now every pane tmux still has is
 live again: the pane buffers an earlier connection left that are not,
 tmux no longer has."
   (when-let* ((place tmux-control--place))
+    (setq tmux-control--was-attached t)
+    (remhash place tmux-control--lost)
     (when-let* ((stand-in tmux-control--stand-in)
                 ((buffer-live-p stand-in))
                 (pane (tmux-control--pane (current-buffer))))
@@ -341,6 +349,70 @@ tmux no longer has."
     (mapc #'kill-buffer (tmux-control--snapshots place))))
 
 (add-hook 'ghostel-tmux-attach-hook #'tmux-control--attached)
+
+
+;;; A connection that drops
+
+;; When the ssh under a session on a host ends, ghostel-tmux keeps the
+;; session's panes as they were and says so once in the echo area.  The
+;; session is still there, on the host: the layer attaches it again, and
+;; the panes it kept come alive where they are.
+
+(defun tmux-control--detached ()
+  "Attach again a session on a host whose connection dropped.
+On `ghostel-tmux-detach-hook', in the controller.  A session that was
+detached, or that tmux said has ended, is left: Roost's helper ends a
+task's session.
+NEEDS: `ghostel-tmux--detaching' and `ghostel-tmux--closing', to tell a
+connection that dropped from a client that was detached or a session
+that ended.  The hook could say which."
+  (when-let* ((place tmux-control--place)
+              ((nth 0 place))
+              ((not (bound-and-true-p ghostel-tmux--detaching)))
+              ((not (bound-and-true-p ghostel-tmux--closing)))
+              ((or tmux-control--was-attached (gethash place tmux-control--lost))))
+    (tmux-control--attach-again place)))
+
+(defun tmux-control--attach-again (place)
+  "Try the session at PLACE again after a second, then two, up to thirty.
+Eight times, about two and a half minutes: after that, opening the task
+attaches it."
+  (let ((tries (gethash place tmux-control--lost 0)))
+    (if (>= tries 8)
+        (remhash place tmux-control--lost)
+      (puthash place (1+ tries) tmux-control--lost)
+      (run-at-time (min 30 (expt 2 tries)) nil #'tmux-control--try-again place))))
+
+(defun tmux-control--try-again (place)
+  "Attach the session at PLACE if its host answers, else try later.
+The host is asked by an ssh of its own first: an attach goes through
+TRAMP, which would hold Emacs for as long as a host that is away takes
+to time out.  Nothing is tried once the session is attached again, as
+when you opened its task, or once none of its panes is left to bring
+back, as when Roost has put them away."
+  (cond
+   ((not (gethash place tmux-control--lost)))
+   ((or (tmux-control--find-controller place)
+        (not (tmux-control--snapshots place)))
+    (remhash place tmux-control--lost))
+   (t
+    (make-process
+     :name "tmux-control-host-there"
+     :command (list "ssh" "-o" "BatchMode=yes" "-o" "ConnectTimeout=5" "--" (nth 0 place) "true")
+     :connection-type 'pipe :noquery t
+     :sentinel
+     (lambda (process _event)
+       (unless (process-live-p process)
+         (if (and (eql 0 (process-exit-status process))
+                  (not (tmux-control--find-controller place))
+                  (tmux-control--snapshots place))
+             (condition-case nil
+                 (tmux-control--attach place t)
+               (error (tmux-control--attach-again place)))
+           (when (gethash place tmux-control--lost)
+             (tmux-control--attach-again place)))))))))
+
+(add-hook 'ghostel-tmux-detach-hook #'tmux-control--detached)
 
 (defun tmux-control-connect (&optional host socket-name session)
   "Show tmux SESSION from HOST and SOCKET-NAME, creating it if it is not there.

@@ -479,8 +479,34 @@ connection of Roost's helper with them. 2 runs of 2, alike:
 tmux-control asks whether to reconnect, at each key or click in a dead
 terminal. Here nothing asks and nothing reconnects until you open the
 task. The rexel trial's layer comes back by itself in three seconds.
-The layer could attach again on `ghostel-tmux-detach-hook` when tmux
-did not end the session; not done.
+
+### The layer attaches again by itself
+
+Now done (`tmux-control--detached`, on `ghostel-tmux-detach-hook`): for
+a session on a host whose client ended without being detached and
+without tmux saying the session ended, the layer attaches again after a
+second, then two, up to thirty, eight times. It asks the host by an
+ssh of its own first, so that TRAMP does not hold Emacs while the host
+is away, and stops once the session is attached or none of its panes
+is left. It reads two private variables of ghostel-tmux to tell why
+the client ended (NEEDS in the file): the hook could say.
+
+- The drop on claylien again: the pane was streaming again by itself
+  within about three seconds, with the lines it missed, in 8 runs of 8.
+- A task that is stopped is left alone: nothing was being tried five
+  seconds after, in the one run that got there.
+- The eleven journeys with `--remote`: 53 of 53.
+
+But Emacs then crashed when the task was stopped, in 6 of those 8
+runs, and in 1 of 5 runs without the reattach. The same stack each
+time, in Emacs 30.2's own macOS drawing: `-[EmacsView copyRect:to:]`
+from `ns_scroll_run`, in a redisplay that `delete-process` starts,
+which Roost calls as it ends a request. Not Lisp, and not caught. The
+rexel trial's drop did not crash in the 1 run made since. The scratch
+Emacs runs with this Mac's screen locked, which may matter to a copy
+within the frame's surface; not checked. Cause not found: why the
+reattach makes it likelier, whether an unlocked screen or Emacs 32
+shows it.
 
 ## Not tried
 
