@@ -2854,7 +2854,23 @@ minibuffer gives back the lines it took, a window can show another
 pane's buffer, or another window the one you were in."
   (or (and (eq (selected-window) window) (eq (window-buffer window) shown))
       (and place (eq (selected-frame) frame)
-           (equal (roost--terminal-place (window-buffer (selected-window))) place))))
+           (equal (roost--terminal-place (window-buffer (selected-window))) place))
+      (roost--terminal-took-window-p window shown)))
+
+(defun roost--terminal-took-window-p (window shown)
+  "Whether WINDOW, still selected, shows a terminal in place of SHOWN.
+With ghostel-tmux, which put it there, not you.  A tmux window of
+several panes shows as a split, and the split keeps its windows when
+they come to show another buffer: a change of its layout that tmux
+reports late, as over a slow connection or once the minibuffer has
+closed, builds the split again there.  What you open through Roost
+meanwhile is told apart by `roost--open-generation'.
+NEEDS: ghostel-tmux to leave a window that shows another buffer out of
+its split."
+  (and (eq roost-terminal-backend 'ghostel-tmux)
+       (eq (selected-window) window)
+       (not (eq (window-buffer window) shown))
+       (with-current-buffer (window-buffer window) (roost--tmux-buffer-p))))
 
 (defun roost--window-you-are-in ()
   "The selected window, or the one you asked a question from in the minibuffer."

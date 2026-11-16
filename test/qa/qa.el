@@ -928,8 +928,14 @@ them; nil when BUFFER isn't a terminal."
   "How many lines of history terminal WINDOW shows above its live screen."
   (with-current-buffer (window-buffer window)
     (if (qa--ghostel-pane-p (current-buffer))
-        (let ((screen (or (ghostel--viewport-start) (point-min))))
-          (if (< (window-start window) screen) (count-lines (window-start window) screen) 0))
+        (let ((screen (or (ghostel--viewport-start) (point-min)))
+              ;; A window that has grown shows that many lines above the
+              ;; screen until tmux has resized the pane, which over a slow
+              ;; connection takes a moment: `drift' checks that it does.
+              (growing (max 0 (- (window-body-height window) (or (bound-and-true-p ghostel--term-rows) 0)))))
+          (if (< (window-start window) screen)
+              (max 0 (- (count-lines (window-start window) screen) growing))
+            0))
     (if (and (derived-mode-p 'tmux-control-mode) (bound-and-true-p tmux-control--terminal)
              (eat-term-live-p tmux-control--terminal))
         (let ((screen (save-excursion (goto-char (eat-term-display-beginning tmux-control--terminal))

@@ -384,10 +384,12 @@ class Run:
                 self.process.wait(10)
             except subprocess.TimeoutExpired:
                 self.process.kill()
-        subprocess.run(["tmux", "-L", self.name, "kill-server"], capture_output=True, env=self.tmux_env)
-        # tmux leaves the socket's file.
-        socket = Path(self.tmux_env.get("TMUX_TMPDIR") or "/tmp") / ("tmux-%d" % os.getuid()) / self.name
-        socket.unlink(missing_ok=True)
+        # With --remote, this machine's tmux too, where a conversation ran.
+        for env in ([self.tmux_env, self.env] if self.host else [self.tmux_env]):
+            subprocess.run(["tmux", "-L", self.name, "kill-server"], capture_output=True, env=env)
+            # tmux leaves the socket's file.
+            socket = Path(env.get("TMUX_TMPDIR") or "/tmp") / ("tmux-%d" % os.getuid()) / self.name
+            socket.unlink(missing_ok=True)
         if self.host:
             shutil.rmtree(self.remote_home, ignore_errors=True)
 
@@ -461,10 +463,12 @@ class Run:
                            r"__psynch_cvwait|recvfrom|__open)\b", out)
         return ", ".join(dict.fromkeys(calls))
 
-    def tmux(self, *args):
-        """What tmux on this run's socket says to ARGS, as lines."""
+    def tmux(self, *args, here=False):
+        """What tmux on this run's socket says to ARGS, as lines.  With
+        HERE, this machine's own tmux: with --remote the tasks are on the
+        host, but a conversation in no project is here."""
         return subprocess.run(["tmux", "-L", self.name] + list(args), capture_output=True,
-                              text=True, env=self.tmux_env).stdout.split("\n")[:-1]
+                              text=True, env=self.env if here else self.tmux_env).stdout.split("\n")[:-1]
 
     @property
     def hosts(self):
@@ -688,10 +692,12 @@ class Run:
         deadline = time.monotonic() + timeout
         while True:
             ours = self.emacs.json("(json-encode (qa-terminal-screen %s))" % lisp(window["buffer"])) or []
-            theirs = [line.rstrip() for line in self.tmux("capture-pane", "-p", "-t", window["pane"])]
+            # Pane ids start again on each machine's tmux.
+            here = bool(self.host) and (window.get("terminal") or "").startswith("local/")
+            theirs = [line.rstrip() for line in self.tmux("capture-pane", "-p", "-t", window["pane"], here=here)]
             # Asked after each capture: the pane can die while it is compared.
-            dead = self.tmux("display-message", "-p", "-t", window["pane"], "#{pane_dead}")
-            if dead == ["1"] or not (dead or self.tmux("list-sessions", "-F", "#{session_id}")):
+            dead = self.tmux("display-message", "-p", "-t", window["pane"], "#{pane_dead}", here=here)
+            if dead == ["1"] or not (dead or self.tmux("list-sessions", "-F", "#{session_id}", here=here)):
                 return None
             while theirs and not theirs[-1]:
                 theirs.pop()
