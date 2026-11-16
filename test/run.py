@@ -40,7 +40,7 @@ ERT_FILES = ["roost-test.el", "roost-sweep.el", "roost-sweep-late.el"]
 # What each suite reads: `make quick` leaves out a suite that passed, in
 # full, with all of these as they are now.
 READS = {
-    "ert": ["roost.el", "scripts/roost_remote.py", "test/*.el"],
+    "ert": ["roost.el", "roost-ghostel-tmux.el", "scripts/roost_remote.py", "test/*.el"],
     "python": ["scripts/roost_remote.py", "test/*.py", "test/captures/**/*"],
 }
 

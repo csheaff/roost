@@ -44,6 +44,8 @@
 (declare-function tramp-dissect-file-name "tramp" (name &optional nodefault))
 (declare-function tramp-file-name-host "tramp" (cl-x))
 (declare-function tramp-file-name-user "tramp" (cl-x))
+(declare-function tramp-file-name-method "tramp" (cl-x))
+(declare-function ghostel-tmux-session-name "ghostel-tmux" (&optional buffer))
 
 (defgroup roost-ghostel-tmux nil
   "Roost's terminals through ghostel-tmux."
@@ -95,11 +97,13 @@ A pane's, the one a stand-in waits for, or the buffer itself."
     (and (memq controller (ghostel-tmux-controllers)) controller)))
 
 (defun roost-ghostel-tmux--buffer-place ()
-  "The place of the current buffer.  A pane buffer keeps its controller's."
-  (or roost-ghostel-tmux--place
-      (when-let* ((controller (roost-ghostel-tmux--controller))
-                  (place (buffer-local-value 'roost-ghostel-tmux--place controller)))
-        (setq roost-ghostel-tmux--place place))))
+  "The place of the current buffer.
+A pane buffer has its controller's, which follows the session the
+controller shows, and keeps the last it had once the connection ends."
+  (if-let* ((controller (roost-ghostel-tmux--controller))
+            (place (buffer-local-value 'roost-ghostel-tmux--place controller)))
+      (setq roost-ghostel-tmux--place place)
+    roost-ghostel-tmux--place))
 
 (defun roost-ghostel-tmux-buffer-host ()
   "Return the SSH host of the current buffer's connection, nil when local."
@@ -131,6 +135,17 @@ A pane buffer of ghostel-tmux is one pane for good."
 (defvar roost-ghostel-tmux--prepared-hosts nil
   "The remote hosts `roost-ghostel-tmux--prepare-host' has set up.")
 
+(defun roost-ghostel-tmux--host-set-p (name variable)
+  "Whether a connection-local profile of yours sets VARIABLE for NAME.
+NAME is a host as TRAMP dissects it."
+  (seq-some (lambda (profile)
+              (assq variable (connection-local-get-profile-variables profile)))
+            (connection-local-get-profiles
+             (list :application 'tramp
+                   :protocol (tramp-file-name-method name)
+                   :user (tramp-file-name-user name)
+                   :machine (tramp-file-name-host name)))))
+
 (defun roost-ghostel-tmux--prepare-host (host)
   "Set up TRAMP and ghostel-tmux for HOST, once, before its first attach.
 ghostel-tmux reaches a host's tmux through TRAMP.  With TRAMP's own
@@ -146,7 +161,6 @@ for all you do on HOST through TRAMP in this Emacs.  One you have set
 for HOST yourself is left as it is."
   (unless (member host roost-ghostel-tmux--prepared-hosts)
     (require 'tramp)
-    (push host roost-ghostel-tmux--prepared-hosts)
     (let* ((name (tramp-dissect-file-name (format "/ssh:%s:" host)))
            (profile (intern (format "roost-ghostel-tmux-host-%s" host)))
            (said (with-temp-buffer
@@ -159,18 +173,20 @@ for HOST yourself is left as it is."
            (longest (seq-some (lambda (line)
                                 (and (string-match-p "\\`[0-9]+\\'" line)
                                      (string-to-number line)))
-                              said))
-           (default-directory (format "/ssh:%s:" host)))
+                              said)))
+      ;; A host that did not answer is asked again at the next attach.
+      (when said
+        (push host roost-ghostel-tmux--prepared-hosts))
       (connection-local-set-profile-variables
        profile
        ;; A direct async process is one command line, no longer than the
        ;; host's PIPE_BUF, TRAMP holds: 4096 on Linux, where attaching
        ;; fits, and 512 on macOS, where it does not.
        `(,@(and longest (>= longest 4096)
-                (not (connection-local-p tramp-direct-async-process))
+                (not (roost-ghostel-tmux--host-set-p name 'tramp-direct-async-process))
                 '((tramp-direct-async-process . t)))
          ,@(and tmux
-                (not (connection-local-p ghostel-tmux-program))
+                (not (roost-ghostel-tmux--host-set-p name 'ghostel-tmux-program))
                 `((ghostel-tmux-program . ,tmux)))))
       (connection-local-set-profiles
        `(:application tramp :machine ,(tramp-file-name-host name)
@@ -323,7 +339,15 @@ a buffer that stands in for it."
      ((memq shown (roost-ghostel-tmux--snapshots place))
       ;; A pane the session's last connection left: ghostel-tmux makes it
       ;; live again where it is, in the window it keeps for the session.
-      (roost-ghostel-tmux--attach place nil))
+      ;; Its panes get the controller when tmux lists them: until then
+      ;; they reach it as a stand-in does, for the commands Roost sends
+      ;; the session right after this.
+      (let ((snapshots (roost-ghostel-tmux--snapshots place))
+            (controller (roost-ghostel-tmux--attach place nil)))
+        (dolist (snapshot snapshots)
+          (when (buffer-live-p snapshot)
+            (with-current-buffer snapshot
+              (setq roost-ghostel-tmux--stands-in-for controller))))))
      (t
       (let ((stand-in (roost-ghostel-tmux--stand-in-for place shown)))
         (roost-ghostel-tmux--show-stand-in stand-in nil window)
@@ -345,6 +369,15 @@ the stand-in back in its window.  By now every pane tmux still has is
 live again: the pane buffers an earlier connection left that are not,
 tmux no longer has."
   (when-let* ((place roost-ghostel-tmux--place))
+    ;; The hook runs too once ghostel-tmux's own command has switched the
+    ;; controller to another session: the place is that session's now.
+    ;; NEEDS: a hook before the switch, to open the session's task in its
+    ;; workspace instead, as `tmux-control-switch-session-functions' lets
+    ;; Roost do.
+    (when-let* ((session (ghostel-tmux-session-name))
+                ((not (equal session (nth 2 place)))))
+      (setq place (list (nth 0 place) (nth 1 place) session)
+            roost-ghostel-tmux--place place))
     (setq roost-ghostel-tmux--was-attached t)
     (remhash place roost-ghostel-tmux--lost)
     (when-let* ((stand-in roost-ghostel-tmux--stand-in)
@@ -412,6 +445,9 @@ back, as when Roost has put them away."
      (lambda (process _event)
        (unless (process-live-p process)
          (if (and (eql 0 (process-exit-status process))
+                  ;; Still wanted: not attached, detached or put away
+                  ;; while the host was asked.
+                  (gethash place roost-ghostel-tmux--lost)
                   (not (roost-ghostel-tmux--find-controller place))
                   (roost-ghostel-tmux--snapshots place))
              (condition-case nil

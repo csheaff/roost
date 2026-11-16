@@ -44,7 +44,8 @@ Mac, Emacs 30.2, Ghostel 0.65.0 and ghostel-tmux at 359eeeb (0.3.0), with
 - **On ghostel-tmux** (`--backend ghostel-tmux`), the journeys answer,
   shell, resize, stop_resume, retire, restart, exits, next_waiting,
   own_workspace, send and merge: 55 steps of 55, and 55 of 55 with
-  `--remote`, twice each, before and after the review's fixes.
+  `--remote`, three times each: before and after the review's fixes,
+  and after Copilot's.
 - **On tmux-control**, the default, every journey: 417 steps, 2 with
   problems. `fleet` waited 40 s for its first agent to run, and `crashed`
   had Emacs not answer for 1.4 s; both passed alone, twice, and again in
