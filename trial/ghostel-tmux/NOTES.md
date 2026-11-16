@@ -426,8 +426,38 @@ before it goes back. It fails the same with direct async forced on,
 and passes on real tmux-control with `--remote` before and after the
 change, and on ghostel-tmux locally.
 
-What is ghostel-tmux's in this: the slow attach over TRAMP. For dakra,
-if it is wanted: a count of the round trips an attach makes.
+What is ghostel-tmux's in this: the slow attach over TRAMP.
+
+### Why an attach is slow on a host
+
+Timed on claylien, three waiting sessions attached in turn through the
+layer, from the ask to the session's text on screen:
+
+| | First attach to the host | Each later attach | TRAMP commands, each later attach |
+|---|---|---|---|
+| The layer's setup (direct async) | 2.5 s | 0.5 s | 0 |
+| TRAMP as it comes | 3.0 s | 1.4 to 1.6 s | 18 |
+
+- With TRAMP as it comes, every attach starts tmux's control process
+  as a TRAMP process, and TRAMP opens a new ssh for it and sets its
+  shell up with 18 commands, one after another, each waiting for its
+  answer: `ghostel-tmux--spawn-controller` takes 1.1 to 1.4 s on the
+  LAN, and Emacs is blocked for it. At 0.15 s each way, 18 answers are
+  5.4 s before ssh's own start, which is the 7 to 8 s the journeys saw.
+  After that tmux answers within 0.15 s and the pane is there at once:
+  none of the time is ghostel-tmux reading the session.
+- With direct async the control process is one ssh, no TRAMP command:
+  about 0.4 s to tmux's first line, and Emacs is not blocked.
+- The first attach to a host pays once more, about 2 s: TRAMP opens
+  its own connection to the host (28 commands). The layer's lookup of
+  the socket's path asks for it first; without that,
+  `ghostel-tmux--check-spawn` would, checking the directory.
+
+So on a Linux host the layer's setup has it at half a second, tmux-control's
+own range. On a macOS host, where direct async cannot be on, every
+attach costs TRAMP's 18 commands. That is TRAMP's, not ghostel-tmux's.
+For dakra, if wanted: under direct async the directory check is the
+only TRAMP command an attach makes, and it opens a whole connection.
 
 ## Not tried
 
@@ -436,4 +466,3 @@ if it is wanted: a count of the round trips an attach makes.
 - The walk_away grid, and the ERT suite, which stubs tmux-control.
 - A real agent for longer than two turns, the journeys against a real
   host, a real macOS host, a connection that drops.
-- Why an attach takes 7 to 8 seconds over the delayed link.
