@@ -62,9 +62,22 @@ ghostel-tmux 0.3.0 (359eeeb), tmux 3.6a.
   screenshots, on this machine and on a Linux host over SSH, where a Pi
   task ran as a Roost task for the first time. Pi's chart, read with its
   read tool, drew in its terminal from both.
-- **Not checked:** the whole run with `--remote`, `--popular` or `--tuned`
-  on ghostel-tmux (eleven journeys have run with `--remote`); a host that
-  runs macOS; Emacs 29.
+- **Every journey once with `--remote`,** the tasks behind the slow fake
+  SSH: 268 steps, 3 with problems, the same three when run again.
+  - The walk-away journey stops after 48 of its pairs. A task opened right
+    after another, whose terminal of two panes was still arriving, is not
+    opened: "didn't open sort-notes, as you went to another window or
+    buffer while its host replied". Roost takes the first task's panes
+    arriving in the window for you going elsewhere. Opening it again
+    works. Not fixed, and its cause in the layer or in ghostel-tmux not
+    found; the pairs after it have not run with `--remote`.
+  - Just before it, a terminal of two panes showed seven lines above
+    tmux's screen, more than the rewrapping the journeys allow.
+  - The conversation journey compares the conversation's terminal, which
+    is on this machine, with the pane of the same number on the fake
+    host: the journey's fault, with either package.
+- **Not checked:** the whole run with `--popular` or `--tuned` on
+  ghostel-tmux; a host that runs macOS; Emacs 29.
 
 ## Pi through a task, and its reply — 2026-11-16
 

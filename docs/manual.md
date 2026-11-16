@@ -1112,6 +1112,9 @@ ghostel-tmux 0.3.0 or newer; `M-x roost-doctor` checks both.
   its panes shows beside the split, not in it. A pane made narrower can
   show a line or two above what tmux has on its screen, until its program
   draws again.
+- Over a slow connection, a task opened right after another whose
+  terminal is still arriving can stay unopened, with a message that you
+  went to another window; open it again.
 - A host that runs macOS is untried. Emacs 30.2 on macOS can crash when a
   task is stopped after its connection dropped, a fault of that Emacs
   which later ones do not have.
