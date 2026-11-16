@@ -35,6 +35,30 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## Images from Pi as Roost starts it, and from Claude Code — 2026-11-16
+
+On a Mac, Emacs 32.0.50, terminals through ghostel-tmux, while the README's
+hero, review and dashboard were taken again.
+
+- **Pi 1.5.2, started with no image setting of its own.** Its command was
+  `env PI_OFFLINE=1 pi`; the helper put `PI_IMAGE_PROTOCOL=kitty` in its
+  environment, as Emacs named the protocol when the task started. The
+  chart it read drew in its terminal, whose mode line read
+  `local › spending-chart`.
+- **An image goes blank when Pi 1.5.2 draws its screen again:** after the
+  frame changed size, and after `C-t` in Pi folded its thinking. The space
+  stays, with no picture. The next read of the file draws it. Pi 1.3.0
+  kept its image through a change of size earlier the same day. Whether
+  Pi, tmux or Ghostel drops it was not found.
+- **Claude Code 2.1.325 with `CLAUDE_CODE_FORCE_TERMINAL_IMAGES=1`** in its
+  environment, checked in its process: it read a PNG with its Read tool,
+  and took one attached to a prompt with `@`, and drew neither. The bytes
+  it wrote to its pane for another read, 7,176 of them recorded with
+  `tmux pipe-pane`, held no Kitty, iTerm2 or Sixel image.
+- **The host dropped off the network twice** for some seconds during the
+  session. Roost showed its tasks as offline, and as they were again once
+  it answered.
+
 ## ghostel-tmux as the default — 2026-11-16
 
 On a Mac, Emacs 30.2 for the journeys and 32.0.50 by hand, Ghostel 0.65.0,

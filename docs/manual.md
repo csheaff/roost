@@ -1152,7 +1152,13 @@ whether its terminal draws them, so an agent has to be told:
   `show_image` tool.
 
 `clear` leaves an image on the screen; a program that clears the whole
-screen removes it.
+screen removes it. With Pi 1.5.2, an image goes blank when Pi draws its
+screen again, as after its window changes size or you fold its thinking;
+it draws again when Pi next reads the file.
+
+Claude Code's `CLAUDE_CODE_FORCE_TERMINAL_IMAGES` does not change this:
+with it set, Claude Code 2.1.325 wrote no image to its terminal for a file
+it read, or for one attached to a prompt.
 
 ### Terminals through tmux-control
 

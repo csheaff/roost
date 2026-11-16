@@ -12,9 +12,9 @@ worktree, a branch and a terminal, here or on any SSH host. It tells you which
 agents need you, and you review and merge their work with Magit. If you've
 used Orca, it's that idea, inside Emacs.
 
-![Emacs with three columns: Roost's sidebar listing seven agents on two hosts, the one you are on marked with a band, two ready, one working, one with changes not looked at, one already looked at and one asking permission, with what it asks under it; that agent's Pi terminal, where it has read the chart it drew, and the bar chart shows above its reply; and the task's panel, which says to review its changes in Magit and lists the file it changed](docs/images/roost-hero.png)
+![Emacs with three columns: Roost's sidebar listing nine agents on two hosts, the one you are on marked with a band, five ready, one working, one with changes not looked at and one asking permission, with what it asks under it; that agent's Pi terminal, named local › spending-chart in its mode line, where it has read the chart it drew, and the bar chart shows above its reply; and the task's panel, which says to review its changes in Magit and lists the file it changed](docs/images/roost-hero.png)
 
-*Seven agents on two hosts, six of them Pi and one Claude Code. The Pi agent
+*Nine agents on two hosts, eight of them Pi and one Claude Code. The Pi agent
 in the middle drew a chart and looked at it, and its terminal shows the
 picture. Every task is at the left, and at the right is what to do next and
 what it changed.*
@@ -62,7 +62,7 @@ it's doing right now (`Running make test`, `Editing ledger.py`), what it
 changed, and its latest reply or what it asks. A notification says the same
 when one finishes or asks for something.
 
-![The dashboard, counting 1 permission, 3 ready and 3 seen: four Pi tasks on dev, three ready and one seen, and three local ones, two Pi tasks seen and a Claude Code task asking to run python3 -m unittest, each with a light in the shape of its status, its agent, its changes, and its latest reply or what it asks](docs/images/roost-dashboard.png)
+![The dashboard, counting 1 permission, 7 ready and 1 seen: six Pi tasks on dev, five ready and one seen, and three local ones, two Pi tasks ready and a Claude Code task asking to run python3 -m unittest, each with a light in the shape of its status, its agent, its changes, and its latest reply or what it asks](docs/images/roost-dashboard.png)
 
 ## How it differs
 
