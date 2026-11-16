@@ -1478,6 +1478,10 @@ export default function (pi) {
 '''
 
 
+# The image protocols a terminal can draw that Emacs may name for a task.
+TERMINAL_IMAGES = ("kitty",)
+
+
 class PiAgent:
     """Observe Pi extension events without changing tools or approval extensions."""
 
@@ -1508,6 +1512,15 @@ class PiAgent:
             # @file-looking prompts literal instead of interpreting them as CLI input.
             argv.append("\n" + first_message(task))
         return argv
+
+    def environment(self, store, task, env):
+        """The protocol for the images TASK's terminal draws, if Emacs named
+        one.  Under tmux Pi sends none unless told, as it cannot ask the
+        terminal behind tmux.  One you set yourself stands."""
+        images = task.get("terminalImages")
+        if images in TERMINAL_IMAGES and not env.get("PI_IMAGE_PROTOCOL"):
+            return dict(PI_IMAGE_PROTOCOL=images)
+        return {}
 
     def observe(self, payload, current=None):
         event = payload.get("event")
@@ -2462,6 +2475,8 @@ def make_task(store, request, create_id):
         task["copyComplete"] = False
     if request.get("programStatus") is True:
         task["programStatus"] = True
+    if request.get("terminalImages") in TERMINAL_IMAGES:
+        task["terminalImages"] = request["terminalImages"]
     # Its agent can offer tasks, if it can be given Roost's tool.
     if request.get("mayOffer") is True and getattr(agent, "offers", False):
         task["mayOffer"] = True
@@ -4322,7 +4337,7 @@ def agent_elsewhere(task, inventory, own, tasks):
     return None
 
 
-def resume(store, task, program_status=None, size=()):
+def resume(store, task, program_status=None, size=(), terminal_images=None):
     inventory = inventory_for(task)
     pane = owned_pane(task, inventory)
     if pane and not pane["dead"]:
@@ -4342,6 +4357,12 @@ def resume(store, task, program_status=None, size=()):
     # Whether its runner relays the agent's terminal, as Emacs says now.
     if isinstance(program_status, bool):
         task["programStatus"] = program_status
+    # And the images its terminal draws, which the package showing it may
+    # have changed; an Emacs that doesn't say leaves it as it was.
+    if terminal_images in TERMINAL_IMAGES:
+        task["terminalImages"] = terminal_images
+    elif terminal_images is False:
+        task.pop("terminalImages", None)
     spawn(store, task, resume=True, size=size)
     return task
 
@@ -8700,7 +8721,7 @@ def outgoing(result):
 
 TASK_ACTIONS = {
     "resume": lambda store, task, request: resume(store, task, request.get("programStatus"),
-                                                        size_options(request)),
+                                                        size_options(request), request.get("terminalImages")),
     "stop": lambda store, task, request: stop(store, task),
     "send": lambda store, task, request: send(store, task, request["text"], request.get("force") is True,
                                               request.get("sendId")),

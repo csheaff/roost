@@ -240,6 +240,13 @@ NAME is a string, such as \"buffer-host\"."
                 ',(intern (concat "roost-ghostel-tmux-" name))
               ',(intern (concat "tmux-control-" name)))))
 
+(defun roost--terminal-images ()
+  "The protocol of the images the terminal package draws, or `:false'.
+For a task's host, whose agent may send images once it knows: Ghostel
+draws those of the Kitty graphics protocol, and Eat draws none tmux
+passes on."
+  (if (eq roost-terminal-backend 'ghostel-tmux) "kitty" :false))
+
 (defconst roost--remote-tmux-socket-setup
   "fs=$(stat -f -c %T \"$HOME\" 2>/dev/null); case \"$fs\" in nfs|nfs4|lustre|gpfs|cifs|smb*|afs) d=\"/tmp/tmux-$(id -u)-sock\";; *) d=\"$HOME/.tmux-sock\";; esac; mkdir -p \"$d\" && chmod 700 \"$d\" && export TMUX_TMPDIR=\"$d\""
   "Shell snippet run before tmux on a remote host, with ghostel-tmux.
@@ -419,6 +426,17 @@ commit: one followed by new commits before it asks goes unreported.
 TASK is an alist, as for `roost-task-status-functions'.  A function that
 fails is reported, and the rest still run."
   :type 'hook)
+
+(defcustom roost-task-opened-functions nil
+  "Functions called with TASK once Roost has shown its terminal.
+As RET in the sidebar, `n', `l' and a new task do, with the window of the
+terminal selected.  For what a setup of yours does on arriving in a
+terminal, such as a modal one entering its insert state.  The terminal
+may still be connecting: the buffer shown then stands in for it until
+it has.  TASK is an alist, as for `roost-task-status-functions'.  A
+function that fails is reported, and the rest still run."
+  :type 'hook
+  :package-version '(roost . "0.13.0"))
 
 (defcustom roost-hosts-file (locate-user-emacs-file "roost/hosts.json")
   "Local file remembering hosts used by Roost."
@@ -2925,7 +2943,8 @@ not another task's: they keep their grid."
   (roost--put-away-shown task)
   (roost--show-waiting task)
   (when (roost--task-panel-window)
-    (roost--refresh-host (roost--field task 'host) nil)))
+    (roost--refresh-host (roost--field task 'host) nil))
+  (roost--run-task-hook 'roost-task-opened-functions task))
 
 (defun roost--mark-in-sidebar ()
   "Draw the sidebar again, so that it marks the task opened now.
@@ -3533,6 +3552,7 @@ EXTRA is an alist of further request fields, such as the issue."
            ,(cons 'setup setup)
            ,(cons 'branchPrefix roost-branch-prefix)
            ,(cons 'programStatus (if roost-program-status t :false))
+           ,(cons 'terminalImages (roost--terminal-images))
            ,(cons 'mayOffer (if roost-agent-offers t :false))
            ,(cons 'mayShowPages (if (and roost-agent-offers roost-agent-pages) t :false))
            ,(cons 'remoteControl (if roost-remote-control t :false))
@@ -5228,6 +5248,7 @@ resume those too."
 (defun roost--resume-parameters (task)
   "What a request to resume TASK says besides which task."
   `((programStatus . ,(if roost-program-status t :false))
+    (terminalImages . ,(roost--terminal-images))
     (size . ,(roost--terminal-size task))))
 
 (defun roost--crashed-with (task)

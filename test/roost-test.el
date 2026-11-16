@@ -5801,7 +5801,15 @@ the stubbed requests, `roost--display-task' and `dired' were asked."
                  ((symbol-function 'roost--sync-side-windows) (lambda (&rest _) (setq visible t)))
                  ((symbol-function 'roost--task-panel-window) (lambda () (when visible (selected-window))))
                  ((symbol-function 'roost--refresh-host) (lambda (host quiet) (push (list host quiet) refreshes))))
-         (roost--display-task task)
+         (let* (opened
+                (roost-task-opened-functions
+                 (list (lambda (_task) (error "Mine failed"))
+                       (lambda (task) (push (list (alist-get 'name task) (eq (selected-window) (frame-selected-window)))
+                                            opened)))))
+           (roost--display-task task)
+           ;; Your functions hear of it, in its window; one that fails keeps
+           ;; neither Roost nor the next from going on.
+           (should (equal opened (list (list (roost--field task 'name) t)))))
          (should (equal refreshes '(("dev" nil))))
          ;; Opening the agent counts as seeing it.
          (should (equal (roost--attention-status task) "idle"))
@@ -12440,6 +12448,52 @@ A test stubs the functions of ghostel-tmux it reaches."
      (should (equal (nreverse delays) '(1 2 4 8 16 30 30 30)))
      ;; Given up: opening the task is what attaches it now.
      (should-not (gethash place roost-ghostel-tmux--lost)))))
+
+(ert-deftest roost-terminal-images-are-what-the-terminal-package-draws ()
+  ;; A task's host hears it when the task starts and when it resumes, so
+  ;; an agent that sends images only when told, as Pi under tmux, is told.
+  (roost-test--isolated
+   (let ((task (roost--cache-task "dev" (roost-test--task))))
+    (cl-letf (((symbol-function 'roost--terminal-size) #'ignore))
+     (let ((roost-terminal-backend 'ghostel-tmux))
+       (should (equal (roost--terminal-images) "kitty"))
+       (should (equal (alist-get 'terminalImages (roost--resume-parameters task)) "kitty")))
+     ;; Eat draws none that tmux passes on.
+     (let ((roost-terminal-backend 'tmux-control))
+       (should (eq (roost--terminal-images) :false))
+       (should (eq (alist-get 'terminalImages (roost--resume-parameters task)) :false)))))))
+
+(ert-deftest roost-ghostel-tmux-names-a-terminal-by-its-host-and-task ()
+  (roost-test--isolated
+   (roost-test--ghostel-backend)
+   (cl-letf (((symbol-function 'ghostel-tmux-controller) #'ignore)
+             ((symbol-function 'ghostel-tmux-controllers) #'ignore))
+     (with-temp-buffer
+       (rename-buffer "*ghostel-tmux:roost-notes-123456:export%0*" t)
+       (let ((roost-terminal-backend 'ghostel-tmux))
+         (cl-flet ((name () (substring-no-properties (roost-ghostel-tmux--mode-line-name)))
+                   (task (host name)
+                     (roost--cache-task host (append `((id . ,name) (name . ,name) (socket . "main")
+                                                       (session . "roost-notes-123456"))
+                                                     (roost-test--task)))))
+           (task "far" "export")
+           (task nil "50%done")
+           (progn
+             (setq roost-ghostel-tmux--place '("far" "main" "roost-notes-123456"))
+             (should (equal (name) "far › export"))
+             ;; This machine has a name too, and a % stays one in a mode line.
+             (setq roost-ghostel-tmux--place '(nil "main" "roost-notes-123456"))
+             (should (equal (name) "local › 50%%done"))
+             ;; A session that is no task's has its own name.
+             (setq roost-ghostel-tmux--place '(nil "other" "scratch"))
+             (should (equal (name) "local › scratch"))
+             ;; So has one that tasks share, from before each had its own.
+             (task "far" "another")
+             (setq roost-ghostel-tmux--place '("far" "main" "roost-notes-123456"))
+             (should (equal (name) "far › roost-notes-123456"))
+             ;; The whole name is there to point at.
+             (should (equal (get-text-property 0 'help-echo (roost-ghostel-tmux--mode-line-name))
+                            (buffer-name))))))))))
 
 (ert-deftest roost-ghostel-tmux-counts-only-tmux-panes-as-terminals ()
   (roost-test--isolated

@@ -3445,6 +3445,47 @@ class Lifecycle(unittest.TestCase):
         self.assertFalse(reply["ok"], reply)
         self.assertEqual(self.git("worktree", "list", "--porcelain"), before)
 
+    def test_pi_is_told_the_images_its_terminal_draws(self):
+        # Under tmux Pi sends no image unless its environment names the
+        # protocol, which Emacs knows from the package that shows the terminal.
+        seen = self.state.parent / "pi-images"
+        wrapper = self.state.parent / "pi_env.py"
+        wrapper.write_text("import os, sys\n"
+                           "open(%r, 'w').write(os.environ.get('PI_IMAGE_PROTOCOL', 'none'))\n"
+                           "os.execv(sys.executable, [sys.executable, %r, 'pi'] + sys.argv[1:])\n"
+                           % (str(seen), str(FAKE_AGENT)))
+        command = [sys.executable, str(wrapper)]
+        store = roost.Store(str(self.state))
+        task = self.create(name="pictures", agent="pi", command=command, terminalImages="kitty")
+        self.assertEqual(seen.read_text(), "kitty")
+        self.assertEqual(store.read(task["id"])["terminalImages"], "kitty")
+
+        def resumed(**says):
+            self.assertTrue(self.request("stop", id=task["id"])["ok"])
+            seen.unlink()
+            self.assertTrue(self.request("resume", id=task["id"], **says)["ok"])
+            self.wait(task, "ready")
+            return seen.read_text()
+        # An Emacs that doesn't say, as an older one, leaves it as it was.
+        self.assertEqual(resumed(), "kitty")
+        # The terminal's package changed to one that draws none.
+        self.assertEqual(resumed(terminalImages=False), "none")
+        self.assertNotIn("terminalImages", store.read(task["id"]))
+        # A protocol the helper doesn't know changes nothing.
+        self.assertEqual(resumed(terminalImages="sixel"), "none")
+        self.assertEqual(resumed(terminalImages="kitty"), "kitty")
+        self.assertTrue(self.request("retire", id=task["id"])["ok"])
+        # A task whose Emacs named none, and another agent's.
+        self.create(name="plain", agent="pi", command=command)
+        self.assertEqual(seen.read_text(), "none")
+        self.create(name="other", terminalImages="kitty")
+        # The one you set yourself stands.
+        self.assertEqual(roost.PiAgent().environment(store, dict(terminalImages="kitty"), dict()),
+                         dict(PI_IMAGE_PROTOCOL="kitty"))
+        self.assertEqual(roost.PiAgent().environment(
+            store, dict(terminalImages="kitty"), dict(PI_IMAGE_PROTOCOL="iterm2")), {})
+        self.assertEqual(roost.PiAgent().environment(store, dict(terminalImages="sixel"), dict()), {})
+
     def test_codex_pi_and_opencode_create_send_shell_resume_and_retire(self):
         for agent in ("codex", "pi", "opencode"):
             with self.subTest(agent=agent):
