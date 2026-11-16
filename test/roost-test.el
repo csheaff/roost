@@ -15510,12 +15510,26 @@ it of the same ID's, or nil for the first."
                  (should-not (roost--compose-looked-p))
                  (delete-region roost--compose-body (point-max))
                  (insert "They have none.")
+                 ;; Renamed, it is yours too.
+                 (let ((fields roost--compose-fields))
+                   (setq roost--compose-fields (plist-put (copy-sequence fields) :name "Units"))
+                   (should-not (roost--compose-looked-p))
+                   (setq roost--compose-fields fields))
                  ;; As it came, cancelling asks nothing: the offer waits.
                  (roost-compose-cancel))
                (should-not (get-buffer roost--compose-buffer))
                (should-not acted)
-               ;; Dismissed from its draft, it waits no more, and the draft goes.
+               ;; Offered again with another brief, one you only looked at
+               ;; opens with the new brief.
                (roost--compose-offer task offer)
+               (setq offer '((id . "0a1b2c3d") (title . "Fix add in calc.py") (brief . "add() subtracts, and so does sum().")))
+               (setq task (roost--cache-task "dev" (append `((name . "budget") (repo . "/srv/ledger")
+                                                             (live . t) (offers ,offer ,second))
+                                                           (roost-test--task "1111111111111111" "ready"))))
+               (roost--compose-offer task offer)
+               (with-current-buffer roost--compose-buffer
+                 (should (equal (roost--compose-prompt) "add() subtracts, and so does sum().")))
+               ;; Dismissed from its draft, it waits no more, and the draft goes.
                (with-current-buffer roost--compose-buffer
                  (roost-compose-dismiss-offer))
                (should-not (get-buffer roost--compose-buffer))

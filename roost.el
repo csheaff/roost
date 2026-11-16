@@ -3765,8 +3765,8 @@ many, each by its agent, or the agents of those after the first.")
   "Marker at the start of the prompt text.")
 
 (defvar-local roost--compose-offered nil
-  "The brief the draft of an agent's offer opened with, to tell one you
-only looked at from one you wrote in.")
+  "What the draft of an agent's offer said as it opened, to tell one you
+only looked at from one you changed: as `roost--compose-what' gives it.")
 (defvar-local roost--compose-timer nil)
 
 (defvar-local roost--compose-checkout-branch nil
@@ -4897,11 +4897,12 @@ this doesn't return, as for `roost--quit-questions-left-open'."
     (list task offer)))
 
 (defun roost--compose-looked-p ()
-  "Whether this draft is of an offer that waits still, its brief as it came.
-Closing it loses nothing: the offer opens again as it was."
+  "Whether this draft is of an offer that waits still, and says what it did
+as it opened, its fields too.  Closing it loses nothing: the offer opens
+again as it was."
   (and (roost--compose-offer-waiting)
        (not roost--compose-submitting) (not roost--draft-note)
-       (equal (roost--compose-prompt) roost--compose-offered)))
+       (equal (roost--compose-what) roost--compose-offered)))
 
 (defun roost-compose-dismiss-offer (&optional event)
   "Dismiss the offer this draft opened, and close the draft.
@@ -4999,9 +5000,10 @@ One of the others that fails says so, and the draft goes on."
              (plist-get fields :agent)
              (lambda (task &optional found)
                ;; Its host took the offer it was made from: list it again,
-               ;; so the offer's row goes now.
+               ;; so the offer's row goes now.  Not quietly, which a poll
+               ;; in flight, read before the task was made, would drop.
                (when (and (plist-get fields :parent) (plist-get fields :offer))
-                 (roost--refresh-host host t))
+                 (roost--refresh-host host nil (list (cadr (plist-get fields :parent)))))
                (or (roost--compose-made buffer fields task (if found first what) t)
                    ;; One an agent offered leaves you where you are, as the
                    ;; offer came while you were busy there.
@@ -12476,7 +12478,12 @@ replaces would be answered with that one's task."
     (if (and buffer
              (with-current-buffer buffer
                (and (equal (plist-get roost--compose-fields :parent) (roost--key task))
-                    (equal (plist-get roost--compose-fields :offer) (alist-get 'id offer)))))
+                    (equal (plist-get roost--compose-fields :offer) (alist-get 'id offer))
+                    ;; Unless its agent has offered it again, with another
+                    ;; brief, and you only looked at the one before.
+                    (not (and (roost--compose-looked-p)
+                              (not (equal (string-trim (alist-get 'brief offer))
+                                          (car roost--compose-offered))))))))
         ;; In the window you were in, as when it first opened: not the
         ;; sidebar's, where you clicked.
         (progn (roost--leave-side-window)
@@ -12495,8 +12502,7 @@ replaces would be answered with that one's task."
              (into (unless elsewhere (roost--field task 'integrationBranch))))
         (roost--compose nil (cons (alist-get 'brief offer) t) (or elsewhere (roost--project-directory task)))
         (with-current-buffer roost--compose-buffer
-          (setq roost--compose-offered (roost--compose-prompt)
-                roost--compose-fields
+          (setq roost--compose-fields
                 (thread-first roost--compose-fields
                               (plist-put :agent (or (roost--field task 'agent) roost-default-agent))
                               ;; By its full name, as a tag of the same name would
@@ -12508,7 +12514,8 @@ replaces would be answered with that one's task."
                               (plist-put :name (alist-get 'title offer))
                               (plist-put :parent (roost--key task))
                               (plist-put :offer (alist-get 'id offer))))
-          (roost--compose-render))))))
+          (roost--compose-render)
+          (setq roost--compose-offered (roost--compose-what)))))))
 
 (defun roost-offer-here (&optional event)
   "Have the agent that made the offer at point, or clicked in EVENT, do it.

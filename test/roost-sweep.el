@@ -494,9 +494,9 @@ among them."
                                       :base "refs/heads/main" :integration "main"
                                       :name "Show each budget's total" :parent (roost-sweep--key state)
                                       ;; Which waits still, in the state whose agent offered it.
-                                      :offer "0a1b2c3d")
-          roost--compose-offered "Add one per budget.")
-    (insert "Add one per budget.")))
+                                      :offer "0a1b2c3d"))
+    (insert "Add one per budget.")
+    (setq roost--compose-offered (roost--compose-what))))
 
 (defun roost-sweep--attempts-setup (state)
   "Make the current buffer compare the attempts STATE's task is one of.

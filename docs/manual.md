@@ -731,7 +731,9 @@ under the attempts that changed it and `·` under those that left it alone:
 On an offer an agent made, listed under its task in the dashboard and
 sidebar: `RET` (`roost-open-offer`) opens it as a new task draft, `e`
 (`roost-offer-here`) has that agent do it there, and `x`
-(`roost-offer-dismiss`) dismisses it; `mouse-3` offers all three. The other
+(`roost-offer-dismiss`) dismisses it; `mouse-3` offers all three. In its
+draft, the **Dismiss offer** button (`roost-compose-dismiss-offer`) dismisses
+it and closes the draft. The other
 keys act on the task it sits under.
 
 `j`/`k` or `TAB` move between tasks; `mouse-1` opens one and `mouse-3` shows its actions.
