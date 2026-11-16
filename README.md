@@ -12,11 +12,12 @@ worktree, a branch and a terminal, here or on any SSH host. It tells you which
 agents need you, and you review and merge their work with Magit. If you've
 used Orca, it's that idea, inside Emacs.
 
-![Emacs with three columns: Roost's sidebar listing six agents on two hosts, the one you are on marked with a band, asking permission, with what it asks under it, three ready, one with changes not looked at and one working, and below them two more projects to start a task in; that agent's Claude Code terminal on the SSH host dev, asking to run python3 -m unittest; and the task's panel, which says to answer it in its terminal and lists the files it has changed](docs/images/roost-hero.png)
+![Emacs with three columns: Roost's sidebar listing seven agents on two hosts, the one you are on marked with a band, two ready, one working, one with changes not looked at, one already looked at and one asking permission, with what it asks under it; that agent's Pi terminal, where it has read the chart it drew, and the bar chart shows above its reply; and the task's panel, which says to review its changes in Magit and lists the file it changed](docs/images/roost-hero.png)
 
-*Six Claude Code agents on two hosts. The one on `dev` wants to run its
-tests: its own terminal in the middle, every task at the left, and at the
-right what to do next and what it changed.*
+*Seven agents on two hosts, six of them Pi and one Claude Code. The Pi agent
+in the middle drew a chart and looked at it, and its terminal shows the
+picture. Every task is at the left, and at the right is what to do next and
+what it changed.*
 
 ## A task, start to finish
 
@@ -29,9 +30,9 @@ and a task's panel its keys work alone.
    GitHub issue or a Jira work item works the same way. `C-c C-c` makes the
    worktree and branch and starts the agent.
 
-   ![An Org file of plans beside the draft that C-c r c made from its heading, Export the notes as a Markdown checklist: Cancel and Create buttons at the top, the project notes on this machine, the agent claude, one attempt, starting from main and merging into main, the task named export, each with its key beside it, and the heading and its notes as the prompt](docs/images/roost-new-task.png)
+   ![An Org file of plans beside the draft that C-c r c made from its heading, Chart spending by category: Cancel and Create buttons at the top, the project ledger on this machine, the agent pi, one attempt, starting from main and merging into main, the task named chart-spending-category, each with its key beside it, and the heading and its notes as the prompt](docs/images/roost-new-task.png)
 
-2. **Go where you're needed.** While it works, an agent on `dev` asks to run
+2. **Go where you're needed.** While it works, another agent asks to run
    its tests. `C-c r n` takes you to the next agent waiting for you, and
    you answer it in its own terminal. With perspective.el or `tab-bar-mode`
    on, each task has a perspective or tab of its own, which keeps its
@@ -42,7 +43,7 @@ and a task's panel its keys work alone.
    Magit, or `e`, sends your notes to the agent. `C-c r r` opens Magit on
    the whole worktree, over TRAMP for a remote task.
 
-   ![A task's terminal above the Magit diff of notes.py, with a review note under a changed line: a tag nobody used lists nothing, silently, so a typo looks like no notes; print "No notes tagged #NAME" when the filter matches none. Beside them, the task's panel lists the two files it changed, one review note for the agent, and the three other tasks that change the same files](docs/images/roost-review.png)
+   ![A task's terminal above the Magit diff of ledger.py, with a review note under a changed line: the bars come out in the order the entries were imported; sort them largest first, so the chart reads at a glance. Beside them, the task's panel lists the file it changed, one review note for the agent, and the two other tasks that change the same file](docs/images/roost-review.png)
 
 4. **Finish.** The agent revises and commits. `C-c r m` squashes the task
    into the branch it started from and removes its worktree, branch and
@@ -61,7 +62,7 @@ it's doing right now (`Running make test`, `Editing ledger.py`), what it
 changed, and its latest reply or what it asks. A notification says the same
 when one finishes or asks for something.
 
-![The dashboard, counting 1 permission, 3 ready, 1 running and 1 seen: two tasks on dev, one ready and one asking to run python3 -m unittest, and four local ones, two ready, one seen and one reading a file, each with a light in the shape of its status, its changes, and its latest reply or what it is doing](docs/images/roost-dashboard.png)
+![The dashboard, counting 1 permission, 3 ready and 3 seen: four Pi tasks on dev, three ready and one seen, and three local ones, two Pi tasks seen and a Claude Code task asking to run python3 -m unittest, each with a light in the shape of its status, its agent, its changes, and its latest reply or what it asks](docs/images/roost-dashboard.png)
 
 ## How it differs
 
@@ -72,8 +73,9 @@ Other Emacs packages run coding agents too, among them
 three ways:
 
 - **Agents run outside Emacs.** Each one runs in tmux, and Emacs shows its
-  terminal. Restart Emacs, and an agent at work is still at work, rather than
-  resumed from its saved conversation.
+  terminal, drawn by [Ghostel](https://github.com/dakra/ghostel), with the
+  pictures an agent sends. Restart Emacs, and an agent at work is still at
+  work, rather than resumed from its saved conversation.
 - **On any machine you can reach over SSH.** One dashboard covers this
   machine and your remote hosts, and Magit reviews their work over TRAMP,
   fastest with [tramp-rpc](docs/manual.md#fitting-your-setup).
@@ -88,14 +90,17 @@ outside the agent.
 
 ## Get started
 
-Roost needs Emacs 29.1 or newer and
-[tmux-control](https://github.com/csheaff/tmux-control) 0.8.2 or newer. Each
+Roost needs Emacs 29.1 or newer, and two packages that draw the agents'
+terminals: [Ghostel](https://github.com/dakra/ghostel) 0.65.0 and
+[ghostel-tmux](https://github.com/dakra/ghostel-tmux) 0.3.0, or newer. Each
 host needs Python 3.9+, Git, tmux 3.1+ and a signed-in agent CLI; remote hosts
 need SSH with keys or an agent. With Emacs 30:
 
 ```elisp
-(use-package tmux-control
-  :vc (:url "https://github.com/csheaff/tmux-control" :rev :newest))
+(use-package ghostel :ensure t)             ; from MELPA
+
+(use-package ghostel-tmux
+  :vc (:url "https://github.com/dakra/ghostel-tmux" :rev :newest))
 
 (use-package roost
   :vc (:url "https://github.com/csheaff/roost" :rev :newest)
@@ -108,8 +113,11 @@ need SSH with keys or an agent. With Emacs 30:
   (roost-task-panel-mode 1))                ; a task's panel beside its terminal
 ```
 
-For straight.el, Doom, Emacs 29, Evil and other modal setups, see the
-[manual](docs/manual.md#install).
+Ghostel offers to download its native module the first time a terminal
+opens. For straight.el, Doom, Emacs 29, Evil and other modal setups, see the
+[manual](docs/manual.md#install). Roost showed terminals with
+[tmux-control](docs/manual.md#terminals-through-tmux-control) until 0.13.0,
+and still can.
 
 1. `M-x roost-doctor` checks this machine and each host, with a fix for
    anything missing.
@@ -141,6 +149,9 @@ These work in the dashboard, the sidebar and a task's panel, and on the menu.
 - Claude Code 2.1.284 and later start in auto mode unless a permission mode
   is set, and rarely ask. To be asked before each command, add
   `"--permission-mode" "manual"` to its entry in `roost-agent-commands`.
+- A terminal draws the images an agent sends in the Kitty graphics
+  protocol. Pi sends them [once told to](docs/manual.md#images-in-a-terminal);
+  Claude Code and Codex send none.
 - A Claude task's agent has three tools of Roost's, to offer you tasks, to
   name your projects and to show you an image beside its terminal; `(setq roost-agent-offers nil)` starts tasks without
   them. `(setq roost-remote-control t)` shows each Claude task in the Claude

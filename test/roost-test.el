@@ -85,8 +85,11 @@ ROOST_TEST_MATCH, a regexp, keeps to the tests whose names match it."
          (dolist (directory ,scratch) (delete-directory directory t))))))
 
 (defmacro roost-test--isolated-in (scratch &rest body)
-  "Run BODY with Roost's state isolated, its files in the directories SCRATCH."
+  "Run BODY with Roost's state isolated, its files in the directories SCRATCH.
+Terminals are tmux-control's, whose functions most tests stub; those of
+ghostel-tmux, the default, choose it themselves."
   `(let ((roost--tasks (make-hash-table :test 'equal))
+         (roost-terminal-backend 'tmux-control)
          (roost-hosts-file (expand-file-name "hosts.json" (nth 0 ,scratch)))
          (roost-projects-file (expand-file-name "projects.json" (nth 0 ,scratch)))
          (roost--file-stamps (make-hash-table :test 'equal))
@@ -1867,8 +1870,8 @@ terminal's, on a pty.  Skips the test where it can't be made."
     (should-error (roost--directory-host "/ssh:dev#2222:/repo/") :type 'user-error)))
 
 (ert-deftest roost-python-command-quotes-program-and-uses-stdin-for-data ()
-  (cl-progv '(tmux-control-remote-tmux-socket-setup tmux-control-ssh-options)
-      '("export TMUX_TMPDIR=/safe/socket" ("-o" "ProxyJump=jump"))
+  (cl-progv '(tmux-control-remote-tmux-socket-setup tmux-control-ssh-options roost-terminal-backend)
+      '("export TMUX_TMPDIR=/safe/socket" ("-o" "ProxyJump=jump") tmux-control)
    (let* ((code "print('literal $() `ticks`')") (argv (roost--python-command "dev" code)))
     (should (equal (car argv) "ssh"))
     (should (member "ProxyJump=jump" argv))
@@ -12473,14 +12476,49 @@ A test stubs the functions of ghostel-tmux it reaches."
        (should (assoc "Eat" checks))
        (should-not (assoc "ghostel-tmux" checks))))))
 
-(ert-deftest roost-doctor-wants-the-tmux-control-package-requires-names ()
+(ert-deftest roost-doctor-wants-the-terminal-packages-package-requires-names ()
   ;; Package managers install what Package-Requires names; the doctor
   ;; flags anything older.
   (roost-test--isolated
    (with-temp-buffer
      (insert-file-contents (expand-file-name "roost.el" roost--package-directory))
-     (should (equal (cadr (assq 'tmux-control (read (lm-header "Package-Requires"))))
-                    roost--tmux-control-version)))))
+     (let ((requires (read (lm-header "Package-Requires"))))
+       (should (equal (cadr (assq 'ghostel-tmux requires)) roost--ghostel-tmux-version))
+       (should (equal (cadr (assq 'ghostel requires)) roost--ghostel-version))
+       ;; tmux-control is yours to install, if you choose it.
+       (should-not (assq 'tmux-control requires))))))
+
+(ert-deftest roost-a-view-opens-beside-a-split-of-panes-with-ghostel-tmux ()
+  ;; A buffer shown in a window of ghostel-tmux's split of a tmux window
+  ;; loses the selection to a pane a moment later.
+  (roost-test--isolated
+   (let (how)
+     (cl-flet ((shown (backend tiled)
+                 (let ((roost-terminal-backend backend))
+                   (cl-letf (((symbol-function 'roost--tiled-pane-window-p) (lambda (_window) tiled)))
+                     (funcall (roost--beside-panes
+                               (lambda () (setq how display-buffer-overriding-action)))))
+                   how)))
+       (should (equal (shown 'ghostel-tmux t)
+                      '((display-buffer-reuse-window roost--display-beside-tiles))))
+       ;; A terminal of one pane shows the view where it always did.
+       (should-not (car (shown 'ghostel-tmux nil)))
+       ;; tmux-control arranges its tiles around the view itself.
+       (should-not (car (shown 'tmux-control t)))))))
+
+(ert-deftest roost-terminal-backend-is-ghostel-tmux-unless-you-choose ()
+  (should (eq (eval (car (get 'roost-terminal-backend 'standard-value)) t) 'ghostel-tmux))
+  ;; With its package missing, opening a task says what to install, and
+  ;; what else can show the terminals.
+  (roost-test--isolated
+   (dolist (backend '(ghostel-tmux tmux-control))
+     (let ((roost-terminal-backend backend)
+           (text-quoting-style 'grave))
+       (cl-letf (((symbol-function 'roost--tmux-installed-p) #'ignore))
+         (let ((said (cadr (should-error (roost--tmux-load) :type 'user-error))))
+           (should (string-search (format "with %s, which is not installed" backend) said))
+           (should (string-search (format "to `%s'" (if (eq backend 'ghostel-tmux) 'tmux-control 'ghostel-tmux))
+                                  said))))))))
 
 (ert-deftest roost-evil-users-get-working-keys ()
   (let (states)

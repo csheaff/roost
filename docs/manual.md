@@ -13,12 +13,15 @@ day of work, every command and option, and how Roost works.
 
 ## Install
 
-Requirements: Emacs 29.1+ and [tmux-control](https://github.com/csheaff/tmux-control)
-0.8.2+ (which brings [Eat](https://codeberg.org/akib/emacs-eat)). Each task host needs
+Requirements: Emacs 29.1+ built with dynamic modules, and the two packages
+that draw a task's terminal: [Ghostel](https://github.com/dakra/ghostel)
+0.65.0+ and [ghostel-tmux](https://github.com/dakra/ghostel-tmux) 0.3.0+.
+Ghostel offers to download its native module the first time a terminal
+opens. Each task host needs
 Python 3.9+, Git, tmux 3.1+, and an installed, signed-in agent CLI (Claude Code
 2.1.78 or newer, Codex 0.160.0 or newer). Remote hosts need key- or agent-based
 SSH; use SSH config aliases for ports and jump hosts. Roost copies its helper to each host itself.
-[ghostel-tmux](#terminals-through-ghostel-tmux) can show the terminals in tmux-control's place.
+[tmux-control](#terminals-through-tmux-control) can show the terminals in their place.
 
 Roost runs Claude Code, Codex, Pi and OpenCode, and means to support a few
 agents well rather than many loosely: a couple from the labs that make the
@@ -30,11 +33,13 @@ through hooks or events Roost can read, and keeps its launch and resume
 arguments stable. Roost can't start an agent it has no adapter for, and an
 agent that falls out of use may lose its adapter.
 
-Emacs 30 (built-in `use-package`):
+Emacs 30 (built-in `use-package`), with Ghostel from MELPA:
 
 ```elisp
-(use-package tmux-control
-  :vc (:url "https://github.com/csheaff/tmux-control" :rev :newest))
+(use-package ghostel :ensure t)
+
+(use-package ghostel-tmux
+  :vc (:url "https://github.com/dakra/ghostel-tmux" :rev :newest))
 
 (use-package roost
   :vc (:url "https://github.com/csheaff/roost" :rev :newest)
@@ -53,16 +58,18 @@ Roost, so after a restart, agents still at work go unnoticed until then. The
 sidebar and the task's panel are optional ([below](#a-day-with-roost)):
 without those lines, `b` and `I` show them when you want them.
 
-Emacs 29: `M-x package-vc-install` tmux-control's URL, then Roost's, and
+Emacs 29: `M-x package-install` ghostel, `M-x package-vc-install`
+ghostel-tmux's URL, then Roost's, and
 `(roost-watch-mode 1)`; for SSH hosts, `(setq roost-hosts '(nil "devbox"))`.
 
 straight.el:
 
 ```elisp
-(use-package tmux-control
-  :straight (:host github :repo "csheaff/tmux-control"))
+(use-package ghostel)
+(use-package ghostel-tmux
+  :straight (:host github :repo "dakra/ghostel-tmux"))
 (use-package roost
-  :straight (:host github :repo "csheaff/roost" :files ("roost.el" "scripts"))
+  :straight (:host github :repo "csheaff/roost" :files ("roost*.el" "scripts"))
   :demand t
   :bind ("C-c r" . roost-dispatch)
   ;; :custom (roost-hosts '(nil "devbox"))
@@ -72,8 +79,9 @@ straight.el:
 Doom Emacs, in `packages.el`:
 
 ```elisp
-(package! tmux-control :recipe (:host github :repo "csheaff/tmux-control"))
-(package! roost :recipe (:host github :repo "csheaff/roost" :files ("roost.el" "scripts")))
+(package! ghostel)
+(package! ghostel-tmux :recipe (:host github :repo "dakra/ghostel-tmux"))
+(package! roost :recipe (:host github :repo "csheaff/roost" :files ("roost*.el" "scripts")))
 ```
 
 and in `config.el`: `(roost-watch-mode 1)`, and for SSH hosts
@@ -96,15 +104,17 @@ Magit is optional (review falls back to Dired).
   row opens its terminal first, then its Magit, files or diff. Retiring,
   merging, discarding or forgetting a task closes its workspace; files you
   opened in it stay open. Set `roost-workspace` to choose. A task's
-  perspective lists the tmux windows of its session you have visited; to
+  perspective lists the tmux windows of its session you have visited. With
+  tmux-control, to
   list every one from the start, such as a shell you left open, set
   `tmux-control-window-buffers` to `all` (tmux-control 0.8.3), and to tell
   them apart by name, `tmux-control-window-buffer-names` to `tab`.
 - **Evil.** Roost's dashboard and panels start in Emacs state so their keys work
   (`roost-evil-state`); `j`/`k` move between tasks. Drafts start in insert
   state. In Magit, Roost's keys work in normal state, with the whole file's
-  diff on `g=` (evil-collection uses `=`). tmux-control starts agent
-  terminals in insert state, so typing reaches the agent; ESC returns to
+  diff on `g=` (evil-collection uses `=`). A terminal is Ghostel's, with
+  the Evil setup you give Ghostel. With tmux-control, agent
+  terminals start in insert state, so typing reaches the agent; ESC returns to
   normal state. To stop an agent's turn, which Claude Code does on ESC,
   press `C-c C-c` (Ctrl-C stops it too). With evil-collection, `C-c C-z` in
   normal state switches ESC between the agents and Evil; setting
@@ -365,10 +375,12 @@ when the terminal would drop below 80 columns, and `q` in it turns it off.
 **Check the work yourself.** `t` opens a shell beside the agent, in the same
 worktree, and returns to it after. Run the tests, start the app, poke at it.
 The agent and the shell are tmux panes, each in a window of its own: `C-x o`
-moves between them (so does `C-c C-o`),
-`C-c C-t` shows one at a time, and tmux-control's other pane keys work too. `C-c |` splits off another pane,
+moves between them, and so does `C-t o`. tmux's own keys work after `C-t`,
+as they do after its prefix in a terminal: `C-t %` splits off another pane,
 which starts in the worktree; it closes when its program exits, and every
-pane closes when the task stops.
+pane closes when the task stops. With tmux-control the keys are its own:
+`C-c C-o` for the next pane, `C-c C-t` to show one at a time and `C-c |` to
+split.
 
 **Review in Magit.** `r` opens Magit on the task's worktree, through TRAMP for
 remote tasks. Stage, edit and commit as usual. The status names the task,
@@ -980,13 +992,15 @@ header line. A failed creation keeps the draft.
   `project = PROJ AND statusCategory != Done ORDER BY rank`.
 - `roost-state-directory`: where each host keeps task records, the helper and
   worktrees; default `~/.local/share/roost`.
-- `roost-socket-name`: the tmux socket (default tmux-control's). Each task has a
+- `roost-socket-name`: the tmux socket (default `main`, or tmux-control's
+  when it shows the terminals). Each task has a
   session of its own, named after its project and task.
-- `roost-terminal-backend` (`tmux-control`): the package that shows a task's
-  tmux session in Emacs. `ghostel-tmux` shows it through
+- `roost-terminal-backend` (`ghostel-tmux`): the package that shows a task's
+  tmux session in Emacs, through
   [ghostel-tmux](https://github.com/dakra/ghostel-tmux), which draws with
-  [Ghostel](https://github.com/dakra/ghostel) in place of Eat; see
-  [Terminals through ghostel-tmux](#terminals-through-ghostel-tmux).
+  [Ghostel](https://github.com/dakra/ghostel). `tmux-control` shows it
+  through tmux-control, which draws with Eat; see
+  [Terminals through tmux-control](#terminals-through-tmux-control).
 - `roost-sidebar-width` (30), `roost-task-panel-width` (44): the sidebar and
   the panel docked beside a task's terminal.
 - `roost-sidebar-recent-projects` (3): how many projects with no tasks the
@@ -1072,25 +1086,15 @@ closed a minute after the last request), so polls skip the handshake; set
 Unreachable hosts are retried with backoff and keep their last known tasks,
 marked unreachable.
 
-### Terminals through ghostel-tmux
+### A task's terminal
 
-Roost shows a task's terminal with tmux-control unless you set
-`roost-terminal-backend` to `ghostel-tmux`. The tasks, their tmux sessions
-and the host helper are the same either way; only the package that draws
-the session in Emacs changes, so you can change back. Set it before you
-open a task, and restart Emacs to change it with terminals open.
+Roost shows a task's tmux session with
+[ghostel-tmux](https://github.com/dakra/ghostel-tmux), which draws it with
+[Ghostel](https://github.com/dakra/ghostel). It needs Ghostel 0.65.0 and
+ghostel-tmux 0.3.0 or newer; `M-x roost-doctor` checks both.
 
-```elisp
-(setq roost-terminal-backend 'ghostel-tmux)
-```
-
-It needs Ghostel 0.65.0 and ghostel-tmux 0.3.0 or newer, which Roost does
-not install; `M-x roost-doctor` checks them in place of tmux-control and
-Eat. What differs:
-
-- A terminal's keys are ghostel-tmux's: `C-t o` for the next pane, where
-  tmux-control has `C-c C-o`. tmux-control's options, its scrollback pager
-  and the corner where it names other sessions are not there.
+- A terminal's keys are ghostel-tmux's: tmux's own, after `C-t`, such as
+  `C-t o` for the next pane.
 - A host is reached through TRAMP. Before the first terminal on a host,
   Roost asks the host by `ssh` where its tmux is and turns on TRAMP's
   direct async processes for it if the host takes a command that long
@@ -1103,13 +1107,59 @@ Eat. What differs:
 - When the connection to a host drops, the terminal attaches again by
   itself once the host answers, trying for about two and a half minutes;
   after that, opening the task attaches it.
+- A tmux window of several panes, as a task's with a shell beside its
+  agent, shows as a split. Magit, a diff or a file you open from one of
+  its panes shows beside the split, not in it. A pane made narrower can
+  show a line or two above what tmux has on its screen, until its program
+  draws again.
+- Over a slow connection, a task opened right after another whose
+  terminal is still arriving can stay unopened, with a message that you
+  went to another window; open it again.
+- A host that runs macOS is untried. Emacs 30.2 on macOS can crash when a
+  task is stopped after its connection dropped, a fault of that Emacs
+  which later ones do not have.
 
-Newer than Roost on tmux-control, and less used: the journeys of
-[Development](#development) that open, answer, split, resize, stop, resume,
-merge and retire tasks pass on it, here and with tasks behind SSH, and
-those of tmux-control's own commands do not apply. A host that runs macOS
-is untried. Emacs 30.2 on macOS can crash when a task is stopped after its
-connection dropped, a fault of that Emacs which later ones do not have.
+#### Images in a terminal
+
+Ghostel draws the images a program sends in the Kitty graphics protocol,
+from this machine or a host, when the program sends the picture itself
+rather than naming a file. tmux does not answer a program that asks
+whether its terminal draws them, so an agent has to be told:
+
+- **Pi** sends the images its tools read once its command sets
+  `PI_IMAGE_PROTOCOL`, which Pi 1.3.0 and 1.5.2 read:
+
+  ```elisp
+  (setf (alist-get "pi" roost-agent-commands nil nil #'equal)
+        '("env" "PI_IMAGE_PROTOCOL=kitty" "pi"))
+  ```
+
+- **Claude Code, Codex and OpenCode** send no images to their terminal. A
+  Claude task can show you one beside its terminal instead, with Roost's
+  `show_image` tool.
+
+`clear` leaves an image on the screen; a program that clears the whole
+screen removes it.
+
+### Terminals through tmux-control
+
+Until 0.13.0 Roost showed terminals with
+[tmux-control](https://github.com/csheaff/tmux-control), which draws them
+with [Eat](https://codeberg.org/akib/emacs-eat), and it still can. The
+tasks, their tmux sessions and the host helper are the same either way;
+only the package that draws the session in Emacs changes, so you can
+change back. Set it before you open a task, and restart Emacs to change it
+with terminals open.
+
+```elisp
+(setq roost-terminal-backend 'tmux-control)
+```
+
+It needs tmux-control 0.8.2 or newer, which Roost does not install;
+`M-x roost-doctor` checks it and Eat in place of ghostel-tmux and Ghostel.
+With it you have tmux-control's options, its scrollback pager and the
+corner where it names other sessions, and no images. More of the journeys
+of [Development](#development) have run on it, over a longer time.
 
 ### Where a task's skills come from
 
@@ -1426,8 +1476,8 @@ What Roost never does:
   worktree, as merging and retiring do, deletes the files Git ignores in
   it, such as build output or a `.env` made there.
 
-Dependencies: Emacs 29.1 or newer, transient, tmux-control and the Eat
-terminal it uses (or, if you choose them, ghostel-tmux and Ghostel), and on
+Dependencies: Emacs 29.1 or newer, transient, ghostel-tmux and the Ghostel
+terminal it uses (or, if you choose them, tmux-control and Eat), and on
 each host tmux, Git and Python 3.9 or newer. The helper is one file of
 Python's standard library.
 
@@ -1601,8 +1651,8 @@ tmux, shell and Git configuration don't change it, and the fake agent writes
 its transcripts there, as Claude Code would in yours, for search. Its journeys start a task from the menu, answer
 it in its terminal, go through the tasks waiting with `n` and back, fold and unfold a long prompt with the mouse, resize the
 frame, merge a commit, review a change in Magit and send a note, edit,
-cancel, remove, send and discard review notes, work in the
-terminal with tmux-control's own keys (split a pane, open and move between
+cancel, remove, send and discard review notes, with tmux-control work in the
+terminal with its own keys (split a pane, open and move between
 tmux windows, switch to another task and back), open a shell beside the
 agent, use the dashboard, turn the panel and sidebar off and on, stop and
 resume an agent, retire a task or discard its work, discard a task by
@@ -1615,9 +1665,9 @@ a task's file, keep a tab per task, two of the same name among them, forget a ta
 one's commits, follow a pull request from GitHub's checks and review to
 its merge, resume an agent that exited, see a host it can't reach,
 check the setup with `roost-doctor`,
-read back through a long reply in tmux-control's scrollback, move between
-agents that all print at once, reconnect a terminal whose connection
-dropped, and forget a host with tasks on it. One leaves something unfinished, as you do (`M-x` or Roost's own
+with tmux-control read back through a long reply in its scrollback and
+reconnect a terminal whose connection dropped, move between
+agents that all print at once, and forget a host with tasks on it. One leaves something unfinished, as you do (`M-x` or Roost's own
 question open, its menu, a draft, a task whose host hasn't replied yet, a
 mouse press in a terminal that never let go, a review note half written,
 the question before discarding a task), and
@@ -1647,15 +1697,15 @@ go. A problem known to come from elsewhere, such as a bug in tmux-control
 awaiting its release, is marked `Known` in its journey: it is reported,
 without failing the run, until it stops happening. Look at the
 screenshots too: the checks don't see what merely looks wrong. Emacs needs
-tmux-control and its dependencies:
+Ghostel, with its native module, ghostel-tmux and Magit:
 
-    make qa QA_FLAGS="-L ../tmux-control --package-dir ~/.emacs.d/elpa"
+    make qa QA_FLAGS="-L ../ghostel/lisp -L ../ghostel-tmux --package-dir ~/.emacs.d/elpa"
 
 Each step is captured as a screenshot on macOS and under X. On a machine
 with no display, such as a container or CI, Xvfb gives it one:
 
     Xvfb :99 -screen 0 1760x1000x24 &
-    DISPLAY=:99 make qa QA_FLAGS="-L ../tmux-control -L ../eat answer offer"
+    DISPLAY=:99 make qa QA_FLAGS="-L ../ghostel/lisp -L ../ghostel-tmux answer offer"
 
 `make gallery`, with the same display, needs no agent, tmux or host: it draws
 the task panel and the dashboard for every task state of the sweep's gallery,
@@ -1669,30 +1719,32 @@ and its tmux server running. A new flow gets a journey in `test/qa/qa.py`.
 Name journeys after the options, as `test/qa/qa.py` names their functions,
 to take only those:
 
-    make qa QA_FLAGS="-L ../tmux-control --package-dir ~/.emacs.d/elpa merge walk_away"
+    make qa QA_FLAGS="-L ../ghostel/lisp -L ../ghostel-tmux --package-dir ~/.emacs.d/elpa merge walk_away"
 
 Three options take the same journeys elsewhere. `--remote` puts the tasks on
 `qa-remote`, a host reached over SSH as yours are: `test/qa/fake_ssh.py` stands
 in for `ssh` and runs each command here, with its own home, delaying what goes
 each way by `--latency` seconds (0.15 by default). Roost's requests,
-tmux-control's connections and TRAMP all go through it, so replies arrive as
+the terminals' connections and TRAMP all go through it, so replies arrive as
 late as a remote host's do, which is where races between them show. Magit's
 review is left out there: over TRAMP's `ssh` method it takes most of a minute.
 `--tuned` gives Emacs settings many configurations have: pixel scrolling, a
-1 GB garbage collection threshold, tmux-control's idle collection, and pane
-directories, which make a remote terminal's directory a TRAMP one.
+1 GB garbage collection threshold and, with tmux-control, its idle
+collection and pane directories, which make a remote terminal's directory a
+TRAMP one.
 `--popular` adds packages many configurations have, from `-L` or
 `--package-dir`: vertico in vertico-posframe's popup, which hides a question
 you click away from, recursive minibuffers, and perspective.el, a
 perspective for each task. Pass them in `QA_FLAGS`, as make takes long
 options for itself:
 
-    make qa QA_FLAGS="--remote --tuned -L ../tmux-control --package-dir ~/.emacs.d/elpa"
+    make qa QA_FLAGS="--remote --tuned -L ../ghostel/lisp -L ../ghostel-tmux --package-dir ~/.emacs.d/elpa"
 
-`--backend ghostel-tmux` takes the journeys with `roost-terminal-backend`
-set to it, given Ghostel and ghostel-tmux with `-L`. Name the journeys:
-those that press tmux-control's own commands (`panes`, `window_buffers`,
-`reconnect_away`, `scrollback`) need tmux-control.
+`--backend tmux-control` takes the journeys with `roost-terminal-backend`
+set to it, given tmux-control and Eat with `-L` or `--package-dir`. It adds
+the journeys that press tmux-control's own commands (`panes`,
+`window_buffers`, `reconnect_away`, `scrollback`, `dropped`), which a run on
+ghostel-tmux leaves out.
 
 The agents update often, and Roost relies on what they report.
 `make contract` scans each installed agent for the events and fields Roost

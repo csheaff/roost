@@ -174,7 +174,8 @@ class Run:
         self.host = None
         self.tmux_env = dict(self.env)
         if args.tuned:
-            self.notes.add("Emacs had pixel scrolling, a 1 GB GC threshold, idle collection and pane directories")
+            self.notes.add("Emacs had pixel scrolling and a 1 GB GC threshold" + (
+                ", idle collection and pane directories" if args.backend == "tmux-control" else ""))
         if args.popular:
             self.notes.add("Emacs had vertico in a posframe, recursive minibuffers and a perspective per task")
         if args.remote:
@@ -282,13 +283,15 @@ class Run:
   (persp-mode 1)
   (setq roost-workspace 'perspective))
 (when %(tuned)s
-  ;; Settings many configurations have, which change how Emacs scrolls,
-  ;; collects garbage and names a terminal's directory.
-  (require 'tmux-control)
+  ;; Settings many configurations have, which change how Emacs scrolls
+  ;; and collects garbage and, with tmux-control, when it collects and
+  ;; how it names a terminal's directory.
   (setq gc-cons-threshold (* 1024 1024 1024) gc-cons-percentage 0.6)
   (pixel-scroll-precision-mode 1)
-  (tmux-control-idle-gc-mode 1)
-  (add-hook 'tmux-control-mode-hook #'tmux-control-pane-directory-mode))
+  (when (eq roost-terminal-backend 'tmux-control)
+    (require 'tmux-control)
+    (tmux-control-idle-gc-mode 1)
+    (add-hook 'tmux-control-mode-hook #'tmux-control-pane-directory-mode)))
 (roost--remember-project %(project)s)
 (roost-watch-mode 1)
 (roost-sidebar-mode 1)
@@ -630,7 +633,11 @@ class Run:
                     problems.append("%s, another task's terminal, is beside %s's" % (window["buffer"], own["name"]))
             if window["mode"] == "roost-sidebar-list-mode" and window["total"] != screen["sidebar-width"]:
                 problems.append("The sidebar is %d columns wide, not %d" % (window["total"], screen["sidebar-width"]))
-            if window.get("history"):
+            if window.get("history") and self.args.backend == "ghostel-tmux" and window["history"] <= 3:
+                # As in `drift': a pane made narrower keeps above its screen
+                # what tmux scrolled away.
+                self.notes.add("A pane made narrower showed lines above tmux's screen, as Ghostel wraps it")
+            elif window.get("history"):
                 # Nothing here scrolls a terminal back: it showed history by itself.
                 problems.append("%s shows %d lines of history above its screen" % (window["buffer"], window["history"]))
             if window.get("terminal") and window.get("pane") and not streaming:
@@ -693,6 +700,15 @@ class Run:
             time.sleep(0.25)
         if ours == theirs:
             return None
+        if self.args.backend == "ghostel-tmux":
+            # A pane made narrower wraps its lines again.  tmux then scrolls
+            # the top of its screen into its history, and Ghostel keeps it
+            # on screen while there is room below, so its screen is tmux's
+            # with a few lines above until the program draws again.
+            for above in range(1, 4):
+                if ours[above:] == theirs:
+                    self.notes.add("A pane made narrower showed lines above tmux's screen, as Ghostel wraps it")
+                    return None
         row = next((i for i, (a, b) in enumerate(zip(ours, theirs)) if a != b), min(len(ours), len(theirs)))
         return "%s shows other than tmux's pane %s, from row %d: %r, where tmux has %r" % (
             window["buffer"], window["pane"], row + 1, (ours[row:row + 1] or [""])[0][:50],
@@ -2654,7 +2670,10 @@ def leave_discard_question(qa, tasks):
 
 def leave_mouse_press(qa, tasks):
     # In a terminal whose program takes the mouse, a press whose release
-    # the terminal never gets, as when tmux wasn't replying.
+    # the terminal never gets, as when tmux wasn't replying.  It was Eat
+    # that then held every click after it, so only tmux-control's terminals.
+    if qa.args.backend != "tmux-control":
+        raise NotApplicable()
     qa.type("mouse\r")
     qa.wait("the terminal to take the mouse", lambda s: qa.emacs.eval("(qa-terminal-takes-mouse)") == "t")
     if qa.emacs.eval("(qa-press-terminal)") != "t":
@@ -2964,6 +2983,10 @@ def walk_away(qa, repo):
             # Still opening: the one you aren't going to.
             tasks["opening"] = waiting if whose == "other" else other
             pair = "%s, then %s" % (title, going)
+            # QA_WALK_ONLY, a regexp, takes only the pairs it matches, as to
+            # look again at one that failed.
+            if not re.search(os.environ.get("QA_WALK_ONLY", ""), pair):
+                continue
             qa.dismiss()
             qa.emacs.eval("(qa-fresh-start)")
             open_task(qa, home)
@@ -4369,6 +4392,11 @@ def show_page(qa, repo):
         ("the panel names the image", lambda s: "Image  chart.png" in qa.window(s, "roost-task-info-mode")["text"])])
 
 
+# Journeys that press tmux-control's own commands, which ghostel-tmux has
+# under other keys or not at all: a whole run takes them only with
+# --backend tmux-control.
+TMUX_CONTROL_ONLY = {"panes", "window_buffers", "reconnect_away", "scrollback", "dropped"}
+
 JOURNEYS = [sweep, answer, next_waiting, fold, resize, merge, review, notes, since_looked, panes, window_buffers, reconnect_away, shell,
             dashboard, panel_keys, stop_resume, retire, discard, teardown, send, attach, update, conflicts, restart,
             search, workload, question_left,
@@ -4390,9 +4418,10 @@ def main():
                         % ", ".join(j.__name__ for j in JOURNEYS))
     parser.add_argument("--emacs", default=os.environ.get("EMACS", "emacs"))
     parser.add_argument("-L", dest="load_path", action="append", default=[], help="Add to load-path")
-    parser.add_argument("--backend", default="tmux-control", choices=["tmux-control", "ghostel-tmux"],
+    parser.add_argument("--backend", default="ghostel-tmux", choices=["ghostel-tmux", "tmux-control"],
                         help="The package that shows terminals (roost-terminal-backend). The journeys "
-                        "of tmux-control's own commands need tmux-control")
+                        "of tmux-control's own commands (%s) are left out without it"
+                        % ", ".join(sorted(TMUX_CONTROL_ONLY)))
     parser.add_argument("--package-dir", action="append", default=[],
                         help="Activate the packages in this directory, without writing to it")
     parser.add_argument("--load", action="append", default=[], metavar="FILE",
@@ -4406,7 +4435,7 @@ def main():
                         help="With --remote, the delay each way (default 0.15)")
     parser.add_argument("--tuned", action="store_true",
                         help="With settings many configurations have: pixel scrolling, a large GC "
-                        "threshold, tmux-control's idle collection and pane directories")
+                        "threshold and, with tmux-control, its idle collection and pane directories")
     parser.add_argument("--popular", action="store_true",
                         help="With packages many configurations have: vertico in a posframe, "
                         "recursive minibuffers and a perspective per task, from -L or --package-dir")
@@ -4415,7 +4444,9 @@ def main():
     unknown = [name for name in args.journeys if name not in known]
     if unknown:
         parser.error("no journey %s; there are %s" % (", ".join(unknown), ", ".join(known)))
-    chosen = [known[name] for name in args.journeys] or JOURNEYS
+    chosen = [known[name] for name in args.journeys] or [
+        journey for journey in JOURNEYS
+        if args.backend == "tmux-control" or journey.__name__ not in TMUX_CONTROL_ONLY]
     qa = Run(args)
     print("Roost QA in %s" % qa.out)
     others = qa.processes(own=False)

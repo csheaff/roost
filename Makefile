@@ -45,9 +45,9 @@ crash:
 	ROOST_CRASH_SWEEP=$(CRASH_SWEEP) python3 -m unittest discover -s test -p 'test_crash.py' -v
 
 # Roost used as you would, in a GUI Emacs of its own with a fake agent,
-# each step checked and captured: see test/qa/qa.py.  Emacs needs
-# tmux-control, and Magit for review, as in
-#   make qa QA_FLAGS="-L ../tmux-control --package-dir ~/.emacs.d/elpa"
+# each step checked and captured: see test/qa/qa.py.  Emacs needs Ghostel
+# and ghostel-tmux, and Magit for review, as in
+#   make qa QA_FLAGS="-L ../ghostel/lisp -L ../ghostel-tmux --package-dir ~/.emacs.d/elpa"
 QA_FLAGS ?=
 
 .PHONY: qa

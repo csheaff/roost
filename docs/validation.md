@@ -35,6 +35,50 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## ghostel-tmux as the default — 2026-11-16
+
+On a Mac, Emacs 30.2 for the journeys and 32.0.50 by hand, Ghostel 0.65.0,
+ghostel-tmux 0.3.0 (359eeeb), tmux 3.6a.
+
+- **Every journey but tmux-control's own, once whole.** 59 journeys, 414
+  steps, 41 with problems, in three journeys; the other 56 passed. Only
+  eleven had run on ghostel-tmux before.
+- **Found, and fixed:** a task with a shell beside its agent has a tmux
+  window of two panes, which ghostel-tmux shows as a split. Magit, a
+  file's diff or a review thread's file opened from there took one of the
+  split's windows, and lost the selection to a pane a moment later (22
+  steps of the walk-away journey). Such a view now shows beside the split.
+- **Not Roost's, and left out or allowed in the journeys:** a mouse press
+  that Eat never let go of (15 steps); the journey of a dropped connection,
+  which presses tmux-control's `C-c C-r` (2); and a pane made narrower
+  showing a line above tmux's screen, as Ghostel wraps it again where tmux
+  scrolls (2).
+- **A flake:** the busy fleet waited 40 s for an agent to run, once, as it
+  had on tmux-control the week before; it passed in the rerun.
+- **After the fixes:** the walk-away journey 137 of 137, and the journeys
+  that open Magit and diffs (review, notes, since looked, overlap, clicks)
+  clean, each run from the branch.
+- **By hand:** real Pi 1.5.2 and Claude Code 2.1.325 tasks for the README's
+  screenshots, on this machine and on a Linux host over SSH, where a Pi
+  task ran as a Roost task for the first time. Pi's chart, read with its
+  read tool, drew in its terminal from both.
+- **Every journey once with `--remote`,** the tasks behind the slow fake
+  SSH: 268 steps, 3 with problems, the same three when run again.
+  - The walk-away journey stops after 48 of its pairs. A task opened right
+    after another, whose terminal of two panes was still arriving, is not
+    opened: "didn't open sort-notes, as you went to another window or
+    buffer while its host replied". Roost takes the first task's panes
+    arriving in the window for you going elsewhere. Opening it again
+    works. Not fixed, and its cause in the layer or in ghostel-tmux not
+    found; the pairs after it have not run with `--remote`.
+  - Just before it, a terminal of two panes showed seven lines above
+    tmux's screen, more than the rewrapping the journeys allow.
+  - The conversation journey compares the conversation's terminal, which
+    is on this machine, with the pane of the same number on the fake
+    host: the journey's fault, with either package.
+- **Not checked:** the whole run with `--popular` or `--tuned` on
+  ghostel-tmux; a host that runs macOS; Emacs 29.
+
 ## Pi through a task, and its reply — 2026-11-16
 
 On a Mac, Emacs 32.0.50, Pi with a local model (LM Studio, qwen3.6-35b),
