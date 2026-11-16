@@ -1095,7 +1095,11 @@ Eat. What differs:
   Roost asks the host by `ssh` where its tmux is and turns on TRAMP's
   direct async processes for it if the host takes a command that long
   (Linux does; macOS does not). Without them a terminal on a host takes
-  three times as long to open, and Roost can stall.
+  three times as long to open, and Roost can stall. TRAMP keeps both
+  settings for the host, not for Roost, so they hold for whatever else
+  you do there through TRAMP in this Emacs. Roost leaves one you set for
+  the host yourself: to keep TRAMP's own processes on a host, give it a
+  connection-local `tramp-direct-async-process` of nil.
 - When the connection to a host drops, the terminal attaches again by
   itself once the host answers, trying for about two and a half minutes;
   after that, opening the task attaches it.

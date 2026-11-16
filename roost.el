@@ -216,27 +216,34 @@ of one package are not the other's."
   "The library that holds what `roost-terminal-backend' names."
   (if (eq roost-terminal-backend 'ghostel-tmux) 'roost-ghostel-tmux 'tmux-control))
 
-(defun roost--tmux-load (&optional quietly)
-  "Load the library of `roost-terminal-backend'.
-QUIETLY, go on without it if it cannot be loaded."
-  (if quietly
-      (ignore-errors (require (roost--tmux-library) nil t))
-    (require (roost--tmux-library))))
+(defun roost--tmux-load ()
+  "Load the library of `roost-terminal-backend'."
+  (require (roost--tmux-library)))
 
-(defun roost--tmux-symbol (name)
-  "The symbol the terminal package gives NAME, such as \"buffer-host\"."
-  (intern (concat (symbol-name (roost--tmux-library))
-                  "-"
-                  name)))
+(defmacro roost--tmux-bound-p (name)
+  "Whether the terminal package is loaded far enough to have function NAME.
+NAME is a string, such as \"buffer-host\"."
+  `(fboundp (if (eq roost-terminal-backend 'ghostel-tmux)
+                ',(intern (concat "roost-ghostel-tmux-" name))
+              ',(intern (concat "tmux-control-" name)))))
 
-(defun roost--tmux-bound-p (name)
-  "Whether the terminal package is loaded far enough to have function NAME."
-  (fboundp (roost--tmux-symbol name)))
+(defconst roost--remote-tmux-socket-setup
+  "fs=$(stat -f -c %T \"$HOME\" 2>/dev/null); case \"$fs\" in nfs|nfs4|lustre|gpfs|cifs|smb*|afs) d=\"/tmp/tmux-$(id -u)-sock\";; *) d=\"$HOME/.tmux-sock\";; esac; mkdir -p \"$d\" && chmod 700 \"$d\" && export TMUX_TMPDIR=\"$d\""
+  "Shell snippet run before tmux on a remote host, with ghostel-tmux.
+As tmux-control has it in `tmux-control-remote-tmux-socket-setup', so a
+host's tasks are found whichever package shows them.")
 
-(defun roost--tmux-value (name)
-  "The value of the terminal package's variable NAME, nil if it has none."
-  (let ((symbol (roost--tmux-symbol name)))
-    (and (boundp symbol) (symbol-value symbol))))
+(defvar tmux-control-default-socket-name)
+(defvar tmux-control-remote-tmux-socket-setup)
+(defvar tmux-control-ssh-options)
+
+(defun roost--tmux-socket-setup ()
+  "Shell snippet the helper runs before tmux on a remote host, or nil.
+The terminal package runs the same, so both find one tmux server."
+  (if (eq roost-terminal-backend 'ghostel-tmux)
+      roost--remote-tmux-socket-setup
+    (require 'tmux-control nil t)
+    (bound-and-true-p tmux-control-remote-tmux-socket-setup)))
 
 (declare-function roost-ghostel-tmux-buffer-p "roost-ghostel-tmux" ())
 
@@ -980,15 +987,16 @@ in, such as the temporary directory here: searching it for each module
 took seconds once it held a million files, and a module someone left
 there would run as you."
   (if host
-      (progn
-        (roost--tmux-load t)
+      ;; First, as it loads tmux-control, whose SSH options follow.
+      (let ((socket-setup (roost--tmux-socket-setup)))
         (append (list "ssh" "-T" "-o" "BatchMode=yes")
-                (or (roost--tmux-value "ssh-options")
+                (or (and (eq roost-terminal-backend 'tmux-control)
+                         (bound-and-true-p tmux-control-ssh-options))
                     '("-o" "ConnectTimeout=8"))
                 (roost--ssh-share-options)
                 (list "--" host
-                      (concat (when-let* ((setup (roost--tmux-value "remote-tmux-socket-setup")))
-                                (concat setup " && "))
+                      (concat (when socket-setup
+                                (concat socket-setup " && "))
                               "exec python3 -I -c " (shell-quote-argument code)))))
     (list "python3" "-I" "-c" code)))
 
@@ -2869,9 +2877,14 @@ not another task's: they keep their grid."
 (defun roost--display-task (task &optional target-pane)
   "Display TASK after ownership validation, selecting TARGET-PANE if supplied."
   (roost--tmux-load)
-  (add-hook (roost--tmux-symbol "switch-session-functions") #'roost--switch-session)
+  ;; ghostel-tmux has no command that switches a terminal's session.
+  (when (eq roost-terminal-backend 'tmux-control)
+    (add-hook 'tmux-control-switch-session-functions #'roost--switch-session))
   (add-hook 'after-change-major-mode-hook #'roost--keep-terminal-in-its-workspace 90)
-  (add-hook (roost--tmux-symbol "window-buffer-functions") #'roost--gather-task-terminals)
+  (add-hook (if (eq roost-terminal-backend 'ghostel-tmux)
+                'roost-ghostel-tmux-window-buffer-functions
+              'tmux-control-window-buffer-functions)
+            #'roost--gather-task-terminals)
   (add-hook 'persp-switch-hook #'roost--gather-task-terminals)
   (roost--leave-side-window)
   (roost--activate-workspace task)
@@ -3490,7 +3503,8 @@ EXTRA is an alist of further request fields, such as the issue."
            ,(cons 'leavePr (if roost-leave-pull-requests t :false))
            ,(cons 'size (roost--terminal-size))
            ,(cons 'socket (or roost-socket-name
-                              (roost--tmux-value "default-socket-name")
+                              (and (eq roost-terminal-backend 'tmux-control)
+                                   (bound-and-true-p tmux-control-default-socket-name))
                               "main"))
            . ,extra)
      (lambda (task)
@@ -14290,9 +14304,9 @@ Requests under way go too, as their replies would find no Roost to take them."
   (dolist (process (copy-sequence roost--requests))
     (process-put process 'roost-dropped t)
     (delete-process process))
-  (dolist (prefix '("tmux-control" "roost-ghostel-tmux"))
-    (remove-hook (intern (concat prefix "-switch-session-functions")) #'roost--switch-session)
-    (remove-hook (intern (concat prefix "-window-buffer-functions")) #'roost--gather-task-terminals))
+  (remove-hook 'tmux-control-switch-session-functions #'roost--switch-session)
+  (remove-hook 'tmux-control-window-buffer-functions #'roost--gather-task-terminals)
+  (remove-hook 'roost-ghostel-tmux-window-buffer-functions #'roost--gather-task-terminals)
   (remove-hook 'after-change-major-mode-hook #'roost--keep-terminal-in-its-workspace)
   (remove-hook 'persp-switch-hook #'roost--gather-task-terminals)
   (when roost-sidebar-mode (roost-sidebar-mode -1))

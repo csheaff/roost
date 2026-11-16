@@ -218,6 +218,12 @@ account, with no badge or verdict.
   that to about 12%; Ghostel wasn't measured with hidden terminals. First
   check that Ghostel can show output it doesn't read from its own process.
   The module is a prebuilt download, one more thing to install.
+  [ghostel-tmux](https://github.com/dakra/ghostel-tmux) since does this
+  outside tmux-control, and Roost can show a task's terminal with it:
+  `roost-terminal-backend` ([validation](validation.md), 2026-11-15).
+  What is left is use, the journeys not yet run on it, and what its
+  layer reads of ghostel-tmux that is private: whether a client ended by
+  a detach or a dropped connection.
 - **Images in a task's terminal.** Pi shows the images its tools read in a
   terminal that draws Kitty or iTerm2 images, and a line of text in their
   place otherwise; under tmux it assumes neither unless `PI_IMAGE_PROTOCOL`

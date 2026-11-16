@@ -35,6 +35,42 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## Terminals through ghostel-tmux — 2026-11-15
+
+`roost-terminal-backend` lets ghostel-tmux show a task's terminal. On a
+Mac, Emacs 30.2, Ghostel 0.65.0 and ghostel-tmux at 359eeeb (0.3.0), with
+`make qa` and its fake agent:
+
+- **On ghostel-tmux** (`--backend ghostel-tmux`), the journeys answer,
+  shell, resize, stop_resume, retire, restart, exits, next_waiting,
+  own_workspace, send and merge: 55 steps of 55, and 55 of 55 with
+  `--remote`, twice each, before and after the review's fixes.
+- **On tmux-control**, the default, every journey: 417 steps, 2 with
+  problems. `fleet` waited 40 s for its first agent to run, and `crashed`
+  had Emacs not answer for 1.4 s; both passed alone, twice, and again in
+  a run of ten journeys after the fixes (49 of 49), with four more over
+  `--remote` (22 of 22).
+- **Not run on ghostel-tmux:** the journeys of tmux-control's own commands
+  (panes, window_buffers, reconnect_away, scrollback), tabs, the
+  walk-away grid and `--popular`.
+
+Before this, on a trial branch where ghostel-tmux stood in under
+tmux-control's name, with the code that is now `roost-ghostel-tmux.el`:
+
+- **A real Claude,** two turns, a permission asked and answered: on the
+  Mac, and on a Linux host over SSH 7 times of 7 with TRAMP's direct async
+  processes, 1 of 7 without, where Roost stalled. Hence the host setup.
+- **A terminal on that host** opened in 0.5 s, 2.5 s the first time;
+  1.5 s and 3.0 s without direct async processes.
+- **A connection dropped** by killing its ssh: the terminal was streaming
+  again by itself in about three seconds, 8 times of 8. Emacs 30.2 then
+  crashed when the task was stopped, 8 runs of 11; Emacs 32.0.50, 0 of 5.
+  The crash is in that Emacs's macOS drawing, a scroll to above the frame
+  that later source clips.
+
+Not tried: a host that runs macOS, a real agent for more than two turns,
+and the host setup of this branch on a real host, which unit tests cover.
+
 ## A pull request left to a real agent — 2026-11-14
 
 #268 was merged with only the fake agent ever told anything. One run since,

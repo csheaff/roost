@@ -20,10 +20,13 @@
 ;;; Code:
 
 (require 'seq)
+(require 'files-x)
+(require 'roost)
 (unless (require 'ghostel-tmux nil t)
   (error "Roost's ghostel-tmux terminals need the package ghostel-tmux"))
 
 (defvar ghostel-tmux-program)
+(defvar tramp-direct-async-process)
 (defvar ghostel-tmux-pane-mode)
 (declare-function ghostel-tmux-controller "ghostel-tmux" (&optional buffer))
 (declare-function ghostel-tmux-controllers "ghostel-tmux" ())
@@ -46,15 +49,6 @@
   "Roost's terminals through ghostel-tmux."
   :group 'roost)
 
-(defcustom roost-ghostel-tmux-default-socket-name "main"
-  "The tmux socket for tasks when `roost-socket-name' is nil."
-  :type 'string)
-
-(defvar roost-ghostel-tmux-remote-tmux-socket-setup
-  "fs=$(stat -f -c %T \"$HOME\" 2>/dev/null); case \"$fs\" in nfs|nfs4|lustre|gpfs|cifs|smb*|afs) d=\"/tmp/tmux-$(id -u)-sock\";; *) d=\"$HOME/.tmux-sock\";; esac; mkdir -p \"$d\" && chmod 700 \"$d\" && export TMUX_TMPDIR=\"$d\""
-  "Shell snippet run before tmux on a remote host, as tmux-control has it.
-Roost's helper runs it too, so both find the same tmux server.")
-
 (defvar roost-ghostel-tmux-window-buffer-functions nil
   "Functions called with each pane buffer ghostel-tmux makes.")
 
@@ -62,9 +56,11 @@ Roost's helper runs it too, so both find the same tmux server.")
   "For the buffer a window shows until its tmux session's pane arrives.")
 
 (defun roost-ghostel-tmux-buffer-p ()
-  "Whether the current buffer could be a terminal of a tmux session.
-A Ghostel terminal, or a buffer that stands in for one on its way."
-  (derived-mode-p 'ghostel-mode 'roost-ghostel-tmux-connecting-mode))
+  "Whether the current buffer is a terminal of a tmux session.
+A pane of ghostel-tmux, live or left by a connection that ended, or a
+buffer that stands in for one on its way.  Not a plain Ghostel terminal."
+  (or (bound-and-true-p ghostel-tmux-pane-mode)
+      (derived-mode-p 'roost-ghostel-tmux-connecting-mode)))
 
 
 ;;; Which session a buffer belongs to
@@ -144,7 +140,10 @@ on 2026-11-15).  With direct async processes, which run tmux by an ssh
 of its own, it does not, where the host takes a command that long.
 And TRAMP's path on the host can leave tmux
 out, as where it is a snap: the tmux named is the one a plain ssh
-finds, which is how Roost's helper runs it."
+finds, which is how Roost's helper runs it.
+TRAMP reads both for the connection, not for the caller, so they hold
+for all you do on HOST through TRAMP in this Emacs.  One you have set
+for HOST yourself is left as it is."
   (unless (member host roost-ghostel-tmux--prepared-hosts)
     (require 'tramp)
     (push host roost-ghostel-tmux--prepared-hosts)
@@ -160,15 +159,19 @@ finds, which is how Roost's helper runs it."
            (longest (seq-some (lambda (line)
                                 (and (string-match-p "\\`[0-9]+\\'" line)
                                      (string-to-number line)))
-                              said)))
+                              said))
+           (default-directory (format "/ssh:%s:" host)))
       (connection-local-set-profile-variables
        profile
        ;; A direct async process is one command line, no longer than the
        ;; host's PIPE_BUF, TRAMP holds: 4096 on Linux, where attaching
        ;; fits, and 512 on macOS, where it does not.
        `(,@(and longest (>= longest 4096)
+                (not (connection-local-p tramp-direct-async-process))
                 '((tramp-direct-async-process . t)))
-         ,@(and tmux `((ghostel-tmux-program . ,tmux)))))
+         ,@(and tmux
+                (not (connection-local-p ghostel-tmux-program))
+                `((ghostel-tmux-program . ,tmux)))))
       (connection-local-set-profiles
        `(:application tramp :machine ,(tramp-file-name-host name)
                       ,@(and (tramp-file-name-user name)
@@ -177,7 +180,7 @@ finds, which is how Roost's helper runs it."
 
 (defun roost-ghostel-tmux--socket (host socket)
   "SOCKET on HOST as `ghostel-tmux-attach' takes it: a name, or a path.
-On a remote host, the path `roost-ghostel-tmux-remote-tmux-socket-setup' puts
+On a remote host, the path `roost--remote-tmux-socket-setup' puts
 it at, asked of the host once: Roost's helper runs that setup before
 tmux, and ghostel-tmux has no command to run first."
   (if (not host)
@@ -188,7 +191,7 @@ tmux, and ghostel-tmux has no command to run first."
           (with-temp-buffer
             (and (eql 0 (process-file
                          "sh" nil t nil "-c"
-                         (concat roost-ghostel-tmux-remote-tmux-socket-setup
+                         (concat roost--remote-tmux-socket-setup
                                  " && printf %s \"$TMUX_TMPDIR/tmux-$(id -u)/$1\"")
                          "sh" socket))
                  (puthash (cons host socket) (string-trim (buffer-string))
@@ -300,7 +303,7 @@ that ended left behind come alive again, as ghostel-tmux does it.
 Returns before the pane is there: until tmux reports it the window shows
 a buffer that stands in for it."
   (let* ((host (and host (not (string-empty-p host)) host))
-         (socket (or socket-name roost-ghostel-tmux-default-socket-name))
+         (socket (or socket-name "main"))
          (place (list host socket session))
          (window (selected-window))
          (shown (window-buffer window))
@@ -419,26 +422,14 @@ back, as when Roost has put them away."
 
 (add-hook 'ghostel-tmux-detach-hook #'roost-ghostel-tmux--detached)
 
-(defun roost-ghostel-tmux-connect (&optional host socket-name session)
-  "Show tmux SESSION from HOST and SOCKET-NAME, creating it if it is not there.
-Not one of Roost's calls: its tests connect a terminal of your own."
-  (let ((socket (or socket-name roost-ghostel-tmux-default-socket-name)))
-    (unless (or host
-                (eql 0 (call-process ghostel-tmux-program nil nil nil
-                                     "-L" socket "has-session" "-t" (concat "=" session))))
-      (call-process ghostel-tmux-program nil nil nil "-L" socket "new-session" "-d" "-s" session))
-    (roost-ghostel-tmux-connect-or-switch host socket session)))
-
 (defun roost-ghostel-tmux-disconnect ()
   "Disconnect the current buffer's client, keeping its panes as they were."
-  (interactive)
   (when-let* ((controller (roost-ghostel-tmux--controller)))
     (ghostel-tmux-detach t controller)))
 
 (defun roost-ghostel-tmux-reconnect ()
   "Connect the session the current buffer showed again, in the selected window.
 Attaching makes its sealed pane buffers live again."
-  (interactive)
   (let ((place (or (roost-ghostel-tmux--buffer-place)
                    (user-error "No tmux session recorded in this buffer"))))
     (apply #'roost-ghostel-tmux-connect-or-switch place)))
@@ -494,7 +485,6 @@ ghostel-tmux splits a tmux window of several panes by itself, with
 
 (defun roost-ghostel-tmux-tile ()
   "Show every pane of the current tmux window, as tmux lays them out."
-  (interactive)
   (when (roost-ghostel-tmux--controller)
     (ghostel-tmux-restore-split)))
 

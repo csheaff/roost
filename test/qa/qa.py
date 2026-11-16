@@ -3262,7 +3262,8 @@ def own_workspace(qa, repo):
         qa.step("Yours again", expect=[("no sidebar", lambda s: not qa_sidebar(s))])
         qa.plain_terminals.add(plain)
         qa.tmux("new-session", "-d", "-s", "plain")
-        qa.emacs.eval("(funcall (roost--tmux-symbol \"connect\") %s %s \"plain\")" % (lisp(qa.host) if qa.host else "nil", lisp(qa.name)))
+        qa.emacs.eval("(%s %%s %%s \"plain\")" % ("roost--tmux-connect-or-switch" if qa.args.backend == "ghostel-tmux"
+                                                  else "tmux-control-connect") % (lisp(qa.host) if qa.host else "nil", lisp(qa.name)))
         mine = lambda s: [w for w in s["windows"] if w.get("terminal") == plain and w.get("pane")]
         screen = qa.wait("your terminal", mine)
         mine_terminal = mine(screen)[0]["buffer"]
