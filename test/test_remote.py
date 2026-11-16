@@ -91,6 +91,19 @@ class Lifecycle(unittest.TestCase):
         self.wait(task, "ready")
         return task
 
+    def pane_directory(self, pane, want):
+        """The directory tmux says PANE's program is in, once it is WANT.
+        tmux starts a pane's program and reports where that is: right after
+        the pane is made, it can still be where tmux's server is."""
+        want = Path(want).resolve()
+        deadline = time.monotonic() + 8
+        while True:
+            said = roost.tmux(self.socket, "display-message", "-p", "-t", pane,
+                              "#{pane_current_path}").stdout.strip()
+            if Path(said).resolve() == want or time.monotonic() > deadline:
+                return Path(said).resolve()
+            time.sleep(0.05)
+
     def wait_for_pane_exit(self, task):
         """The runner records a final status just before its pane's process
         exits, so act on the pane only once tmux shows it dead or gone."""
@@ -538,7 +551,7 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(record["branch"].startswith(prefix), record["branch"])
         self.assertEqual(tmux_says(task["windowId"], "#{window_name}"), name)
         worktree = os.path.realpath(record["worktree"])
-        self.assertEqual(tmux_says(task["paneId"], "#{pane_current_path}"), worktree)
+        self.assertEqual(self.pane_directory(task["paneId"], worktree), Path(worktree))
         listed = self.request("list", full=True)
         self.assertTrue(listed["ok"], listed)
         self.assertEqual([(t["name"], t["behind"]) for t in listed["result"]], [(name, 0)])
@@ -563,7 +576,7 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(reply["result"]["name"], renamed)
         self.assertEqual(tmux_says(task["windowId"], "#{window_name}"), renamed)
         shell = self.request("shell", id=task["id"])["result"]["shellPaneId"]
-        self.assertEqual(tmux_says(shell, "#{pane_current_path}"), worktree)
+        self.assertEqual(self.pane_directory(shell, worktree), Path(worktree))
 
         # Offered by its agent, under a title and with a brief the agent
         # chose, and started from that offer, under its task; another done
@@ -3328,8 +3341,7 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(reply["ok"], reply)
         shell = reply["result"]["shellPaneId"]
         self.assertNotEqual(shell, task["paneId"])
-        path = roost.tmux(self.socket, "display-message", "-p", "-t", shell, "#{pane_current_path}").stdout.strip()
-        self.assertEqual(Path(path).resolve(), Path(task["worktree"]).resolve())
+        self.assertEqual(self.pane_directory(shell, task["worktree"]), Path(task["worktree"]).resolve())
         self.assertEqual(self.request("shell", id=task["id"])["result"]["shellPaneId"], shell)
         self.assertEqual(len(roost.pane_inventory(self.socket)), 2)  # agent and task shell
         self.assertTrue(self.request("stop", id=task["id"])["ok"])
@@ -3351,8 +3363,7 @@ class Lifecycle(unittest.TestCase):
         roost.tmux(self.socket, "-C", "attach", "-t", task["session"],
                    input="split-window -d -t %s cat\n" % task["paneId"])
         (pane,) = set(roost.pane_inventory(self.socket)) - before
-        path = roost.tmux(self.socket, "display-message", "-p", "-t", pane, "#{pane_current_path}").stdout.strip()
-        self.assertEqual(Path(path).resolve(), Path(task["worktree"]).resolve())
+        self.assertEqual(self.pane_directory(pane, task["worktree"]), Path(task["worktree"]).resolve())
         roost.tmux(self.socket, "send-keys", "-t", pane, "C-d")
         deadline = time.monotonic() + 8
         while pane in roost.pane_inventory(self.socket) and time.monotonic() < deadline:
