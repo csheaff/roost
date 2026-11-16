@@ -2855,11 +2855,13 @@ pane's buffer, or another window the one you were in."
   (or (and (eq (selected-window) window) (eq (window-buffer window) shown))
       (and place (eq (selected-frame) frame)
            (equal (roost--terminal-place (window-buffer (selected-window))) place))
-      (roost--terminal-took-window-p window shown)))
+      (and (null place) (roost--terminal-took-window-p window shown))))
 
 (defun roost--terminal-took-window-p (window shown)
   "Whether WINDOW, still selected, shows a terminal in place of SHOWN.
-With ghostel-tmux, which put it there, not you.  A tmux window of
+With ghostel-tmux, which put it there, not you.  The caller asks only
+for a SHOWN that was no terminal: one in place of another may be you
+changing its session.  A tmux window of
 several panes shows as a split, and the split keeps its windows when
 they come to show another buffer: a change of its layout that tmux
 reports late, as over a slow connection or once the minibuffer has

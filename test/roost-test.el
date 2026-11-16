@@ -12584,6 +12584,10 @@ A test stubs the functions of ghostel-tmux it reaches."
              (should (stayed 'ghostel-tmux terminal))
              ;; A buffer of your own choosing is you going elsewhere.
              (should-not (stayed 'ghostel-tmux other))
+             ;; So is another session's terminal in place of a terminal.
+             (let ((roost-terminal-backend 'ghostel-tmux))
+               (set-window-buffer window terminal)
+               (should-not (roost--still-there-p window plain '("far" "main" "one") (selected-frame))))
              ;; tmux-control keeps a split's windows another way.
              (should-not (stayed 'tmux-control terminal))
              ;; Nor in another window than the one you asked from.
