@@ -63,8 +63,8 @@ formal:
 .PHONY: compile
 compile:
 	$(EMACS) -Q --batch -L . --eval '(setq byte-compile-error-on-warn t)' \
-	  -f batch-byte-compile roost.el
-	@rm -f roost.elc
+	  -f batch-byte-compile roost.el roost-ghostel-tmux.el
+	@rm -f roost.elc roost-ghostel-tmux.elc
 
 # Roost's reading of the installed agents (see test/agent_contract.py): a
 # free scan of each, and with contract-live real sessions of a few turns,

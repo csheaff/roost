@@ -18,6 +18,7 @@ Requirements: Emacs 29.1+ and [tmux-control](https://github.com/csheaff/tmux-con
 Python 3.9+, Git, tmux 3.1+, and an installed, signed-in agent CLI (Claude Code
 2.1.78 or newer, Codex 0.160.0 or newer). Remote hosts need key- or agent-based
 SSH; use SSH config aliases for ports and jump hosts. Roost copies its helper to each host itself.
+[ghostel-tmux](#terminals-through-ghostel-tmux) can show the terminals in tmux-control's place.
 
 Roost runs Claude Code, Codex, Pi and OpenCode, and means to support a few
 agents well rather than many loosely: a couple from the labs that make the
@@ -981,6 +982,11 @@ header line. A failed creation keeps the draft.
   worktrees; default `~/.local/share/roost`.
 - `roost-socket-name`: the tmux socket (default tmux-control's). Each task has a
   session of its own, named after its project and task.
+- `roost-terminal-backend` (`tmux-control`): the package that shows a task's
+  tmux session in Emacs. `ghostel-tmux` shows it through
+  [ghostel-tmux](https://github.com/dakra/ghostel-tmux), which draws with
+  [Ghostel](https://github.com/dakra/ghostel) in place of Eat; see
+  [Terminals through ghostel-tmux](#terminals-through-ghostel-tmux).
 - `roost-sidebar-width` (30), `roost-task-panel-width` (44): the sidebar and
   the panel docked beside a task's terminal.
 - `roost-sidebar-recent-projects` (3): how many projects with no tasks the
@@ -1065,6 +1071,41 @@ closed a minute after the last request), so polls skip the handshake; set
 `roost-ssh-share-connections` to nil to leave that to your ssh configuration.
 Unreachable hosts are retried with backoff and keep their last known tasks,
 marked unreachable.
+
+### Terminals through ghostel-tmux
+
+Roost shows a task's terminal with tmux-control unless you set
+`roost-terminal-backend` to `ghostel-tmux`. The tasks, their tmux sessions
+and the host helper are the same either way; only the package that draws
+the session in Emacs changes, so you can change back. Set it before you
+open a task, and restart Emacs to change it with terminals open.
+
+```elisp
+(setq roost-terminal-backend 'ghostel-tmux)
+```
+
+It needs Ghostel 0.65.0 and ghostel-tmux 0.3.0 or newer, which Roost does
+not install; `M-x roost-doctor` checks them in place of tmux-control and
+Eat. What differs:
+
+- A terminal's keys are ghostel-tmux's: `C-t o` for the next pane, where
+  tmux-control has `C-c C-o`. tmux-control's options, its scrollback pager
+  and the corner where it names other sessions are not there.
+- A host is reached through TRAMP. Before the first terminal on a host,
+  Roost asks the host by `ssh` where its tmux is and turns on TRAMP's
+  direct async processes for it if the host takes a command that long
+  (Linux does; macOS does not). Without them a terminal on a host takes
+  three times as long to open, and Roost can stall.
+- When the connection to a host drops, the terminal attaches again by
+  itself once the host answers, trying for about two and a half minutes;
+  after that, opening the task attaches it.
+
+Newer than Roost on tmux-control, and less used: the journeys of
+[Development](#development) that open, answer, split, resize, stop, resume,
+merge and retire tasks pass on it, here and with tasks behind SSH, and
+those of tmux-control's own commands do not apply. A host that runs macOS
+is untried. Emacs 30.2 on macOS can crash when a task is stopped after its
+connection dropped, a fault of that Emacs which later ones do not have.
 
 ### Where a task's skills come from
 
@@ -1382,8 +1423,9 @@ What Roost never does:
   it, such as build output or a `.env` made there.
 
 Dependencies: Emacs 29.1 or newer, transient, tmux-control and the Eat
-terminal it uses, and on each host tmux, Git and Python 3.9 or newer. The
-helper is one file of Python's standard library.
+terminal it uses (or, if you choose them, ghostel-tmux and Ghostel), and on
+each host tmux, Git and Python 3.9 or newer. The helper is one file of
+Python's standard library.
 
 ### Sandboxes
 
@@ -1642,6 +1684,11 @@ perspective for each task. Pass them in `QA_FLAGS`, as make takes long
 options for itself:
 
     make qa QA_FLAGS="--remote --tuned -L ../tmux-control --package-dir ~/.emacs.d/elpa"
+
+`--backend ghostel-tmux` takes the journeys with `roost-terminal-backend`
+set to it, given Ghostel and ghostel-tmux with `-L`. Name the journeys:
+those that press tmux-control's own commands (`panes`, `window_buffers`,
+`reconnect_away`, `scrollback`) need tmux-control.
 
 The agents update often, and Roost relies on what they report.
 `make contract` scans each installed agent for the events and fields Roost

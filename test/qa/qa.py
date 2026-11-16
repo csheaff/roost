@@ -257,6 +257,7 @@ class Run:
 ;; opens an Org file would otherwise count as Emacs not responding.
 (require 'org)
 (setq roost-state-directory %(state)s
+      roost-terminal-backend '%(backend)s
       roost-socket-name %(server)s
       roost-hosts '(%(hosts)s)
       roost-agent-commands '(("claude" %(python)s %(fake)s))
@@ -306,7 +307,7 @@ class Run:
            hosts=self.hosts,
            remote="t" if self.host else "nil",
            tuned="t" if self.args.tuned else "nil",
-           popular="t" if self.args.popular else "nil",
+           popular="t" if self.args.popular else "nil", backend=self.args.backend,
            # The project as Emacs reaches it: on the host, over TRAMP.
            project=lisp(("/ssh:%s:" % self.host if self.host else "") + str(repo) + "/")))
         return init
@@ -344,8 +345,8 @@ class Run:
             time.sleep(0.5)
         else:
             sys.exit("Emacs didn't start its server; see %s" % (self.work / "emacs.log"))
-        if not self.emacs.eval("(and (require 'tmux-control nil t) t)") == "t":
-            sys.exit("Emacs can't load tmux-control: give its directory with -L, or --package-dir")
+        if not self.emacs.eval("(and (ignore-errors (roost--tmux-load)) t)") == "t":
+            sys.exit("Emacs can't load %s: give its directory with -L, or --package-dir" % self.args.backend)
         if self.args.popular and self.emacs.eval("(and (bound-and-true-p vertico-posframe-mode) "
                                                  "(bound-and-true-p persp-mode) t)") != "t":
             sys.exit("With --popular, Emacs needs vertico, vertico-posframe and perspective; see %s"
@@ -827,6 +828,10 @@ def next_waiting(qa, repo):
     qa.status(asking, "permission")
     # Its turn ends while you are back in notes.py, so it waits for you.
     streaming = new_task(qa, "stream next 16 0.4")
+    # Roost opens a task it made once its host has replied, which on a slow
+    # host can be after the task is listed: go back only once it has, as
+    # you would, or it opens over notes.py.
+    qa.wait("it to open", lambda s: (s.get("task") or {}).get("name") == streaming)
     perspective = qa.emacs.eval("(roost--workspace-backend)") == "perspective"
     if perspective:
         # In a task's perspective, notes.py would count as that task's.
@@ -1997,7 +2002,8 @@ def to_shell(qa):
     what is typed next must not reach the agent."""
     screen = qa.screen()
     if (selected_terminal(screen) or {}).get("pane") == (screen.get("task") or {}).get("pane"):
-        qa.keys("C-c C-o")
+        # Each package's own key for the next pane.
+        qa.keys("C-t o" if qa.args.backend == "ghostel-tmux" else "C-c C-o")
 
 
 def answer_yes(qa, name):
@@ -3244,7 +3250,9 @@ def own_workspace(qa, repo):
              lambda s: s["echo"] == "Sidebar on; it shows where a task is open"),
             ("no sidebar", lambda s: not qa_sidebar(s))])
         name = start_task(qa, "Mind the sidebar")
-        screen = qa.wait("the sidebar", lambda s: qa_sidebar(s) and selected_terminal(s))
+        # Its pane too: a buffer that stands in for the terminal until its
+        # pane is there has another name, and goes.
+        screen = qa.wait("the sidebar", lambda s: qa_sidebar(s) and (selected_terminal(s) or {}).get("pane"))
         terminal = selected_terminal(screen)["buffer"]
         qa.step("A task's workspace", expect=[
             ("its terminal", lambda s: (s.get("task") or {}).get("name") == name and selected_terminal(s)),
@@ -3254,9 +3262,10 @@ def own_workspace(qa, repo):
         qa.step("Yours again", expect=[("no sidebar", lambda s: not qa_sidebar(s))])
         qa.plain_terminals.add(plain)
         qa.tmux("new-session", "-d", "-s", "plain")
-        qa.emacs.eval("(tmux-control-connect %s %s \"plain\")" % (lisp(qa.host) if qa.host else "nil", lisp(qa.name)))
-        screen = qa.wait("your terminal", lambda s: any(w.get("terminal") == plain for w in s["windows"]))
-        mine_terminal = next(w["buffer"] for w in screen["windows"] if w.get("terminal") == plain)
+        qa.emacs.eval("(funcall (roost--tmux-symbol \"connect\") %s %s \"plain\")" % (lisp(qa.host) if qa.host else "nil", lisp(qa.name)))
+        mine = lambda s: [w for w in s["windows"] if w.get("terminal") == plain and w.get("pane")]
+        screen = qa.wait("your terminal", mine)
+        mine_terminal = mine(screen)[0]["buffer"]
         # The whole of the frame: a panel steps aside for a split.
         qa.emacs.eval("(progn (select-window (get-buffer-window %s)) (delete-other-windows))" % lisp(mine_terminal))
         qa.step("A plain tmux terminal there", expect=[
@@ -4380,6 +4389,9 @@ def main():
                         % ", ".join(j.__name__ for j in JOURNEYS))
     parser.add_argument("--emacs", default=os.environ.get("EMACS", "emacs"))
     parser.add_argument("-L", dest="load_path", action="append", default=[], help="Add to load-path")
+    parser.add_argument("--backend", default="tmux-control", choices=["tmux-control", "ghostel-tmux"],
+                        help="The package that shows terminals (roost-terminal-backend). The journeys "
+                        "of tmux-control's own commands need tmux-control")
     parser.add_argument("--package-dir", action="append", default=[],
                         help="Activate the packages in this directory, without writing to it")
     parser.add_argument("--load", action="append", default=[], metavar="FILE",

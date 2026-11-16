@@ -24,9 +24,6 @@
 (defvar tmux-control-pause-log-threshold)
 (defvar tmux-control--process)
 (defvar tmux-control--controller)
-(declare-function tmux-control-buffer-host "tmux-control" ())
-(declare-function tmux-control-buffer-socket-name "tmux-control" ())
-(declare-function tmux-control-buffer-session "tmux-control" ())
 
 (defvar qa--errors nil
   "Errors since `qa-take-errors' last ran, newest first, as strings.")
@@ -214,11 +211,14 @@ view stubbed out, so it doesn't count here."
 (defun qa-terminal-pid ()
   "The process id of the connection behind the selected terminal."
   (with-current-buffer (window-buffer (selected-window))
-    (process-id (buffer-local-value 'tmux-control--process
-                                    (or (and (boundp 'tmux-control--controller)
-                                             (buffer-live-p tmux-control--controller)
-                                             tmux-control--controller)
-                                        (current-buffer))))))
+    (if (qa--ghostel-pane-p (current-buffer))
+        (process-id (buffer-local-value 'ghostel-tmux--controller-process
+                                        ghostel-tmux--controller-buffer))
+      (process-id (buffer-local-value 'tmux-control--process
+                                      (or (and (boundp 'tmux-control--controller)
+                                               (buffer-live-p tmux-control--controller)
+                                               tmux-control--controller)
+                                          (current-buffer)))))))
 
 (defun qa-take-errors ()
   "Every error since the last call, oldest first, and forget them."
@@ -863,20 +863,48 @@ doesn't."
             (forward-line 1)))
         (when over `((width . ,width) (lines . ,(vconcat (nreverse over)))))))))
 
+(defvar ghostel-tmux--pane-id)
+(defvar ghostel-tmux--controller-buffer)
+(declare-function ghostel--viewport-start "ghostel" ())
+
+(defun qa--ghostel-pane-p (buffer)
+  "Whether BUFFER is a live pane buffer of ghostel-tmux."
+  (and (boundp 'ghostel-tmux--pane-id)
+       (buffer-local-value 'ghostel-tmux--pane-id buffer)
+       (buffer-live-p (buffer-local-value 'ghostel-tmux--controller-buffer buffer))))
+
+(defun qa--mode (buffer)
+  "BUFFER's major mode by name.
+The journeys know a terminal by tmux-control's names: a pane of
+ghostel-tmux, and the buffer that stands in for one, go by those."
+  (cond ((qa--ghostel-pane-p buffer) "tmux-control-mode")
+        ((eq (buffer-local-value 'major-mode buffer) 'roost-ghostel-tmux-connecting-mode)
+         "tmux-control-connecting-mode")
+        (t (symbol-name (buffer-local-value 'major-mode buffer)))))
+
 (defun qa--terminal (buffer)
   "BUFFER's tmux session as HOST/SOCKET/SESSION, if it is a terminal."
   (with-current-buffer buffer
-    (when (and (derived-mode-p 'tmux-control-mode) (fboundp 'tmux-control-buffer-session)
-               (tmux-control-buffer-session))
-      (format "%s/%s/%s" (or (tmux-control-buffer-host) "local")
-              (tmux-control-buffer-socket-name) (tmux-control-buffer-session)))))
+    (when (and (roost--tmux-buffer-p) (roost--tmux-bound-p "buffer-session")
+               (roost--tmux-buffer-session))
+      (format "%s/%s/%s" (or (roost--tmux-buffer-host) "local")
+              (roost--tmux-buffer-socket-name) (roost--tmux-buffer-session)))))
 
 (defun qa-terminal-screen (buffer)
   "The live screen of terminal BUFFER, a buffer or its name, as lines.
 Right-trimmed, without the trailing blank ones, as `capture-pane' gives
 them; nil when BUFFER isn't a terminal."
-  (when-let* ((buffer (get-buffer buffer)))
+  (catch 'qa-screen
+   (when-let* ((buffer (get-buffer buffer)))
     (with-current-buffer buffer
+      (when (qa--ghostel-pane-p buffer)
+        (let (lines)
+          (dolist (line (split-string (buffer-substring-no-properties
+                                       (or (ghostel--viewport-start) (point-min)) (point-max))
+                                      "\n"))
+            (push (string-trim-right line) lines))
+          (while (and lines (string-empty-p (car lines))) (pop lines))
+          (throw 'qa-screen (vconcat (nreverse lines)))))
       (when (and (derived-mode-p 'tmux-control-mode) (bound-and-true-p tmux-control--terminal)
                  (eat-term-live-p tmux-control--terminal))
         ;; From the start of the line it begins on, which the window shows
@@ -894,17 +922,20 @@ them; nil when BUFFER isn't a terminal."
                                       "\n"))
             (push (string-trim-right line) lines))
           (while (and lines (string-empty-p (car lines))) (pop lines))
-          (vconcat (nreverse lines)))))))
+          (vconcat (nreverse lines))))))))
 
 (defun qa--history-shown (window)
   "How many lines of history terminal WINDOW shows above its live screen."
   (with-current-buffer (window-buffer window)
+    (if (qa--ghostel-pane-p (current-buffer))
+        (let ((screen (or (ghostel--viewport-start) (point-min))))
+          (if (< (window-start window) screen) (count-lines (window-start window) screen) 0))
     (if (and (derived-mode-p 'tmux-control-mode) (bound-and-true-p tmux-control--terminal)
              (eat-term-live-p tmux-control--terminal))
         (let ((screen (save-excursion (goto-char (eat-term-display-beginning tmux-control--terminal))
                                       (line-beginning-position))))
           (if (< (window-start window) screen) (count-lines (window-start window) screen) 0))
-      0)))
+      0))))
 
 (defun qa--line (window line)
   "WINDOW's LINE, `mode-line-format' or `header-line-format', or nil.
@@ -918,8 +949,11 @@ A window parameter of that name takes the buffer's place, as in redisplay."
 (defun qa--tabs (window)
   "WINDOW's header line as shown, the highlighted tab in [brackets], or nil."
   (with-current-buffer (window-buffer window)
-    (when-let* (((derived-mode-p 'tmux-control-mode))
-                (line (qa--line window 'header-line-format)))
+    (when-let* (((roost--tmux-buffer-p))
+                ;; ghostel-tmux has its tabs in the tab line.
+                (line (qa--line window (if (qa--ghostel-pane-p (current-buffer))
+                                           'tab-line-format
+                                         'header-line-format))))
       (let ((shown "") (start 0))
         (while (< start (length line))
           (let ((end (or (next-single-property-change start 'face line) (length line))))
@@ -1012,7 +1046,7 @@ question from another of the same prompt asked after it."
             (mapcar (lambda (window)
                       (let ((buffer (window-buffer window)))
                         `((buffer . ,(buffer-name buffer))
-                          (mode . ,(symbol-name (buffer-local-value 'major-mode buffer)))
+                          (mode . ,(qa--mode buffer))
                           (roost . ,(if (qa--roost-buffer-p buffer) t :json-false))
                           (selected . ,(if (eq window (selected-window)) t :json-false))
                           (side . ,(window-parameter window 'window-side))
@@ -1023,8 +1057,8 @@ question from another of the same prompt asked after it."
                                               (roost--field task 'id))))
                           (history . ,(qa--history-shown window))
                           (pane . ,(with-current-buffer buffer
-                                     (and (derived-mode-p 'tmux-control-mode) (fboundp 'tmux-control-active-pane)
-                                          (tmux-control-active-pane))))
+                                     (and (roost--tmux-buffer-p) (roost--tmux-bound-p "active-pane")
+                                          (roost--tmux-active-pane))))
                           (tabs . ,(qa--tabs window))
                           (header . ,(substring-no-properties
                                       (or (qa--line window 'header-line-format) "")))

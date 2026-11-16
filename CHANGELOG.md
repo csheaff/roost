@@ -4,6 +4,13 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A task's terminal can be shown by ghostel-tmux, which draws with Ghostel,
+  in place of tmux-control: set `roost-terminal-backend` to `ghostel-tmux`,
+  with Ghostel 0.65.0 and ghostel-tmux 0.3.0 or newer installed. Tasks,
+  their tmux sessions and the helper are the same either way. The manual's
+  [Terminals through ghostel-tmux](docs/manual.md#terminals-through-ghostel-tmux)
+  says what differs. tmux-control stays the default. Nothing to do when
+  upgrading.
 - `x` finishes with a task whose agent reports work left in the
   background: it asks, saying it stops the agent, and stops it before
   retiring. Its turn has ended, and that work lives in the worktree `x`

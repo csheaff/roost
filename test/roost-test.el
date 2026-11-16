@@ -12172,6 +12172,88 @@ CachedTasks.tla found it; CachedTasks.NoNewerBranch.cfg is its trace."
          (should (equal (nth 2 check) (car case)))
          (when (nth 2 case) (should (string-match-p (nth 2 case) (nth 3 check)))))))))
 
+;;; The package that shows a terminal
+
+(ert-deftest roost-terminal-backend-names-whose-functions-roost-calls ()
+  ;; Each call Roost makes of a terminal goes to the package the option
+  ;; names, and to no other.
+  (roost-test--isolated
+   (let (called)
+     (cl-letf (((symbol-function 'tmux-control-buffer-session)
+                (lambda () (push 'tmux-control called) "one"))
+               ((symbol-function 'roost-ghostel-tmux-buffer-session)
+                (lambda () (push 'ghostel-tmux called) "two"))
+               ((symbol-function 'tmux-control-select-pane)
+                (lambda (&optional pane) (push (list 'tmux-control pane) called)))
+               ((symbol-function 'roost-ghostel-tmux-select-pane)
+                (lambda (&optional pane) (push (list 'ghostel-tmux pane) called))))
+       (let ((roost-terminal-backend 'tmux-control))
+         (should (equal (roost--tmux-buffer-session) "one"))
+         (roost--tmux-select-pane "%1")
+         (should (roost--tmux-bound-p "buffer-session"))
+         (should (eq (roost--tmux-symbol "window-buffer-functions")
+                     'tmux-control-window-buffer-functions)))
+       (should (equal called '((tmux-control "%1") tmux-control)))
+       (setq called nil)
+       (let ((roost-terminal-backend 'ghostel-tmux))
+         (should (equal (roost--tmux-buffer-session) "two"))
+         (roost--tmux-select-pane "%2")
+         (should (roost--tmux-bound-p "buffer-session"))
+         (should-not (roost--tmux-bound-p "window-id"))
+         (should (eq (roost--tmux-symbol "window-buffer-functions")
+                     'roost-ghostel-tmux-window-buffer-functions)))
+       (should (equal called '((ghostel-tmux "%2") ghostel-tmux)))))))
+
+(ert-deftest roost-terminal-backend-says-which-buffers-are-terminals ()
+  (roost-test--isolated
+   (with-temp-buffer
+     (setq major-mode 'tmux-control-mode)
+     (let ((roost-terminal-backend 'tmux-control))
+       (should (roost--tmux-buffer-p))
+       (should (roost--tmux-buffer-p (current-buffer))))
+     (let ((roost-terminal-backend 'ghostel-tmux))
+       ;; Not loaded, no buffer is one of its terminals.
+       (should-not (roost--tmux-buffer-p))
+       (cl-letf (((symbol-function 'roost-ghostel-tmux-buffer-p) (lambda () 'yes)))
+         (should (eq (roost--tmux-buffer-p) 'yes)))))
+   (with-temp-buffer
+     (let ((roost-terminal-backend 'tmux-control))
+       (should-not (roost--tmux-buffer-p))))))
+
+(ert-deftest roost-terminal-backend-sets-up-a-host-as-its-package-does ()
+  ;; The helper has to find the tmux server the terminal package attaches.
+  (roost-test--isolated
+   (cl-progv '(tmux-control-remote-tmux-socket-setup tmux-control-ssh-options
+               roost-ghostel-tmux-remote-tmux-socket-setup)
+       '("export CONTROL=1" ("-o" "ConnectTimeout=3") "export GHOSTEL=1")
+     (cl-letf (((symbol-function 'roost--tmux-load) #'ignore))
+       (let* ((roost-terminal-backend 'tmux-control)
+              (argv (roost--python-command "far" "code")))
+         (should (string-prefix-p "export CONTROL=1 && exec python3" (car (last argv))))
+         (should (member "ConnectTimeout=3" argv)))
+       (let* ((roost-terminal-backend 'ghostel-tmux)
+              (argv (roost--python-command "far" "code")))
+         (should (string-prefix-p "export GHOSTEL=1 && exec python3" (car (last argv))))
+         (should (member "ConnectTimeout=8" argv)))))))
+
+(ert-deftest roost-doctor-checks-the-terminal-backend-it-is-set-to ()
+  (roost-test--isolated
+   (cl-letf (((symbol-function 'roost--library-version)
+              (lambda (library)
+                (pcase library ("ghostel-tmux" "0.3.0") ("ghostel" "0.64.0") ("tmux-control" "0.8.2")))))
+     (let* ((roost-terminal-backend 'ghostel-tmux)
+            (checks (roost--doctor-local-checks)))
+       (should (nth 1 (assoc "ghostel-tmux" checks)))
+       (should-not (nth 1 (assoc "Ghostel" checks)))
+       (should (string-match-p "0.65.0 or newer" (nth 3 (assoc "Ghostel" checks))))
+       (should-not (assoc "tmux-control" checks))
+       (should-not (assoc "Eat" checks)))
+     (let* ((roost-terminal-backend 'tmux-control)
+            (checks (roost--doctor-local-checks)))
+       (should (nth 1 (assoc "tmux-control" checks)))
+       (should (assoc "Eat" checks))
+       (should-not (assoc "ghostel-tmux" checks))))))
+
 (ert-deftest roost-doctor-wants-the-tmux-control-package-requires-names ()
   ;; Package managers install what Package-Requires names; the doctor
   ;; flags anything older.
