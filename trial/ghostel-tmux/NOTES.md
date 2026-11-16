@@ -459,10 +459,33 @@ attach costs TRAMP's 18 commands. That is TRAMP's, not ghostel-tmux's.
 For dakra, if wanted: under direct async the directory check is the
 only TRAMP command an attach makes, and it opens a whole connection.
 
+## 2026-11-15, later still: a connection that drops
+
+On claylien, the layer's setup on, the fake agent streaming a line
+every half second: every ssh of the Emacs was killed, and the shared
+connection of Roost's helper with them. 2 runs of 2, alike:
+
+- The pane stops where it was and stays so. The echo area says
+  "Ghostel-tmux: killed: 9", once; nothing in the pane says it is no
+  longer live. It does not attach again by itself.
+- Roost's own poll of the host recovers by itself: the task goes from
+  running to ready when the stream ends.
+- Opening the task again brings the pane back in about three seconds,
+  with what the host has, the lines it missed included. Typing in
+  Emacs reaches the agent, stop works, and nothing is asked.
+- Not tried: typing into the pane while it is dead, a network that
+  goes quiet without ending ssh, a host away for minutes.
+
+tmux-control asks whether to reconnect, at each key or click in a dead
+terminal. Here nothing asks and nothing reconnects until you open the
+task. The rexel trial's layer comes back by itself in three seconds.
+The layer could attach again on `ghostel-tmux-detach-hook` when tmux
+did not end the session; not done.
+
 ## Not tried
 
 - The journeys that press tmux-control's own commands: panes, tabs,
   window_buffers, reconnect_away, the scrollback pager.
 - The walk_away grid, and the ERT suite, which stubs tmux-control.
 - A real agent for longer than two turns, the journeys against a real
-  host, a real macOS host, a connection that drops.
+  host, a real macOS host.
