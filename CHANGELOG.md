@@ -4,6 +4,13 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Opening an agent's offer no longer takes it. Clicked to see what it was
+  and left for another task, an offer had gone from the sidebar, with its
+  draft in a buffer nothing showed. Now it waits under its task until you
+  create its task, have the agent do it, or dismiss it; opening it again
+  shows the draft as you left it, another offer opens in place of one you
+  only looked at, and the draft has a **Dismiss offer** button. Nothing to
+  do when upgrading.
 - **Terminals are drawn by Ghostel, through ghostel-tmux, by default.**
   `roost-terminal-backend` is now `ghostel-tmux`, and Roost needs
   [Ghostel](https://github.com/dakra/ghostel) 0.65.0 and

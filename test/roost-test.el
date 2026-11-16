@@ -15401,7 +15401,7 @@ it of the same ID's, or nil for the first."
            (should (string-match-p "\\` +Fix add in calc\\.py +offer"
                                    (buffer-substring (line-beginning-position) (line-end-position))))
            (should (eq (get-text-property (point) 'face) 'roost-dim))
-           ;; Its brief, before you open it, which takes it.
+           ;; Its brief, before you open it.
            (should (string-search "add() subtracts." (get-text-property (point) 'help-echo)))
            (should-not (string-search "Docs" (buffer-string)))
            ;; Point stays on it as the view is drawn again.
@@ -15469,12 +15469,66 @@ it of the same ID's, or nil for the first."
          (funcall render)
          (should (equal (get-text-property (point) 'roost-task) '("dev" "third"))))))))
 
-(ert-deftest roost-an-offer-opens-as-an-ordinary-draft-and-is-taken ()
-  ;; Filled in from the offer and the task that made it.  Opening it takes
-  ;; it, and Create makes a task under that one, and leaves you where you
-  ;; are.
+;; You clicked an offer to see what it was, went to another task, and the
+;; offer was gone from the sidebar: opening it had taken it.
+(ert-deftest roost-an-offer-you-only-looked-at-waits ()
   (roost-test--isolated
-   (let ((default-directory "/tmp/") (xterm-mouse-mode t) created acted kept
+   (let ((default-directory "/tmp/") (xterm-mouse-mode t) acted
+         (offer '((id . "0a1b2c3d") (title . "Fix add in calc.py") (brief . "add() subtracts.")))
+         (second '((id . "11223344") (title . "Name the totals") (brief . "They have none."))))
+     (save-window-excursion
+       (delete-other-windows)
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--act)
+                      (lambda (task action &optional parameters callback _failure)
+                        (push (list (roost--field task 'name) action parameters) acted)
+                        (when callback (funcall callback task))))
+                     ((symbol-function 'yes-or-no-p) (lambda (&rest _) (error "Asked"))))
+             (let ((task (roost--cache-task "dev" (append `((name . "budget") (repo . "/srv/ledger")
+                                                            (live . t) (offers ,offer ,second))
+                                                          (roost-test--task "1111111111111111" "ready")))))
+               (roost--compose-offer task offer)
+               ;; You go elsewhere: both wait under the task still.
+               (switch-to-buffer "*scratch*")
+               (should-not acted)
+               (should (= (length (roost--offers (gethash (roost--key task) roost--tasks))) 2))
+               (with-temp-buffer
+                 (roost-sidebar-list-mode)
+                 (roost--render-sidebar)
+                 (should (string-search "Fix add in calc.py" (buffer-string))))
+               ;; Another offer opens in place of the one you only looked at.
+               (roost--compose-offer task second)
+               (with-current-buffer roost--compose-buffer
+                 (should (equal (roost--compose-prompt) "They have none."))
+                 ;; Written in, it is yours: the first offer's draft doesn't
+                 ;; replace it, and opening its own offer again keeps it.
+                 (goto-char (point-max))
+                 (insert "  Nor a unit.")
+                 (should-error (roost--compose-offer task offer) :type 'user-error)
+                 (roost--compose-offer task second)
+                 (should (equal (roost--compose-prompt) "They have none.  Nor a unit."))
+                 (should-not (roost--compose-looked-p))
+                 (delete-region roost--compose-body (point-max))
+                 (insert "They have none.")
+                 ;; As it came, cancelling asks nothing: the offer waits.
+                 (roost-compose-cancel))
+               (should-not (get-buffer roost--compose-buffer))
+               (should-not acted)
+               ;; Dismissed from its draft, it waits no more, and the draft goes.
+               (roost--compose-offer task offer)
+               (with-current-buffer roost--compose-buffer
+                 (roost-compose-dismiss-offer))
+               (should-not (get-buffer roost--compose-buffer))
+               (should (equal acted '(("budget" "take-offer" ((offer . "0a1b2c3d"))))))))
+         (when (get-buffer roost--compose-buffer)
+           (kill-buffer roost--compose-buffer)))))))
+
+(ert-deftest roost-an-offer-opens-as-an-ordinary-draft-and-waits ()
+  ;; Filled in from the offer and the task that made it.  Opening it only
+  ;; shows it, and Create makes a task under that one, whose host takes
+  ;; the offer, and leaves you where you are.
+  (roost-test--isolated
+   (let ((default-directory "/tmp/") (xterm-mouse-mode t) created acted kept listed
          (offer '((id . "0a1b2c3d") (title . "Fix add in calc.py") (brief . "add() subtracts.\n\nFix it."))))
      (save-window-excursion
        (delete-other-windows)
@@ -15483,6 +15537,8 @@ it of the same ID's, or nil for the first."
                       (lambda (directory name base prompt agent &optional made _failed extra)
                         (setq created (list directory name base prompt agent extra))
                         (setq kept (funcall made (roost-test--task "2222222222222222") nil))))
+                     ((symbol-function 'roost--refresh-host)
+                      (lambda (host &rest _) (push host listed)))
                      ((symbol-function 'roost--act)
                       (lambda (task action &optional parameters callback _failure)
                         (push (list (roost--field task 'name) action parameters) acted)
@@ -15494,15 +15550,18 @@ it of the same ID's, or nil for the first."
                                                           (roost-test--task "1111111111111111" "ready")))))
                (roost--compose-offer task offer)
                (set-buffer roost--compose-buffer)
-               (should (equal acted '(("budget" "take-offer" ((offer . "0a1b2c3d"))))))
+               ;; Looking at it decides nothing: it waits under its task.
+               (should-not acted)
+               (should (roost--offers (gethash '("dev" "1111111111111111") roost--tasks)))
                (should (string-prefix-p "New task, offered by budget" (buffer-string)))
                (should (string-match-p "Start +develop .*merges into develop" (buffer-string)))
                (should (string-match-p "Name +Fix add in calc\\.py" (buffer-string)))
                (should (equal (roost--compose-prompt) "add() subtracts.\n\nFix it."))
-               ;; An ordinary draft's buttons.
+               ;; An ordinary draft's buttons, and one to dismiss the offer.
                (let ((header (roost--compose-header)))
                  (should (string-search "Create" header))
-                 (should (string-search "Cancel" header)))
+                 (should (string-search "Cancel" header))
+                 (should (string-search "Dismiss offer" header)))
                ;; Created in its project, from where the task merges, by its
                ;; agent, under the task that offered it.
                (roost-compose-submit)
@@ -15511,8 +15570,11 @@ it of the same ID's, or nil for the first."
                  (should (equal (butlast fields) '("Fix add in calc.py" "refs/heads/develop"
                                                    "add() subtracts.\n\nFix it." "codex")))
                  (should (equal (alist-get 'parent (car (last fields))) "1111111111111111"))
-                 ;; Which its host drops, should taking it have failed.
+                 ;; Which its host takes as it makes the task.
                  (should (equal (alist-get 'offer (car (last fields))) "0a1b2c3d")))
+               ;; Its host is listed again, so the offer's row goes.
+               (should (equal listed '("dev")))
+               (should-not acted)
                ;; Made, it opens nothing: you stay where you were.
                (should kept)
                (should-not (get-buffer roost--compose-buffer))))
@@ -15685,7 +15747,7 @@ it of the same ID's, or nil for the first."
            (kill-buffer roost--compose-buffer)))))))
 
 (ert-deftest roost-an-offer-waits-while-your-own-draft-holds-a-prompt ()
-  ;; Nothing of yours gives way to it, and it isn't taken.
+  ;; Nothing of yours gives way to it.
   (roost-test--isolated
    (let ((default-directory "/tmp/") acted
          (offer '((id . "0a1b2c3d") (title . "Fix add") (brief . "add() subtracts."))))
@@ -15718,7 +15780,7 @@ it of the same ID's, or nil for the first."
                  (setq roost--draft-note nil
                        roost--compose-asked (list "/ssh:dev:/srv/ledger/" "feedfacefeedface" nil)))
                (roost--compose-offer task offer)
-               (should (equal acted '("take-offer")))
+               (should-not acted)
                (with-current-buffer roost--compose-buffer
                  (should (equal (roost--compose-prompt) "add() subtracts."))
                  (should-not roost--compose-asked))))

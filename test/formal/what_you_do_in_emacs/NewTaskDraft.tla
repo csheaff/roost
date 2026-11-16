@@ -239,9 +239,10 @@ EndQuestion ==
 
 \* RET on an agent's offer, with your draft open: `roost--compose-offer`
 \* leaves a draft that holds a prompt, says what became of a request or
-\* waits on one, and the offer waits.  (One that holds nothing gives way
-\* to the offer's, a new buffer with no ID, as at Init.)  Broken, the
-\* offer's draft takes the place of yours.
+\* waits on one, and the offer waits.  (One that holds nothing, or only
+\* the brief of another offer that waits still, as it came, gives way to
+\* the offer's, a new buffer with no ID, as at Init: nothing you wrote
+\* goes with it.)  Broken, the offer's draft takes the place of yours.
 OpenOffer ==
   /\ ~OfferKeepsDraft
   /\ UserCan

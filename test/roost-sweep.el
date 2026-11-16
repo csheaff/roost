@@ -492,7 +492,10 @@ among them."
     (setq roost--compose-body (copy-marker (point-min))
           roost--compose-fields (list :directory "/ssh:dev:/home/user/ledger/" :agent "claude"
                                       :base "refs/heads/main" :integration "main"
-                                      :name "Show each budget's total" :parent (roost-sweep--key state)))
+                                      :name "Show each budget's total" :parent (roost-sweep--key state)
+                                      ;; Which waits still, in the state whose agent offered it.
+                                      :offer "0a1b2c3d")
+          roost--compose-offered "Add one per budget.")
     (insert "Add one per budget.")))
 
 (defun roost-sweep--attempts-setup (state)

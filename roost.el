@@ -3755,7 +3755,7 @@ DIRECTORY's checkout, or a project Roost knows it is in."
   "Plist of the draft task: :directory :agent :base :integration :name :source.
 A draft of an agent's offer also has :parent, the key of the task whose
 agent offered it, which the task it makes shows under, and :offer, the
-offer's ID, which its host drops then, should taking it have failed.
+offer's ID, which its host drops once it makes that task.
 A fork also has :source-id and :source-agent, its task's, and
 :conversation, whether it goes on with that task's conversation.
 A draft that makes several attempts at its prompt has :attempts: how
@@ -3763,6 +3763,10 @@ many, each by its agent, or the agents of those after the first.")
 
 (defvar-local roost--compose-body nil
   "Marker at the start of the prompt text.")
+
+(defvar-local roost--compose-offered nil
+  "The brief the draft of an agent's offer opened with, to tell one you
+only looked at from one you wrote in.")
 (defvar-local roost--compose-timer nil)
 
 (defvar-local roost--compose-checkout-branch nil
@@ -3856,8 +3860,13 @@ mouse tries again, or gives up."
    (substitute-command-keys
     (concat "\\<roost-compose-mode-map> \\[roost-compose-submit] create · \\[roost-compose-cancel] cancel"
             (when (roost--clicks-p) " · click a field to change it")))
-   '((" Cancel " roost-compose-cancel roost-note-box-button
-      "mouse-1 or \\<roost-compose-mode-map>\\[roost-compose-cancel]: discard the draft")
+   `(,@(when (roost--compose-offer-waiting)
+         '((" Dismiss offer " roost-compose-dismiss-offer roost-note-box-button
+            "mouse-1: dismiss the offer, which no longer waits under its task, and close this draft")))
+     (" Cancel " roost-compose-cancel roost-note-box-button
+      ,(if (roost--compose-offer-waiting)
+           "mouse-1 or \\<roost-compose-mode-map>\\[roost-compose-cancel]: close the draft; the offer waits under its task"
+         "mouse-1 or \\<roost-compose-mode-map>\\[roost-compose-cancel]: discard the draft"))
      (" Create " roost-compose-submit roost-note-box-default-button
       "mouse-1 or \\<roost-compose-mode-map>\\[roost-compose-submit]: create the task"))
    roost--compose-submitting))
@@ -4875,8 +4884,43 @@ this doesn't return, as for `roost--quit-questions-left-open'."
   ;; One of the draft's own, as for its name, would outlive it.
   (roost--quit-questions-here #'roost-compose-cancel)
   (when (or (string-empty-p (roost--compose-prompt))
+            ;; An offer you only looked at, which waits under its task still.
+            (roost--compose-looked-p)
             (yes-or-no-p "Discard this task draft? "))
     (quit-window t)))
+
+(defun roost--compose-offer-waiting ()
+  "The offer this draft opened, if it waits still, and its task, as (TASK OFFER)."
+  (when-let* ((id (plist-get roost--compose-fields :offer))
+              (task (gethash (plist-get roost--compose-fields :parent) roost--tasks))
+              (offer (seq-find (lambda (offer) (equal (alist-get 'id offer) id)) (roost--offers task))))
+    (list task offer)))
+
+(defun roost--compose-looked-p ()
+  "Whether this draft is of an offer that waits still, its brief as it came.
+Closing it loses nothing: the offer opens again as it was."
+  (and (roost--compose-offer-waiting)
+       (not roost--compose-submitting) (not roost--draft-note)
+       (equal (roost--compose-prompt) roost--compose-offered)))
+
+(defun roost-compose-dismiss-offer (&optional event)
+  "Dismiss the offer this draft opened, and close the draft.
+EVENT, a click on the draft's Dismiss offer button, says which draft."
+  (interactive (list last-nonmenu-event))
+  (roost--draft-clicked event 'roost-compose-mode)
+  (unless (derived-mode-p 'roost-compose-mode)
+    (user-error "Not in a task draft"))
+  (roost--quit-questions-here #'roost-compose-dismiss-offer)
+  (pcase-let ((`(,task ,offer) (or (roost--compose-offer-waiting)
+                                   (user-error "No offer waits for this draft"))))
+    (when roost--compose-submitting
+      (user-error "Already creating %s" (roost--compose-name)))
+    (when (or (roost--compose-looked-p)
+              (yes-or-no-p "Dismiss the offer, and discard this task draft? "))
+      (quit-window t)
+      (roost--take-offer task offer
+                         (lambda () (message "Dismissed %s's offer %s"
+                                             (roost--field task 'name) (alist-get 'title offer)))))))
 
 (defun roost-compose-submit (&optional event)
   "Create the drafted task.  The draft is kept if creation fails.
@@ -4954,6 +4998,10 @@ One of the others that fails says so, and the draft goes on."
              (plist-get fields :directory) name (plist-get fields :base) prompt
              (plist-get fields :agent)
              (lambda (task &optional found)
+               ;; Its host took the offer it was made from: list it again,
+               ;; so the offer's row goes now.
+               (when (and (plist-get fields :parent) (plist-get fields :offer))
+                 (roost--refresh-host host t))
                (or (roost--compose-made buffer fields task (if found first what) t)
                    ;; One an agent offered leaves you where you are, as the
                    ;; offer came while you were busy there.
@@ -12183,7 +12231,7 @@ finish with it.  The others act on the task it sits under."
 (defconst roost--clicked-commands
   '(roost-dashboard-mouse-open roost-dashboard-mouse-menu roost-compose-open-task
     roost-sidebar-new-task roost-sidebar-project-menu roost-compose-submit roost-compose-cancel
-    roost-open-offer roost-offer-mouse-menu
+    roost-compose-dismiss-offer roost-open-offer roost-offer-mouse-menu
     roost-click-key roost-send-submit roost-send-cancel roost-send-attach
     roost-pr-submit roost-pr-submit-draft roost-pr-cancel)
   "Commands that clicks on Roost's rows and buttons run.")
@@ -12402,10 +12450,11 @@ reply would bring it back, and its offers went with it."
 (defun roost-open-offer (&optional event)
   "Open the offer at point, or the one clicked in EVENT, as a new task draft.
 The dashboard and sidebar list the offers a task's agent made under it.
-Opening one takes it, so it no longer waits there.  The draft is in that
-task's project, with its agent, starts from the branch that task merges
-into, and is named and prompted as the agent offered it, to change as
-you like.  Create leaves you where you are, and the task it makes shows
+Opening one only shows it: it waits there until you create its task,
+have its agent do it, or dismiss it.  The draft is in that task's
+project, with its agent, starts from the branch that task merges into,
+and is named and prompted as the agent offered it, to change as you
+like.  Create leaves you where you are, and the task it makes shows
 under the one that offered it."
   (interactive (list last-nonmenu-event))
   (pcase-let ((`(,task ,offer) (roost--offer-at event)))
@@ -12416,38 +12465,50 @@ under the one that offered it."
           (funcall open)))))
 
 (defun roost--compose-offer (task offer)
-  "Open OFFER, which TASK's agent made, as a new task draft, and take it.
-A draft that holds a prompt of yours, or says what became of a request
-of its own, stays as it is, and so does the offer.  An offer's draft
-starts anew, as a request asked before with the one it replaces would
-be answered with that one's task."
-  (when-let* ((buffer (get-buffer roost--compose-buffer)))
-    (with-current-buffer buffer
-      (when (or roost--compose-submitting roost--draft-note (not (string-empty-p (roost--compose-prompt))))
-        (roost--pop-to-buffer-in-place buffer)
-        (user-error "%s" (substitute-command-keys
-                          "Create this draft (\\<roost-compose-mode-map>\\[roost-compose-submit]) or cancel it (\\[roost-compose-cancel]) first; the offer waits"))))
-    (kill-buffer buffer))
-  (let* ((elsewhere (roost--offer-project task offer))
-         ;; In another project, it starts where that project's checkout is.
-         (into (unless elsewhere (roost--field task 'integrationBranch))))
-    (roost--compose nil (cons (alist-get 'brief offer) t) (or elsewhere (roost--project-directory task)))
-    (with-current-buffer roost--compose-buffer
-      (setq roost--compose-fields
-            (thread-first roost--compose-fields
-                          (plist-put :agent (or (roost--field task 'agent) roost-default-agent))
-                          ;; By its full name, as a tag of the same name would
-                          ;; otherwise stand for it.
-                          (plist-put :base (and (stringp into) (not (string-empty-p into))
-                                                (or (roost--field task 'integrationRef)
-                                                    (concat "refs/heads/" into))))
-                          (plist-put :integration (and (stringp into) (not (string-empty-p into)) into))
-                          (plist-put :name (alist-get 'title offer))
-                          (plist-put :parent (roost--key task))
-                          (plist-put :offer (alist-get 'id offer))))
-      (roost--compose-render)))
-  ;; Once its draft is open, which holds all of it.
-  (roost--take-offer task offer))
+  "Open OFFER, which TASK's agent made, as a new task draft.
+The offer waits on: its host takes it once the draft makes its task.
+Its own draft, left open, shows again as you left it.  A draft that
+holds a prompt of yours, or says what became of a request of its own,
+stays as it is; one of another offer you only looked at gives way.  An
+offer's draft starts anew, as a request asked before with the one it
+replaces would be answered with that one's task."
+  (let ((buffer (get-buffer roost--compose-buffer)))
+    (if (and buffer
+             (with-current-buffer buffer
+               (and (equal (plist-get roost--compose-fields :parent) (roost--key task))
+                    (equal (plist-get roost--compose-fields :offer) (alist-get 'id offer)))))
+        ;; In the window you were in, as when it first opened: not the
+        ;; sidebar's, where you clicked.
+        (progn (roost--leave-side-window)
+               (roost--pop-to-buffer-in-place buffer))
+      (when buffer
+        (with-current-buffer buffer
+          (when (and (not (roost--compose-looked-p))
+                     (or roost--compose-submitting roost--draft-note
+                         (not (string-empty-p (roost--compose-prompt)))))
+            (roost--pop-to-buffer-in-place buffer)
+            (user-error "%s" (substitute-command-keys
+                              "Create this draft (\\<roost-compose-mode-map>\\[roost-compose-submit]) or cancel it (\\[roost-compose-cancel]) first; the offer waits"))))
+        (kill-buffer buffer))
+      (let* ((elsewhere (roost--offer-project task offer))
+             ;; In another project, it starts where that project's checkout is.
+             (into (unless elsewhere (roost--field task 'integrationBranch))))
+        (roost--compose nil (cons (alist-get 'brief offer) t) (or elsewhere (roost--project-directory task)))
+        (with-current-buffer roost--compose-buffer
+          (setq roost--compose-offered (roost--compose-prompt)
+                roost--compose-fields
+                (thread-first roost--compose-fields
+                              (plist-put :agent (or (roost--field task 'agent) roost-default-agent))
+                              ;; By its full name, as a tag of the same name would
+                              ;; otherwise stand for it.
+                              (plist-put :base (and (stringp into) (not (string-empty-p into))
+                                                    (or (roost--field task 'integrationRef)
+                                                        (concat "refs/heads/" into))))
+                              (plist-put :integration (and (stringp into) (not (string-empty-p into)) into))
+                              (plist-put :name (alist-get 'title offer))
+                              (plist-put :parent (roost--key task))
+                              (plist-put :offer (alist-get 'id offer))))
+          (roost--compose-render))))))
 
 (defun roost-offer-here (&optional event)
   "Have the agent that made the offer at point, or clicked in EVENT, do it.
