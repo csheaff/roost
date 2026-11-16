@@ -948,8 +948,8 @@ keeps the block, and no menu opens. "Yes, implement this plan" is a
 | any | `session_start` | | `ready` | `session_start` |
 | any | `prompt` | not `source=extension` | unchanged | unchanged; `lastPrompt`, `lastReply` None |
 | any | `agent_start` | | `running` | `agent_start` |
-| any | `agent_end` | `pending` | `background` | `Stop` |
-| any | `agent_end` | else | `ready` | `Stop` |
+| any | `agent_end` | `pending` | `background` | `Stop`; `lastReply` its `reply`, else None |
+| any | `agent_end` | else | `ready` | `Stop`; `lastReply` its `reply`, else None |
 | any | `agent_settled` | `aborted` | `ready` | `Interrupt` |
 | any | `agent_settled` | else | unchanged | |
 | `running`, `background` | `ui_prompt_start` | | `permission` | `ui_prompt_start` |

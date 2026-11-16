@@ -64,6 +64,7 @@ PI_IGNORED_EVENTS = dict(
 # What Roost's extension calls on Pi's context, and reads of its events.
 PI_API = (r"isIdle\(\): boolean", r"hasPendingMessages\(\): boolean", r"sessionManager: ",
           r"interface AgentSettledEvent \{[^}]*\baborted: boolean",
+          r"interface AgentEndEvent \{[^}]*\bmessages: AgentMessage\[\]",
           r"interface UIPromptStartEvent \{[^}]*\btitle\?: string",
           r"interface InputEvent \{[^}]*\btext: string[^}]*\bsource: InputSource",
           r"type InputSource = [^;]*\"extension\"")
