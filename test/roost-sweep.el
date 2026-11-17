@@ -420,7 +420,8 @@ With WIDTH nil, as wide as their windows."
 
 (defun roost-sweep--search-replies ()
   "Search results for the gallery's tasks on \"dev\" and a past task.
-Host \"gone\" failed to search."
+The past task ran Codex, and \"dev\" has a task of an agent it can't
+search.  Host \"gone\" failed to search."
   `(("dev"
      (tasks
       ,@(cl-loop for (name . fields) in roost-sweep--gallery
@@ -429,15 +430,20 @@ Host \"gone\" failed to search."
                            (hits ((at . "2026-10-01T10:01:00Z") (role . "user") (session . "s1") (line . 3)
                                   (snippet . "Make the report show what is left")
                                   (text . ,roost-sweep--long-prompt))
-                                 ((at . "2026-10-01T10:02:00Z") (role . "assistant") (session . "s1") (line . 4)
+                                 ((at . "2026-10-01T10:02:00Z") (role . "assistant") (agent . "claude")
+                                  (session . "s1") (line . 4)
                                   (snippet . "I made the report change")
                                   (text . ,roost-sweep--long-reply)))
                            (more . 2)))
       ((past . t) (key . "0a1b2c3d4e/old-report-9f8e7d") (name . "old report") (repo)
-       (hits ((at . "2026-09-01T10:00:00Z") (role . "user") (session . "s2") (line . 7)
-              (snippet . "An older report") (text . "An older report\nin two lines")))
+       (hits ((at . "2026-09-01T10:00:00Z") (role . "user") (agent . "codex") (session . "s2") (line . 7)
+              (snippet . "An older report") (text . "An older report\nin two lines"))
+             ((at . "2026-09-01T10:01:00Z") (role . "assistant") (agent . "codex") (session . "s2") (line . 8)
+              (snippet . "The older report is done") (text . "The older report is done")))
        (more . 0)))
-     (moreTasks . 1))
+     (moreTasks . 1)
+     ;; A task there runs an agent whose conversations Roost doesn't read.
+     (unsearched "opencode"))
     ("gone" :error "ssh: connect to host gone: Connection refused")))
 
 (defun roost-sweep--search-setup (_state)

@@ -14202,9 +14202,11 @@ On a live task's message, task commands such as those in
 (defun roost-search (query)
   "Show the messages in your tasks' conversations that contain QUERY.
 Every word of QUERY must be in one message, written by you or by the
-agent; tool output is not searched.  Each host searches the Claude Code
-conversations of its tasks, including tasks since retired, whose
-conversations Claude keeps, newest first and for at most 20 seconds.
+agent; tool output is not searched.  Each host searches the Claude
+Code, Codex and Pi conversations of its tasks, including tasks since
+retired, whose conversations those agents keep, newest first and for
+at most 20 seconds.  OpenCode's are not searched, and a host with an
+OpenCode task says so.
 RET on a live task's message opens it; TAB shows more of a message,
 up to its first 1,500 characters."
   (interactive (list (read-string "Search conversations: " nil 'roost-search-history)))
@@ -14328,7 +14330,14 @@ than WIDTH, such as a URL, is broken within, as in `roost--reply-preview'."
             ((alist-get 'incomplete reply)
              (insert (propertize (format "%s ran out of time; it searched its newest conversations only\n"
                                          (roost--host-label host))
-                                 'face 'roost-dim)))))
+                                 'face 'roost-dim))))
+      ;; An agent that keeps its conversations where Roost doesn't read
+      ;; them, as OpenCode does, with a task on that host.
+      (unless (eq (car-safe reply) :error)
+        (dolist (agent (alist-get 'unsearched reply))
+          (insert (propertize (format "%s's conversations on %s are not searched\n"
+                                      (roost--agent-name agent) (roost--host-label host))
+                              'face 'roost-dim)))))
     ;; A host that failed was not searched, so say nothing of it.
     (let ((searched (mapcar #'car (seq-remove (lambda (reply) (eq (car-safe (cdr reply)) :error))
                                               (reverse roost--search-replies)))))
@@ -14366,7 +14375,10 @@ than WIDTH, such as a URL, is broken within, as in `roost--reply-preview'."
           (let* ((id (list host (or (alist-get 'id result) (alist-get 'key result))
                            (alist-get 'session hit) (alist-get 'line hit)))
                  (properties (append (list 'roost-search-id id 'roost-search-hit (list host result hit)) row))
-                 (who (if (equal (alist-get 'role hit) "user") "You" "Claude")))
+                 ;; A message from a host that names no agent is Claude's.
+                 (who (if (equal (alist-get 'role hit) "user")
+                          "You"
+                        (roost--agent-name (or (alist-get 'agent hit) "claude")))))
             (let* ((line (concat "  " (roost--search-time (alist-get 'at hit)) "  "
                                  (format "%-7s" who)
                                  (roost--search-highlight

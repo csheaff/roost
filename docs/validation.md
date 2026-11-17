@@ -35,6 +35,43 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## Search in Codex and Pi conversations — 2026-11-17
+
+On a Mac, with search (`/`) reading what Codex and Pi keep, as it did
+Claude Code's:
+
+- **`make contract`** with Claude Code 2.1.325, Codex 0.163.0 and Pi 1.5.2:
+  every check as expected, the new ones too (Codex's binary names the
+  rollout entries search reads; Pi's session manager writes a first entry
+  with the session's folder, then each message as an entry).
+- **`make contract-live CONTRACT_AGENTS=codex`**, Codex 0.163.0: every
+  check as expected. At the end of the run, a search of the scratch store
+  for a word of its prompts found what you sent and what Codex replied, in
+  the run's task, each named as Codex's. Capture kept; it differs from the
+  last by one more Bash command and where two of its events fall.
+- **Files these agents wrote here before.** The new readers went over the
+  23 session files in Pi's own folder on this Mac and the three rollouts
+  in Codex's: each first entry said where its session started, and they
+  held 34 messages of yours and 37 of Pi's with words, 11 and 12 for
+  Codex, with Codex's two notes among yours left out. Codex 0.163.0 says
+  what each message holds (`user.text` for yours,
+  `environments.environment_context` for its note of the folder), which
+  is how they are told apart; the tags are for a Codex that doesn't say.
+- **`make qa`**, Emacs 32 with ghostel-tmux: the search journey, 7 steps
+  with no problem, and the whole run, 394 steps, 1 with a problem. That
+  one is "Merging asks first" in the merge journey, where the task's
+  terminal is a row shorter than its window while the question is open;
+  main at 03b3e38 has it too, run alone.
+- Not run: Pi live, as its model's server was off; a task retired on a
+  real host and then searched; a forked task, whose conversation Codex and
+  Pi copy, so a message from before the fork may show under both tasks; a
+  remote host. No Codex subagent's rollout was seen: the rule that leaves
+  one out, a first entry whose `source` is a table, or a word that begins
+  `subagent` or `internal`, is from the names in Codex's binary.
+- A search with 5,000 rollouts of sessions that were no task's, each
+  first entry 22 KB as Codex's are, took 0.26 seconds: only that entry of
+  each is read.
+
 ## Roost's tools in Codex, OpenCode and Pi — 2026-11-16
 
 On a Mac, with `roost-agent-offers` as each task's `mayOffer`:

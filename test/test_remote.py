@@ -12332,6 +12332,219 @@ class Search(unittest.TestCase):
         reply = roost.rpc(dict(root=str(self.state), action="search", query="  "))
         self.assertEqual(reply, {"ok": False, "error": "Search for at least one word"})
 
+    @staticmethod
+    def stamp(minute):
+        return "2026-10-0%dT10:%02d:00.000Z" % (1 + minute // 60, minute % 60)
+
+    def rollout(self, session, cwd, entries, source="cli", first=None):
+        """Write the rollout of a Codex session started in CWD, as Codex
+        0.163.0 files and records one: by day, its first entry the session's."""
+        path = self.home / ".codex/sessions/2026/10/01" / ("rollout-2026-10-01T10-00-00-%s.jsonl" % session)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        meta = dict(type="session_meta", timestamp=self.stamp(0),
+                    payload=dict(id=session, cwd=str(cwd), source=source, thread_source="user",
+                                 git=dict(branch="roost/x", commit_hash="0" * 40)))
+        path.write_text((json.dumps(meta) if first is None else first) + "\n"
+                        + "".join(json.dumps(entry) + "\n" for entry in entries))
+        return path
+
+    def codex_said(self, role, words, minute, kinds=None, **fields):
+        """A message in a rollout. KINDS are what Codex 0.163.0 says its
+        parts hold; an older Codex says nothing of that."""
+        part = "output_text" if role == "assistant" else "input_text"
+        if kinds:
+            fields["internal_chat_message_metadata_passthrough"] = dict(content_item_kinds=kinds, turn_id="t")
+        return dict(type="response_item", timestamp=self.stamp(minute),
+                    payload=dict(type="message", role=role, content=[dict(type=part, text=words)], **fields))
+
+    def test_codex_rollouts_are_searched_by_where_their_sessions_started(self):
+        live = self.state / "worktrees" / self.repo_hash / "fix-csv-quoting-0a1b2c"
+        self.store.save(dict(id="0a1b2c3d4e5f6a7b", name="fix CSV quoting", repo=self.repo, agent="codex",
+                             worktree=str(live), branch="roost/fix-csv-quoting-0a1b2c", status="ready"))
+        self.rollout("s1", live, [
+            # What Codex tells the model, and its own notes among your messages.
+            self.codex_said("developer", "csv commas are in your instructions", 1),
+            self.codex_said("user", "<environment_context>\n  <cwd>/csv/commas</cwd>\n</environment_context>", 1,
+                            kinds=["environments.environment_context"]),
+            self.codex_said("user", "Quote CSV fields that contain commas", 2, kinds=["user.text"]),
+            # It records what you sent, and each reply, a second time, as an event.
+            dict(type="event_msg", timestamp=self.stamp(2),
+                 payload=dict(type="item_completed", item=dict(
+                     type="UserMessage", content=[dict(type="text", text="Quote CSV fields that contain commas")]))),
+            self.codex_said("assistant", "Looking at the CSV writer for commas.", 3, phase="commentary"),
+            # Tool calls and their output are not what anyone wrote.
+            dict(type="response_item", timestamp=self.stamp(4),
+                 payload=dict(type="custom_tool_call", name="shell", input="grep csv commas")),
+            dict(type="response_item", timestamp=self.stamp(4),
+                 payload=dict(type="custom_tool_call_output", output="csv commas everywhere")),
+            self.codex_said("assistant", "Done: the CSV writer now quotes commas.", 5, phase="final_answer"),
+            # A prompt of yours may hold a tag, or be all one block in a tag
+            # of your own, even one of Codex's, and is still yours: Codex
+            # says so.
+            self.codex_said("user", "<td> cells lose their csv commas, fix that too", 6, kinds=["user.text"]),
+            self.codex_said("user", "<test_case>csv commas</test_case>", 7, kinds=["user.text"]),
+            self.codex_said("user", "<skill>csv commas as a skill of mine</skill>", 8, kinds=["user.text"]),
+            # A note of Codex's is its own whatever it looks like.
+            self.codex_said("user", "csv commas, noted by Codex in plain words", 9, kinds=["skills.injection"]),
+        ])
+        # An older Codex says nothing of what a message holds: its notes are
+        # told by the tags it wraps them in, and a block in any other is yours.
+        older = self.state / "worktrees" / self.repo_hash / "older-codex-5e4d3c"
+        self.rollout("s0", older, [
+            self.codex_said("user", "<environment_context>\n  <cwd>/csv/commas</cwd>\n</environment_context>", 1),
+            self.codex_said("user", "<skill>\n<name>csv commas</name>\n</skill>", 2),
+            self.codex_said("user", "<test_case>csv commas</test_case>", 3),
+            self.codex_said("user", "<td>csv commas</td>", 4),
+        ])
+        # Retired: no record, but Codex keeps the rollout, which says where it started.
+        retired = self.state / "worktrees" / self.repo_hash / "csv-import-9f8e7d"
+        self.rollout("s2", retired, [self.codex_said("user", "Import CSV with commas in quotes", 120)])
+        # A session outside Roost, a subagent's in the task's worktree, and
+        # rollouts whose first entry says nothing of where they started.
+        self.rollout("s3", "/elsewhere/project", [self.codex_said("user", "csv commas of a quokka", 200)])
+        self.rollout("s4", live, [self.codex_said("user", "csv commas for a subagent", 201)],
+                     source=dict(subagent=dict(thread_spawn=dict(depth=1))))
+        # Codex's own sessions, as it may name them by a word.
+        self.rollout("s7", live, [self.codex_said("user", "csv commas for a subagent named by a word", 201)],
+                     source="subagent:thread_spawn")
+        self.rollout("s8", live, [self.codex_said("user", "csv commas for its guardian", 201)],
+                     source="internal:guardian")
+        self.rollout("s5", live, [self.codex_said("user", "csv commas after a damaged line", 202)], first="{")
+        self.rollout("s6", live, [self.codex_said("user", "csv commas with no session", 203)],
+                     first=json.dumps(self.codex_said("user", "csv commas first", 203)))
+
+        first, second, third = self.search("COMMAS csv")["tasks"]
+        self.assertEqual((first["name"], first["past"], first["repo"], first["branch"]),
+                         ("csv import", True, self.repo, "roost/x"))
+        self.assertEqual((second["id"], second["name"]), ("0a1b2c3d4e5f6a7b", "fix CSV quoting"))
+        self.assertEqual([(hit["role"], hit["agent"], hit["text"]) for hit in second["hits"]],
+                         [("user", "codex", "Quote CSV fields that contain commas"),
+                          ("assistant", "codex", "Looking at the CSV writer for commas."),
+                          ("assistant", "codex", "Done: the CSV writer now quotes commas."),
+                          ("user", "codex", "<td> cells lose their csv commas, fix that too"),
+                          ("user", "codex", "<test_case>csv commas</test_case>"),
+                          ("user", "codex", "<skill>csv commas as a skill of mine</skill>")])
+        self.assertEqual((third["name"], [hit["text"] for hit in third["hits"]]),
+                         ("older codex", ["<test_case>csv commas</test_case>", "<td>csv commas</td>"]))
+        self.assertEqual((second["hits"][0]["session"], second["hits"][0]["line"], second["hits"][0]["at"]),
+                         ("rollout-2026-10-01T10-00-00-s1", 4, self.stamp(2)))
+        self.assertEqual(second["more"], 0)
+        # Of a session started elsewhere, only the first entry is read:
+        # Codex keeps every session it ever ran, most of them no task's.
+        read = []
+        wrote = roost.CodexAgent.wrote
+
+        def reading(adapter, entry):
+            read.append(entry)
+            return wrote(adapter, entry)
+
+        with patch.object(roost.CodexAgent, "wrote", reading):
+            self.assertEqual(self.search("quokka")["tasks"], [])
+            self.assertEqual(read, [])
+            self.search("writer")
+        self.assertEqual(len(read), 2)
+
+    def pi_session(self, task_id, name, cwd, entries, first=None):
+        """Write a session Pi ran in CWD, in the folder Roost gives it for
+        the task with TASK_ID, as Pi records one."""
+        path = self.state / "sessions" / task_id / (name + ".jsonl")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        header = dict(type="session", version=3, id=name, timestamp=self.stamp(0), cwd=str(cwd))
+        path.write_text((json.dumps(header) if first is None else first) + "\n"
+                        + "".join(json.dumps(entry) + "\n" for entry in entries))
+        return path
+
+    def pi_said(self, role, content, minute, **fields):
+        return dict(type="message", id="m%d" % minute, parentId=None, timestamp=self.stamp(minute),
+                    message=dict(role=role, content=content, **fields))
+
+    def test_pi_sessions_are_searched_in_the_folders_roost_gives_it(self):
+        live = self.state / "worktrees" / self.repo_hash / "fix-csv-quoting-0a1b2c"
+        self.store.save(dict(id="0a1b2c3d4e5f6a7b", name="fix CSV quoting", repo=self.repo, agent="pi",
+                             worktree=str(live), branch="roost/fix-csv-quoting-0a1b2c", status="ready"))
+        self.pi_session("0a1b2c3d4e5f6a7b", "2026-10-01T10-00-00-000Z_s1", live, [
+            dict(type="model_change", id="c1", parentId=None, timestamp=self.stamp(0), provider="p", modelId="csv commas"),
+            self.pi_said("user", [dict(type="text", text="Quote CSV fields that contain commas")], 1),
+            self.pi_said("assistant", [dict(type="thinking", thinking="csv commas"),
+                                       dict(type="text", text="Looking at the CSV writer for commas."),
+                                       dict(type="toolCall", name="bash", arguments=dict(command="grep csv commas"))],
+                         2, stopReason="toolUse"),
+            # Tool output, a command you ran, and what an extension added are not what anyone wrote.
+            self.pi_said("toolResult", [dict(type="text", text="csv commas everywhere")], 3, toolName="bash"),
+            self.pi_said("bashExecution", None, 4, command="grep csv commas", output="csv commas"),
+            dict(type="custom_message", customType="note", content="csv commas noted", display=True,
+                 id="x1", parentId="m4", timestamp=self.stamp(4)),
+            self.pi_said("assistant", [dict(type="text", text="Done: the CSV writer now quotes commas.")], 5,
+                         stopReason="stop"),
+        ])
+        # Retired: its record is gone, and its folder of sessions stays.
+        retired = self.state / "worktrees" / self.repo_hash / "csv-import-9f8e7d"
+        self.pi_session("9f8e7d6c5b4a3f2e", "2026-10-06T10-00-00-000Z_s2", retired,
+                        [self.pi_said("user", [dict(type="text", text="Import CSV with commas in quotes")], 120)])
+        # A session started elsewhere, and files that don't say where they started.
+        self.pi_session("0a1b2c3d4e5f6a7b", "s3", "/elsewhere/project",
+                        [self.pi_said("user", [dict(type="text", text="csv commas")], 200)])
+        self.pi_session("0a1b2c3d4e5f6a7b", "s4", live,
+                        [self.pi_said("user", [dict(type="text", text="csv commas after a damaged line")], 201)], first="{")
+        self.pi_session("0a1b2c3d4e5f6a7b", "s5", live, [], first=json.dumps(
+            self.pi_said("user", [dict(type="text", text="csv commas first")], 202)))
+
+        first, second = self.search("COMMAS csv")["tasks"]
+        self.assertEqual((first["name"], first["past"], first["repo"], first["branch"]),
+                         ("csv import", True, self.repo, None))
+        self.assertEqual((second["id"], second["name"]), ("0a1b2c3d4e5f6a7b", "fix CSV quoting"))
+        self.assertEqual([(hit["role"], hit["agent"], hit["text"]) for hit in second["hits"]],
+                         [("user", "pi", "Quote CSV fields that contain commas"),
+                          ("assistant", "pi", "Looking at the CSV writer for commas."),
+                          ("assistant", "pi", "Done: the CSV writer now quotes commas.")])
+        self.assertEqual((second["hits"][0]["session"], second["hits"][0]["line"]),
+                         ("2026-10-01T10-00-00-000Z_s1", 3))
+
+    def test_each_agents_conversations_are_searched_newest_first_and_the_rest_named(self):
+        tasks = {}
+        for number, agent in enumerate(("claude", "codex", "pi", "opencode"), 1):
+            worktree = self.state / "worktrees" / self.repo_hash / ("by-%s-%06d" % (agent, number))
+            tasks[agent] = dict(id="%016d" % number, name="by " + agent, repo=self.repo, agent=agent,
+                                worktree=str(worktree), status="ready")
+            self.store.save(tasks[agent])
+        # A task from before Roost recorded agents is Claude's.
+        del tasks["claude"]["agent"]
+        self.store.save(tasks["claude"])
+        claude = self.conversation(tasks["claude"]["worktree"], "s", [self.said("user", "heron by claude", 1)])
+        codex = self.rollout("s", tasks["codex"]["worktree"], [self.codex_said("user", "heron by codex", 3)])
+        pi = self.pi_session(tasks["pi"]["id"], "s", tasks["pi"]["worktree"],
+                             [self.pi_said("user", [dict(type="text", text="heron by pi")], 2)])
+        for path, when in ((claude / "s.jsonl", 2000), (codex, 1000), (pi, 3000)):
+            os.utime(path, (when, when))
+        read = []
+        scan = roost.search_transcript
+
+        def reading(path, words, owner, deadline, agent):
+            read.append(agent)
+            return scan(path, words, owner, deadline, agent)
+
+        with patch.object(roost, "search_transcript", reading):
+            result = self.search("heron")
+        # Conversations are read newest first, whichever agent keeps them,
+        # and tasks listed by their newest message.
+        self.assertEqual(read, ["pi", "claude", "codex"])
+        self.assertEqual([(task["name"], [hit["agent"] for hit in task["hits"]]) for task in result["tasks"]],
+                         [("by codex", ["codex"]), ("by pi", ["pi"]), ("by claude", ["claude"])])
+        # OpenCode keeps its conversations where Roost doesn't read them:
+        # the reply says so while a task runs it.
+        self.assertEqual(result["unsearched"], ["opencode"])
+        self.store.remove(tasks["opencode"]["id"])
+        self.assertEqual(self.search("heron")["unsearched"], [])
+        # Another agent run in a task's worktree is found there too.
+        self.rollout("t", tasks["claude"]["worktree"], [self.codex_said("assistant", "heron seen from codex", 4)])
+        found = {task["name"]: task for task in self.search("heron")["tasks"]}
+        self.assertEqual([(hit["agent"], hit["role"]) for hit in found["by claude"]["hits"]],
+                         [("claude", "user"), ("codex", "assistant")])
+        # Time up while finding one agent's conversations stops the rest too.
+        with patch.object(roost, "SEARCH_SECONDS", -1):
+            result = self.search("heron")
+        self.assertEqual((result["tasks"], result["incomplete"]), ([], True))
+
 
 class LastMessage(unittest.TestCase):
     """Adapters read the end of each agent's own transcript, from a fake HOME."""

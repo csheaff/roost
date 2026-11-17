@@ -14,6 +14,15 @@ What each release changes, and what to do when upgrading. Newest first.
   sends a tool call's input as it is written; LM Studio sends it whole, and
   the page then fills in at once. Nothing to do when upgrading: Pi tasks
   started from now on do this.
+- `/` searches the conversations of Codex and Pi tasks too, retired tasks'
+  included; until now it found only what was said in Claude Code tasks.
+  Each host reads the rollouts Codex keeps in `~/.codex/sessions`, those
+  of sessions started in a task's worktree, and the session files Pi
+  writes in the folder Roost gives each task. Each message names its
+  agent, and a Codex subagent's session is left out, as Claude Code's
+  are. OpenCode keeps its conversations in a store of its own, which
+  Roost doesn't read: a host with an OpenCode task says they are not
+  searched. Nothing to do when upgrading.
 - **Codex, OpenCode and Pi tasks have Roost's tools too.** With
   `roost-agent-offers` on, a task of any agent can offer tasks
   (`propose_task`) and show you an image beside its terminal
