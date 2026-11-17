@@ -16742,7 +16742,16 @@ report.py, and the third alone changes src/totals.py."
                  (setq size '(30 . 4))
                  (roost--display-shown buffer terminal)
                  (should (= (window-total-height window) yours))
-                 (should (= (length drawn) 4))))))
+                 (should (= (length drawn) 4)))
+               ;; Beside a grid of its panes, the window is Roost's to
+               ;; resize as well.
+               (delete-window window)
+               (setq size '(30 . 4))
+               (let ((window (roost--display-shown buffer 'main)))
+                 (should (= (window-total-height window) 6))
+                 (setq size '(30 . 8))
+                 (roost--display-shown buffer 'main)
+                 (should (= (window-total-height window) 10))))))
        (kill-buffer buffer)))))
 
 (ert-deftest roost-an-image-fills-the-frame-and-the-windows-come-back ()
@@ -16772,7 +16781,7 @@ report.py, and the third alone changes src/totals.py."
              (should (= (length (window-list)) 2))
              (should (eq (window-buffer (get-buffer-window buffer)) buffer))
              (should-not (eq (window-buffer (selected-window)) buffer))
-             (should-not (buffer-local-value 'roost--shown-back buffer))
+             (should-not (window-parameter (get-buffer-window buffer) 'roost-shown-back))
              ;; And there `q' closes its window, as before.
              (with-selected-window (get-buffer-window buffer)
                (roost-quit-image))
@@ -16816,7 +16825,7 @@ report.py, and the third alone changes src/totals.py."
            (switch-to-buffer "*scratch*")
            (roost--put-away-shown other)
            (should (eq (gethash key roost--shown-waiting) buffer))
-           (should-not (buffer-local-value 'roost--shown-back buffer))
+           (should-not (window-parameter (selected-window) 'roost-shown-back))
            (cl-letf (((symbol-function 'roost--display-shown)
                       (lambda (buffer _window) (push buffer displayed))))
              (roost--show-waiting mine)

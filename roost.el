@@ -1743,12 +1743,11 @@ notifies of itself."
 (defvar-local roost--shown-measured nil
   "The size of the image in this buffer, and when it was shown.
 As (AT WIDTH . HEIGHT), in pixels, or (AT) for one that can't be measured.")
-(defvar-local roost--shown-back nil
-  "How to put the windows back while this buffer's image fills its frame.
-As (WINDOW . CONFIGURATION): the window that shows it, and the frame's
-windows as they were.")
 (put 'roost--shown-measured 'permanent-local t)
-(put 'roost--shown-back 'permanent-local t)
+;; A window whose image fills its frame has the parameter
+;; `roost-shown-back', how to put the windows back: (BUFFER .
+;; CONFIGURATION), the image's buffer and the frame's windows as they
+;; were.  The window's, not the buffer's, which another frame can show.
 (defvar-local roost--shown-page nil
   "The page in this buffer, if its agent showed a page and not an image.
 Its bytes, as its host sent them.")
@@ -11646,14 +11645,17 @@ windows but those at its sides, as `roost--shown-beside' says."
                  (direction . ,(car place))
                  (,(if (eq (car place) 'right) 'window-width 'window-height) . ,(cdr place))
                  (inhibit-same-window . t))))
-        (with-current-buffer buffer
-          (setq roost--shown-back nil))
-        ;; Split from the terminal, its size is Roost's to change for the
-        ;; next image, until you change it.
+        ;; Split from the terminal, or from the grid of its panes, its
+        ;; size is Roost's to change for the next image, until you
+        ;; change it.
         (when (window-live-p window)
+          (set-window-parameter window 'roost-shown-back nil)
           (set-window-parameter
            window 'roost-shown-fit
-           (and size (window-live-p terminal) (eq (window-prev-sibling window) terminal)
+           (and size
+                (if (window-live-p terminal)
+                    (eq (window-prev-sibling window) terminal)
+                  (window-prev-sibling window))
                 (list (car place) (window-total-width window) (window-total-height window)))))))
     ;; Once it has a window, whose size the image is fitted to.
     (roost--draw-shown buffer window)
@@ -11724,8 +11726,8 @@ its agent showed one."
 (defun roost--shown-enlarged-p (window)
   "Whether WINDOW shows an image that fills its frame, with a way back."
   (when-let* (((window-live-p window))
-              (back (buffer-local-value 'roost--shown-back (window-buffer window))))
-    (and (eq (car back) window)
+              (back (window-parameter window 'roost-shown-back)))
+    (and (eq (car back) (window-buffer window))
          (eq (window-configuration-frame (cdr back)) (window-frame window)))))
 
 (defun roost-enlarge-image (&optional event)
@@ -11742,14 +11744,13 @@ were in once the windows are back."
     (unless (buffer-local-value 'roost--shown-task buffer)
       (user-error "No image a task's agent showed is here"))
     (if (roost--shown-enlarged-p window)
-        (let ((back (buffer-local-value 'roost--shown-back buffer)))
-          (with-current-buffer buffer
-            (setq roost--shown-back nil))
+        (let ((back (window-parameter window 'roost-shown-back)))
+          (set-window-parameter window 'roost-shown-back nil)
           (set-window-configuration (cdr back))
           (when-let* ((window (get-buffer-window buffer)))
             (roost--draw-shown buffer window)))
-      (with-current-buffer buffer
-        (setq roost--shown-back (cons window (current-window-configuration (window-frame window)))))
+      (set-window-parameter window 'roost-shown-back
+                            (cons buffer (current-window-configuration (window-frame window))))
       (delete-other-windows window)
       (roost--draw-shown buffer window)
       (message "Click the image, or type q, to put the windows back"))))
@@ -11792,7 +11793,9 @@ were in once the windows are back."
 
 (defvar-keymap roost-shown-page-mode-map
   :doc "Keymap for a page a task's agent showed."
-  :parent special-mode-map)
+  :parent special-mode-map
+  ;; A page that took the place of an image that filled the frame.
+  "q" #'roost-quit-image)
 
 (define-derived-mode roost-shown-page-mode special-mode "Roost-Page"
   "A page a task's agent showed you, in a web view.
@@ -11977,18 +11980,17 @@ again when its own task is opened."
       (unless (or (equal key (roost--key task)) (one-window-p))
         ;; It comes back with its task, as one you closed doesn't.
         (puthash key (window-buffer window) roost--shown-waiting)
-        (with-current-buffer (window-buffer window)
-          (setq roost--shown-back nil))
         (delete-window window))))
   ;; One that filled the frame, whose window TASK's terminal took, went
   ;; with no window to close: it waits too, and its way back is no more.
-  (dolist (buffer (buffer-list))
-    (when-let* ((back (buffer-local-value 'roost--shown-back buffer))
-                ((not (and (window-live-p (car back)) (eq (window-buffer (car back)) buffer)))))
-      (with-current-buffer buffer
-        (setq roost--shown-back nil)
-        (unless (equal roost--shown-task (roost--key task))
-          (puthash roost--shown-task buffer roost--shown-waiting))))))
+  (dolist (window (window-list))
+    (when-let* ((back (window-parameter window 'roost-shown-back))
+                ((not (eq (window-buffer window) (car back)))))
+      (set-window-parameter window 'roost-shown-back nil)
+      (when-let* (((buffer-live-p (car back)))
+                  (key (buffer-local-value 'roost--shown-task (car back)))
+                  ((not (equal key (roost--key task)))))
+        (puthash key (car back) roost--shown-waiting)))))
 
 (defun roost--insert-wrong (task next)
   "Insert what is wrong with TASK and wants you to act, under its title.

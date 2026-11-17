@@ -2947,7 +2947,7 @@ states: `keep_shown` keeps either, and Emacs draws a page in a web view
 | Shown, not taken up | The record names one this Emacs hasn't fetched | `shown.at` newer than `roost--shown-at` |
 | Waiting | Fetched, the task's terminal off screen, or put away for another task's | its buffer in `roost--shown-waiting` |
 | On screen | In a window beside the terminal | its buffer has a window |
-| Filling the frame | In the only window but those at the frame's sides | `roost--shown-back` names its window |
+| Filling the frame | In the only window but those at the frame's sides | its window's `roost-shown-back` names its buffer |
 | Closed | Fetched and shown, its window closed since | its buffer has none, and isn't waiting |
 
 Invariants:
@@ -2979,7 +2979,7 @@ Invariants:
   its terminal: one you resized, and one that fills the frame, stay as they are
   (`roost-shown-fit`, `roost--refit-shown`). The terminal keeps half its space.
 - I8. An image that fills the frame has a way back to the windows as they were,
-  by a click or `q`, and to where you were (`roost--shown-back`,
+  by a click or `q`, and to where you were (the window's `roost-shown-back`,
   `roost-enlarge-image`).
 
 | From | Event | Guard | To | Effect | Code |
