@@ -11554,6 +11554,9 @@ Windows showing the panel keep their scroll position, and the mark stays."
 (defconst roost--shown-terminal-columns 80
   "The columns a terminal keeps when an image goes to its right.")
 
+;; Not in an Emacs built with no window system.
+(declare-function image-size "image.c" (spec &optional pixels frame))
+
 (defun roost--shown-size (buffer)
   "The size of the image BUFFER holds, in pixels, as (WIDTH . HEIGHT).
 Nil for a page, and for an image this Emacs can't measure."
