@@ -16228,7 +16228,10 @@ it of the same ID's, or nil for the first."
                (should (equal roost--shown-page whole))
                (should (eq roost--shown-page-drawn roost--shown-page))
                (should (equal roost--shown-image-at "2026-11-17T10:05:00+00:00")))
-             (should (= (length drawn) views)))
+             (should (= (length drawn) views))
+             ;; In no window, as once you have closed it, it stays closed.
+             (should (= (length displayed) 1))
+             (should-not (gethash key roost--shown-waiting)))
            ;; Another call's page takes its place; a page its host sends
            ;; that is not that one is shown as any page is.
            (with-temp-file file
@@ -16258,7 +16261,7 @@ it of the same ID's, or nil for the first."
                (roost--read-live)
                (should (equal taken (list file)))
                ;; Whole: its host is asked, shortly, what the task shows.
-               (should (equal (car timers) '(0.5 nil roost-refresh t)))
+               (should (equal (car timers) '(0.5 nil roost--refresh-host nil t)))
                (roost--read-live)
                (should (= (length taken) 1))))
            ;; The file goes with its task, as its buffer does, where this

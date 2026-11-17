@@ -1814,6 +1814,25 @@ split out of it would break."
                      (window-list))
            'main)))
 
+(defun roost--shown-comes (key buffer task asked shows waits)
+  "Show BUFFER, which waits with what TASK with KEY shows, where it can.
+Beside the task's terminal if that is on screen, or, when you ASKED for
+it, beside the window you are in, and say SHOWS, if non-nil.  Otherwise
+say WAITS.  Not while you answer a question: the minibuffer puts the
+windows back as they were when it is done, and the image would go."
+  (roost--when-out-of-minibuffer
+   (lambda ()
+     (when (and (buffer-live-p buffer) (eq (gethash key roost--shown-waiting) buffer))
+       ;; In the window that shows it, as when it fills the frame
+       ;; and its terminal is off screen.
+       (if-let* ((beside (or (get-buffer-window buffer)
+                             (roost--shown-beside task)
+                             (and asked (roost--window-you-are-in)))))
+           (progn (remhash key roost--shown-waiting)
+                  (roost--display-shown buffer beside)
+                  (when shows (message "%s" shows)))
+         (message "%s" waits))))))
+
 (defun roost--note-shown (host task old)
   "Fetch the image TASK's agent on HOST showed, if it is news.
 OLD is the task as it was cached before, or nil when it is new to this
@@ -1861,7 +1880,8 @@ or, when you ASKED for it, beside the window you are in."
              ;; left as you have it, with what you set in it.
              (same (and (equal kind "html")
                         (equal at (buffer-local-value 'roost--shown-image-at buffer))
-                        (equal data (buffer-local-value 'roost--shown-page buffer)))))
+                        (equal data (buffer-local-value 'roost--shown-page buffer))))
+             kept)
         ;; What a poll named may be older than what its host sent: the next
         ;; poll, naming this one, has no news then.
         (when (string< (gethash key roost--shown-at "") at)
@@ -1872,7 +1892,8 @@ or, when you ASKED for it, beside the window you are in."
            ;; The page this buffer showed as its agent wrote it, whole by
            ;; now: its view has it already, and stays as you have it.
            ((and (equal kind "html") (roost--live-shows-p data))
-            (setq roost--shown-image-at at roost--shown-page data
+            (setq kept t
+                  roost--shown-image-at at roost--shown-page data
                   roost--shown-page-drawn data roost--shown-live nil))
            (t
             (let ((inhibit-read-only t))
@@ -1894,25 +1915,17 @@ or, when you ASKED for it, beside the window you are in."
             (when-let* ((window (get-buffer-window buffer t)))
               (roost--draw-shown buffer window)))))
         ;; Until then it waits, as for a task off screen.  Not an older
-        ;; one you didn't ask for, which would bring back an image you closed.
-        (when (or asked (not stale))
+        ;; one you didn't ask for, which would bring back an image you
+        ;; closed; nor a page you closed while its agent was writing it.
+        (when (and (or asked (not stale))
+                   (or asked (not kept) (get-buffer-window buffer t)))
           (puthash key buffer roost--shown-waiting))
-        ;; Not while you answer a question: the minibuffer puts the windows
-        ;; back as they were when it is done, and the image would go.
-        (roost--when-out-of-minibuffer
-         (lambda ()
-           (when (and (buffer-live-p buffer) (eq (gethash key roost--shown-waiting) buffer))
-             ;; In the window that shows it, as when it fills the frame
-             ;; and its terminal is off screen.
-             (if-let* ((beside (or (get-buffer-window buffer)
-                                   (roost--shown-beside task)
-                                   (and asked (roost--window-you-are-in)))))
-                 (progn (remhash key roost--shown-waiting)
-                        (roost--display-shown buffer beside)
-                        (unless asked
-                          (message "%s shows %s" (roost--field task 'name) (alist-get 'name image))))
-               (message "%s has %s to show you: open it to see"
-                        (roost--field task 'name) (alist-get 'name image))))))))))
+        (roost--shown-comes
+         key buffer task asked
+         (unless asked
+           (format-message "%s shows %s" (roost--field task 'name) (alist-get 'name image)))
+         (format-message "%s has %s to show you: open it to see"
+                         (roost--field task 'name) (alist-get 'name image)))))))
 
 (defun roost-show-image (task)
   "Show the image TASK's agent last showed you, beside the window you are in.
@@ -12368,9 +12381,10 @@ file's changes are each reported."
         (unless (equal time (car seen))
           (let ((state (with-demoted-errors "Roost: %S" (roost--take-live file))))
             (setq seen (puthash file (list time state now) roost--live-seen))
-            ;; Whole: its host has the call next, and says so when asked.
+            ;; Whole: its host, this machine, has the call next, and says
+            ;; so when asked.
             (when (eq state 'whole)
-              (run-at-time 0.5 nil #'roost-refresh t))))
+              (run-at-time 0.5 nil #'roost--refresh-host nil t))))
         (when (and (eq (nth 1 seen) 'writing) (< (- now (nth 2 seen)) roost--live-quiet))
           (setq again t))))
     (when (and again (not (timerp roost--live-timer)))
@@ -12393,7 +12407,10 @@ screen, as `roost--take-shown' shows a page that is whole.  Return
 nil if FILE is no page of a task this Emacs knows."
   (when-let* ((task (gethash (list nil (file-name-base file)) roost--tasks))
               (page (with-temp-buffer
-                      (insert-file-contents file)
+                      ;; As Pi's extension wrote it, whatever this Emacs
+                      ;; would take a file's text for.
+                      (let ((coding-system-for-read 'utf-8))
+                        (insert-file-contents file))
                       (json-parse-buffer :object-type 'alist :null-object nil :false-object nil)))
               (call (alist-get 'id page))
               (code (alist-get 'code page))
@@ -12429,14 +12446,10 @@ nil if FILE is no page of a task this Emacs knows."
           (when-let* ((window (get-buffer-window buffer t)))
             (roost--draw-shown buffer window)))
         (puthash key buffer roost--shown-waiting)
-        (roost--when-out-of-minibuffer
-         (lambda ()
-           (when (and (buffer-live-p buffer) (eq (gethash key roost--shown-waiting) buffer))
-             (if-let* ((beside (or (get-buffer-window buffer) (roost--shown-beside task))))
-                 (progn (remhash key roost--shown-waiting)
-                        (roost--display-shown buffer beside)
-                        (message "%s is drawing a page" (roost--field task 'name)))
-               (message "%s is drawing a page: open it to see" (roost--field task 'name))))))))
+        (roost--shown-comes
+         key buffer task nil
+         (format-message "%s is drawing a page" (roost--field task 'name))
+         (format-message "%s is drawing a page: open it to see" (roost--field task 'name)))))
       (if whole 'whole 'writing))))
 
 (defun roost--hand-live ()

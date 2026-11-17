@@ -3024,7 +3024,7 @@ Invariants:
 | any | task retired, discarded, forgotten or gone from a list | | None | copy, buffer and both tables' entries go | `Store.remove`, `roost--forget-shown` |
 | any | Pi's model starts a `show_widget` call | a Pi task on this machine, known to this Emacs, which has a web view and watches | Being written | its buffer shows the page so far: beside the terminal if on screen, waiting otherwise | `roost--read-live`, `roost--take-live` |
 | Being written | the model writes more of the page | the same call | Being written | the view is handed the page so far | `roost--hand-live` |
-| Being written | its host sends the page whole | it holds the code the view was handed, all of it | On screen or Waiting | the view stays as it is | `roost--take-shown`, `roost--live-shows-p` |
+| Being written | its host sends the page whole | it holds the code the view was handed, all of it | On screen, Waiting or Closed, as it was | the view stays as it is, and one you closed meanwhile stays closed | `roost--take-shown`, `roost--live-shows-p` |
 | Being written | its host sends another page, or an image | | On screen or Waiting | shown in its place, as any is | `roost--take-shown` |
 | Being written | another call's page starts | | Being written | the new page takes its place | `roost--take-live` |
 

@@ -1495,8 +1495,10 @@ export default function (pi) {
   // A page as the model writes it, where the task may show pages: Pi says
   // what there is of a tool call's input so far, so what there is of a
   // show_widget call's page goes in a file an Emacs on this machine
-  // watches, at most ten times a second, and once more when it is whole.
-  // The call itself then reaches Roost's MCP server as any call does.
+  // watches, at most ten times a second and less often as the page grows
+  // long, and once more when it is whole. The call itself then reaches
+  // Roost's MCP server as any call does. A Pi that takes no such listener
+  // goes without, as one with no MCP client goes without the tools.
   if (process.env.ROOST_PI_LIVE) {
     const file = process.env.ROOST_PI_LIVE;
     let latest, timer;
@@ -1504,20 +1506,24 @@ export default function (pi) {
       timer = undefined;
       try { writeFileSync(file + ".part", JSON.stringify(latest)); renameSync(file + ".part", file); } catch {}
     };
-    pi.on("message_update", event => {
-      const update = event.assistantMessageEvent;
-      if (!update || !String(update.type).startsWith("toolcall_")) return;
-      const whole = update.type === "toolcall_end";
-      const call = whole ? update.toolCall : (update.partial ?? event.message)?.content?.[update.contentIndex];
-      if (!call || call.name !== "mcp__roost__show_widget") return;
-      const code = call.arguments?.widget_code, title = call.arguments?.title;
-      // More than Roost shows: its server will say so, of the whole call.
-      if (typeof code === "string" && code.length > 500000) return;
-      latest = { id: String(call.id ?? ""), title: typeof title === "string" ? title : "",
-                 code: typeof code === "string" ? code : "", whole };
-      if (whole) { clearTimeout(timer); write(); }
-      else if (!timer) timer = setTimeout(write, 100);
-    });
+    try {
+      pi.on("message_update", event => {
+        const update = event.assistantMessageEvent;
+        if (!update || !String(update.type).startsWith("toolcall_")) return;
+        const whole = update.type === "toolcall_end";
+        const call = whole ? update.toolCall : (update.partial ?? event.message)?.content?.[update.contentIndex];
+        if (!call || call.name !== "mcp__roost__show_widget") return;
+        const code = call.arguments?.widget_code, title = call.arguments?.title;
+        // More than Roost shows: its server will say so, of the whole
+        // call, and no more of this one is kept.
+        if (typeof code === "string" && code.length > 500000) { clearTimeout(timer); timer = undefined; return; }
+        latest = { id: String(call.id ?? ""), title: typeof title === "string" ? title : "",
+                   code: typeof code === "string" ? code : "", whole };
+        if (whole) { clearTimeout(timer); write(); }
+        // The whole of it is handed on each time: a long page, less often.
+        else if (!timer) timer = setTimeout(write, Math.max(100, latest.code.length / 500));
+      });
+    } catch {}
   }
   // Roost's own tools, where the task may offer: its helper as an MCP
   // server for this session, saved nowhere, its few tools declared to the
