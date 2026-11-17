@@ -21,17 +21,14 @@ opens. Each task host needs
 Python 3.9+, Git, tmux 3.1+, and an installed, signed-in agent CLI (Claude Code
 2.1.78 or newer, Codex 0.160.0 or newer). Remote hosts need key- or agent-based
 SSH; use SSH config aliases for ports and jump hosts. Roost copies its helper to each host itself.
-[tmux-control](#terminals-through-tmux-control) can show the terminals in their place.
 
 Roost runs Claude Code, Codex, Pi and OpenCode, and means to support a few
-agents well rather than many loosely: a couple from the labs that make the
-models, and a couple that work across them. Each agent needs its own way of
-reporting its status, resuming and taking hooks, and each of its releases can
-change them, so every one Roost supports is tested against the real agent.
-An agent gets an adapter when it is widely used, reports what it is doing
-through hooks or events Roost can read, and keeps its launch and resume
-arguments stable. Roost can't start an agent it has no adapter for, and an
-agent that falls out of use may lose its adapter.
+agents well rather than many loosely: each is tested against the real
+agent, whose releases can change how it reports its status, resumes and
+takes hooks. An agent gets an adapter when it is widely used, reports what
+it is doing through hooks or events Roost can read, and keeps its launch
+and resume arguments stable. Roost can't start an agent it has no adapter
+for.
 
 Emacs 30 (built-in `use-package`), with Ghostel from MELPA:
 
@@ -103,24 +100,17 @@ Magit is optional (review falls back to Dired).
   terminal takes the place of another's. `r`, `f` or `D` on another task's
   row opens its terminal first, then its Magit, files or diff. Retiring,
   merging, discarding or forgetting a task closes its workspace; files you
-  opened in it stay open. Set `roost-workspace` to choose. A task's
-  perspective lists the tmux windows of its session you have visited. With
-  tmux-control, to
-  list every one from the start, such as a shell you left open, set
-  `tmux-control-window-buffers` to `all` (tmux-control 0.8.3), and to tell
-  them apart by name, `tmux-control-window-buffer-names` to `tab`.
+  opened in it stay open. Set `roost-workspace` to choose.
 - **Evil.** Roost's dashboard and panels start in Emacs state so their keys work
   (`roost-evil-state`); `j`/`k` move between tasks. Drafts start in insert
   state. In Magit, Roost's keys work in normal state, with the whole file's
   diff on `g=` (evil-collection uses `=`). A terminal is Ghostel's, with
-  the Evil setup you give Ghostel. With tmux-control, agent
-  terminals start in insert state, so typing reaches the agent; ESC returns to
-  normal state. To stop an agent's turn, which Claude Code does on ESC,
-  press `C-c C-c` (Ctrl-C stops it too). With evil-collection, `C-c C-z` in
-  normal state switches ESC between the agents and Evil; setting
-  `tmux-control-evil-state` to `emacs` sends it to the agents always.
+  the Evil setup you give Ghostel;
+  [`roost-task-opened-functions`](#configuration) can enter a state when a
+  task opens.
 - **Other modal setups** (Meow, xah-fly-keys): put `roost-dashboard-mode`,
-  `roost-task-info-mode`, `roost-doctor-mode` and `roost-workload-mode`, and the drafts
+  `roost-task-info-mode`, `roost-search-mode`, `roost-attempts-mode`,
+  `roost-doctor-mode` and `roost-workload-mode`, and the drafts
   `roost-compose-mode`, `roost-send-mode` and `roost-pr-mode`, in your insert or
   Emacs-state list so their keys work.
 - **Completion.** Prompts use `completing-read`, so Vertico, Ivy, Helm and the
@@ -239,8 +229,8 @@ others (`+2 more: 1 ready, 1 failed`). One you see in that minute, or whose
 task moves on, drops out. The agent whose terminal you are looking at
 doesn't notify. The dashboard
 shows the same for every agent, and the mode line counts the agents waiting
-(`● Roost:2`, the dot in the colour of the most pressing; click it for the
-next one). `n` jumps to the next agent waiting
+(`● Roost:2`, the dot in the colour of the most pressing, with a `!` after
+the count while one asks; click it for the next one). `n` jumps to the next agent waiting
 for you, permission requests first, and the echo area says which task it
 opened, why that one waits and how many more do, as in `permission ·
 ledger: Asks to run make test; 2 more waiting`; in a narrow frame, why it
@@ -249,8 +239,7 @@ none waits, `n` says so and offers the way back to where you pressed the
 first `n`: press it again to go there. With workspaces that is the
 perspective or tab you were in; without, the frame's windows as they were.
 A link the agent shows there, such as the pull request it opened, opens with
-`C-c C-u`, which offers each link on the screen, and with a click when the
-agent marks it as a link, as Claude Code does with tmux 3.4 or later.
+a click.
 A finished agent whose reply you have seen stops counting, and turns grey,
 until it replies again; one that failed or stopped by itself stops counting
 once you've seen it. What you've seen is kept on the task's host, for your
@@ -290,23 +279,22 @@ without the offering task's changes, and the agent is told so.
 
 Roost gives the agent a tool, `propose_task`, from an MCP server of the
 helper's, with a few sentences on when to use it, which cost tokens on each
-of its requests. Claude Code, Codex, OpenCode and Pi each take it, for the
-one task and with nothing written to the agent's own settings, and run it
-without asking you: Claude Code from `--mcp-config`, Codex from config
-overrides on its command line, OpenCode from its inline config, and Pi
-from Roost's extension (Pi 0.99.0 or newer, which has an MCP client; an
-older one goes without). Pi is shown the tools but not the
-sentences on when to use them, so it offers when you ask it to. Roost's
-server is named `roost`: one of your own by that name in Pi's `mcp.json`
-stands in place of it, and in Codex's or OpenCode's config is replaced by
-it for the task, so give yours another name. With Pi's MCP support turned
-off in its settings, Pi reports Roost's server as an extension's error
-when a task starts; `--no-mcp` in the task's command leaves it out. Codex
-was run at 0.163.0; an older one that does not know a server's
-`default_tools_approval_mode` asks before each of the tools. Only
-tasks you start after turning the option on have the tools. How often an
-agent offers rests on the model. This is an experiment: it may change or
-go.
+of its requests; `roost-agent-offers` set to nil starts tasks without
+Roost's tools. Claude Code, Codex, OpenCode and Pi each take it for the one
+task, with nothing written to the agent's own settings, and run it without
+asking you ([Security](#security) says how). How often an agent offers
+rests on the model. This is an experiment: it may change or go.
+
+- Pi needs 0.99.0 or newer, which has an MCP client. It is shown the tools
+  but not the sentences on when to use them, so it offers when you ask it
+  to. With Pi's MCP support turned off in its settings, Pi reports Roost's
+  server as an extension's error when a task starts; `--no-mcp` in the
+  task's command leaves it out.
+- Roost's server is named `roost`: one of your own by that name in Pi's
+  `mcp.json` stands in place of it, and in Codex's or OpenCode's config is
+  replaced by it for the task, so give yours another name.
+- A Codex older than 0.163.0 that does not know a server's
+  `default_tools_approval_mode` asks before each of the tools.
 
 **See an image an agent shows.** Most agents send no images to their
 terminal, so ask the agent to show you one, such as a screenshot or a chart
@@ -335,7 +323,8 @@ it does for one. Click one, or `RET` on it, and it fills the frame alone;
 `n` and `p` there, or the arrows above it, show the others in its place,
 and a click or `q` goes back to them all, beside the terminal.
 
-**See a page an agent writes.** With `roost-agent-pages` on, the agent can
+**See a page an agent writes.** With `roost-agent-pages` on, as well as
+`roost-agent-offers`, the agent can
 also show a small page of its own: a diagram of what it changed, a mock-up,
 or controls to try, such as a slider. Ask for one by what it is, as in "show
 me that as a diagram I can click". It opens where an image does and takes its
@@ -352,19 +341,18 @@ fills in at once). Other agents' pages, and a Pi task's on another host,
 show once they are whole.
 
 **Keep them in view.** `b` in the dashboard, or `M-x roost-sidebar-mode`, keeps a
-compact task list at the left of the frame, through `C-x 1`; add
-`(roost-sidebar-mode 1)` to your configuration to have it from the start. With
+compact task list at the left of the frame, through `C-x 1`. With
 perspectives or tabs, it shows in a task's workspace, and in one of your own,
 such as perspective.el's `main`, only while that shows a task's terminal, so a
 shell of your own there doesn't look like a task. Each task there is its name
-and, at the right, its status: in its colour when the task waits for you, such
-as `permission` or a `ready` you haven't seen, plain when it is `merged`, dim when the agent is only
-working or stopped, and none once you've seen an agent that waits for nothing; then, dim, what changed
-since you last looked at it, if anything (below), where the whole name fits
-beside it. A click opens the task,
+and, at the right, its status ([What a task says](#what-a-task-says)). A
+click opens the task,
 quitting any question you left open in the minibuffer, which would hold it back,
 and closing a menu left open. Each project's heading ends with a `+` that
-drafts a task there. Below the tasks, "New conversation" opens an agent's
+drafts a task there. With perspectives or tabs and no task yet, there is no
+sidebar to click: start the first with `M-x roost-new-task`.
+
+**Talk first.** Below the sidebar's tasks, "New conversation" opens an agent's
 terminal at once, in no project of yours, with nothing to write first: you
 say what you want in its terminal. A conversation is a task like the others,
 in a repository of Roost's own in the host's state directory, listed under
@@ -376,7 +364,9 @@ under the conversation, naming its project, for you to open as a draft
 there and start ([Take the tasks an agent offers](#a-day-with-roost)). It
 reads the projects that host has run tasks in without asking, and changes
 nothing in them without asking. Claude asks once whether to trust Roost's
-conversations folder, with the first conversation on a host. Under "Start a task in" are the
+conversations folder, with the first conversation on a host.
+
+**Start in another project.** Under "Start a task in", the sidebar lists the
 projects with no tasks now that you used last on each host, three
 (`roost-sidebar-recent-projects`), and "Other directory…". A click on one, or
 `RET`, drafts a task there, taking a draft you have written there too, unless
@@ -384,10 +374,10 @@ it quotes files of its project, forks a task there or starts from an issue
 there; "Other directory…" first asks for a
 host, then a folder there, which after a click is the system's folder dialog
 for one on this machine. `X` on a project, or "Forget" on its menu, stops listing it until
-you start a task there again. With perspectives or tabs and no task yet, there
-is no sidebar to click: start the first with `M-x roost-new-task`. `I` docks a
-panel at the right of an open task's terminal,
-kept current as the agent works. It is quiet until something is wrong: bold is
+you start a task there again.
+
+**Read a task's panel.** `I` docks a panel at the right of an open task's
+terminal, kept current as the agent works. It is quiet until something is wrong: bold is
 the task's name, and colour is what wants you, which comes first, under the
 name, after a `▲`: its worktree on another branch, a merge under way or one
 that would conflict, its worktree gone, its last error. Then what to do next,
@@ -397,7 +387,9 @@ is doing, as `Running make test`. At the foot, a row of keys opens the task's
 other views (`r Magit`, `f Files`, `t Shell`, `? More`), and two dim lines
 fold what you seldom need there: your latest prompt, a reminder of where you
 left off that the terminal may have scrolled away, and the details of where
-the work lives. `RET` or a click on either unfolds it. A click or `RET` on a file
+the work lives. `RET` or a click on either unfolds it.
+
+A click or `RET` on a file
 opens its diff in Magit, in a buffer of its own, as Magit's diff of the file
 you visit has, so another file's diff, in the same window, leaves it open behind (`magit-diff-buffer-file-locked`
 set to nil keeps one buffer for all). There `;` writes a note for the agent (more under
@@ -407,8 +399,7 @@ with the latest reply after the changes (a click or `RET` opens a link in it), u
 its task opens there and the panel docks. `?` in the panel
 opens the menu of what you can do with the task. Each key the panel names
 can be clicked too, with the words that go with it: a click on "m merges
-it" does what `m` does there. Add
-`(roost-task-panel-mode 1)` to have the panel from the start. It steps aside
+it" does what `m` does there. The panel steps aside
 when the terminal would drop below 80 columns, and `q` in it turns it off.
 
 **Check the work yourself.** `t` opens a shell beside the agent, in the same
@@ -417,9 +408,7 @@ The agent and the shell are tmux panes, each in a window of its own: `C-x o`
 moves between them, and so does `C-t o`. tmux's own keys work after `C-t`,
 as they do after its prefix in a terminal: `C-t %` splits off another pane,
 which starts in the worktree; it closes when its program exits, and every
-pane closes when the task stops. With tmux-control the keys are its own:
-`C-c C-o` for the next pane, `C-c C-t` to show one at a time and `C-c |` to
-split.
+pane closes when the task stops.
 
 **Review in Magit.** `r` opens Magit on the task's worktree, through TRAMP for
 remote tasks. Stage, edit and commit as usual. The status names the task,
@@ -441,7 +430,8 @@ stage there.
 task falling behind (`↓2`). If merging the task's commits would then
 conflict, a notification says so, and the task panel and menu say so before
 you press `m`, as in
-"Conflicts with main in ledger.py: `u` merges main into it", and once
+"Conflicts with main in ledger.py: `u` merges main into it, to resolve them
+there", and once
 you've seen what its agent last said, the task says `conflicts` and counts
 as waiting: `n` visits it. Roost checks whenever the task's branch or the
 integration branch moves, with `git merge-tree` on the task's host (Git
@@ -493,8 +483,9 @@ What each task's row, panel and notification say is in
 The sidebar and the dashboard give each task a word after its name. The
 table's second column says when a task waits for you: those are the tasks
 `n` visits, the mode line counts and a notification announces. In the
-sidebar, their word is in its colour, and an agent you've seen that waits
-for nothing has none. Where a sidebar is too narrow for a word beside a
+sidebar, their word is in its colour; it is plain for `merged`, dim for an
+agent only working or stopped, and an agent you've seen that waits for
+nothing has none. Where a sidebar is too narrow for a word beside a
 dozen columns of the name, a mark in the word's colour stands for it at
 the row's end: `?` for a task that asks something of you, `!` for
 something that went wrong, `●` when it is your turn and `◌` while the
@@ -702,7 +693,7 @@ or on to a third, the task's own pull request shows again at once.
 ### How many agents you keep up with
 
 `w`, or `M-x roost-workload`, shows, for
-today and each day of the past week, the most agents that worked at once, how
+each of the past seven days, today among them, the most agents that worked at once, how
 long they worked, and how long they waited on you: asked you something, ended
 a turn or failed before you saw them, or had a pull request or conflict for you,
 added up across agents, with the longest single wait. The last column is that
@@ -716,7 +707,9 @@ counted once you stop and resume it (`K`, then `s`).
 
 ## Commands
 
-`roost-dashboard` opens the dashboard. In it, and in a task's details panel:
+`roost-dashboard` opens the dashboard (`S` in the menu, the sidebar and a
+task's panel). These keys work in it and in a task's panel, where `g`
+redraws the panel and `q` closes it:
 
 | Key | Command | |
 | --- | --- | --- |
@@ -737,7 +730,7 @@ counted once you stop and resume it (`K`, then `s`).
 | `B` | `roost-retarget` | Change the branch the task starts from and merges into, as after you rebased its branch onto another: `m`, `u` and its counts follow; no commit moves, and a pull request already open keeps its base |
 | `L` | `roost-leave-pull-request` | Leave the task's pull request to its agent, or take it back: left, Roost tells the agent itself when a check fails, a review thread waits or it conflicts, once for each ([below](#a-pull-request-left-to-its-agent)) |
 | `l` | `roost-switch-task` | Choose a task by name, waiting tasks first |
-| `/` | `roost-search` | Find messages in your tasks' conversations, retired tasks' too; `RET` opens a live task, `TAB` shows more of a message (its first 1,500 characters). Each host reads the conversations Claude Code, Codex and Pi keep there, and each message names its agent; OpenCode's are not searched, and a host with an OpenCode task says so |
+| `/` | `roost-search` | Find messages in your tasks' conversations, retired tasks' too; `RET` opens a live task, `TAB` shows more of a message (its first 1,500 characters), `n` and `p` move between messages, and `g` searches again. Each host reads the conversations Claude Code, Codex and Pi keep there, and each message names its agent; OpenCode's are not searched, and a host with an OpenCode task says so |
 | `b` | `roost-sidebar-mode` | Keep the task list at the left of the frame |
 | `I` | `roost-task-panel-mode` | Dock the open task's panel beside its terminal |
 | `u` | `roost-update` | Bring the task up to date: merge the branch it merges into, such as `main`, into it; for uncommitted changes or conflicts, offers to have its agent do it |
@@ -750,6 +743,7 @@ counted once you stop and resume it (`K`, then `s`).
 | `w` | `roost-workload` | How long agents worked and waited on you, each day of the past week ([below](#how-many-agents-you-keep-up-with)) |
 | `=` | `roost-compare-attempts` | For a task a draft made with others from one prompt (`C-c C-x` there): list every file any of those attempts changed, with a column for each attempt saying what it did to the file |
 | `g` | `roost-refresh` | Refresh status and Git statistics |
+| `!` (in the menu) | `roost-doctor` | Check the setup of this machine and each host |
 
 Where attempts are compared (`=`), each attempt has a line with its number,
 status and changes, and each file a line with `+12 −3`, `new` or `binary`
@@ -770,7 +764,7 @@ draft, the **Dismiss offer** button (`roost-compose-dismiss-offer`) dismisses
 it and closes the draft. The other
 keys act on the task it sits under.
 
-`j`/`k` or `TAB` move between tasks; `mouse-1` opens one and `mouse-3` shows its actions.
+`j`/`k`, or `TAB` and `S-TAB`, move between tasks; `mouse-1` opens one and `mouse-3` shows its actions.
 Outside the dashboard, commands act on the task of the current terminal,
 worktree file, Org entry or perspective, or ask. In an agent's terminal, where
 every other key goes to the agent, `C-c ?` opens the menu for its task (while
@@ -996,8 +990,8 @@ header line. A failed creation keeps the draft.
   The colours are made from your theme's, and no text differs; nil draws
   the same words without any of it, each light a dot.
 - `roost-leave-pull-requests` (nil): leave each new task's pull request to
-  its agent, as `L` does for one task: Roost tells the agent when it needs
-  work, rather than wait for you. For tasks started after you turn it on.
+  its agent, as [`L`](#a-pull-request-left-to-its-agent) does for one task.
+  For tasks started after you turn it on.
 - `roost-remote-control` (nil): start each Claude Code task with Remote
   Control (`--remote-control`, `--name`), named for the task, so it shows
   in the Claude app and at claude.ai/code, which notify your phone when
@@ -1017,7 +1011,8 @@ header line. A failed creation keeps the draft.
   on.
 - `roost-large-change` (`(:lines 400 :files 10 :directories 3)`): when a
   task's row gets its `±`. Leave one out to mark by the others, as
-  `(:lines 400)`; nil marks none.
+  `(:lines 400)`; nil marks none
+  ([How large a change is](#how-large-a-change-is)).
 - `roost-notes-file`: review notes not yet sent, kept across sessions.
   Faces `roost-note` and `roost-note-button` color the notes and the `+`.
   Two Emacs on one machine can share this file, `roost-hosts-file` and
@@ -1033,15 +1028,8 @@ header line. A failed creation keeps the draft.
   `project = PROJ AND statusCategory != Done ORDER BY rank`.
 - `roost-state-directory`: where each host keeps task records, the helper and
   worktrees; default `~/.local/share/roost`.
-- `roost-socket-name`: the tmux socket (default `main`, or tmux-control's
-  when it shows the terminals). Each task has a
+- `roost-socket-name`: the tmux socket (default `main`). Each task has a
   session of its own, named after its project and task.
-- `roost-terminal-backend` (`ghostel-tmux`): the package that shows a task's
-  tmux session in Emacs, through
-  [ghostel-tmux](https://github.com/dakra/ghostel-tmux), which draws with
-  [Ghostel](https://github.com/dakra/ghostel). `tmux-control` shows it
-  through tmux-control, which draws with Eat; see
-  [Terminals through tmux-control](#terminals-through-tmux-control).
 - `roost-sidebar-width` (30), `roost-task-panel-width` (44): the sidebar and
   the panel docked beside a task's terminal.
 - `roost-sidebar-recent-projects` (3): how many projects with no tasks the
@@ -1106,9 +1094,8 @@ header line. A failed creation keeps the draft.
   They run for changes this Emacs sees, not when Roost first sees a task.
   Each merged function is called with the task and the branch its work went
   into, when `m` merges it or when Roost sees GitHub or GitLab merge its pull
-  request. Roost asks every two minutes, about the branch's latest commit, so
-  a pull request merged and followed by new commits before then goes
-  unreported.
+  request. Roost asks about the branch's latest commit, so a pull request
+  merged and followed by new commits before Roost next asks goes unreported.
   The task is an alist; `alist-get` reads its `name`, `id`, `host` (nil on
   this machine), `agent`, `branch`, `worktree` and `integrationBranch`. A
   function that fails is reported in `*Messages*`, and the rest still run.
@@ -1123,7 +1110,14 @@ header line. A failed creation keeps the draft.
 
   `roost-draft-task` opens the new task draft with a prompt of your own, for
   commands that start a task from what they show, such as a mail.
-- `roost-watch-interval` (3 s), `roost-ssh-share-connections`.
+- `roost-watch-interval` (3 s): how often Roost asks its hosts while Emacs
+  is in front.
+- `roost-ssh-share-connections` (t): each poll is one SSH command per host,
+  and Roost shares one connection per host across them (OpenSSH
+  `ControlMaster`, with its socket in the state directory, closed a minute
+  after the last request), so polls skip the handshake; nil leaves that to
+  your ssh configuration. Unreachable hosts are retried with backoff and
+  keep their last known tasks, marked unreachable.
 
 A few variables tune Roost without being options, and may change between
 releases; set them with `setq`. `roost-watch-unfocused-interval` (15 s)
@@ -1132,13 +1126,6 @@ is how often Roost refreshes while no Emacs frame has focus,
 `roost-startup-grace` (15 s) how long a task starts before Roost takes it
 to wait at a prompt, and `roost-note-box-lines` (4) how many lines the box
 for writing a note shows.
-
-Each poll is one SSH command per host. Roost shares one connection per host
-across them (OpenSSH `ControlMaster`, with its socket in the state directory and
-closed a minute after the last request), so polls skip the handshake; set
-`roost-ssh-share-connections` to nil to leave that to your ssh configuration.
-Unreachable hosts are retried with backoff and keep their last known tasks,
-marked unreachable.
 
 ### A task's terminal
 
@@ -1185,9 +1172,7 @@ whether its terminal draws them, so an agent has to be told:
 
 - **Pi** sends the images its tools read. Roost starts it with
   `PI_IMAGE_PROTOCOL=kitty` in its environment, which Pi 1.3.0 and 1.5.2
-  read, when a task starts or resumes with ghostel-tmux showing the
-  terminals; one you set yourself stands. With tmux-control Roost sets
-  none, as Eat would not draw them.
+  read, when a task starts or resumes; one you set yourself stands.
 - **Claude Code, Codex and OpenCode** send no images to their terminal.
 
 A task of any of the four can show you an image beside its terminal
@@ -1209,26 +1194,6 @@ transfer, and the variable is for those: in tmux it otherwise draws them
 only when tmux names kitty, Ghostty or iTerm2 as the terminal outside it,
 which tmux cannot do for Emacs. Drawing the files it reads is asked for in
 [claude-code#79706](https://github.com/anthropics/claude-code/issues/79706).
-
-### Terminals through tmux-control
-
-Until 0.13.0 Roost showed terminals with
-[tmux-control](https://github.com/csheaff/tmux-control), which draws them
-with [Eat](https://codeberg.org/akib/emacs-eat), and it still can. The
-tasks, their tmux sessions and the host helper are the same either way;
-only the package that draws the session in Emacs changes, so you can
-change back. Set it before you open a task, and restart Emacs to change it
-with terminals open.
-
-```elisp
-(setq roost-terminal-backend 'tmux-control)
-```
-
-It needs tmux-control 0.8.2 or newer, which Roost does not install;
-`M-x roost-doctor` checks it and Eat in place of ghostel-tmux and Ghostel.
-With it you have tmux-control's options, its scrollback pager and the
-corner where it names other sessions, and no images. More of the journeys
-of [Development](#development) have run on it, over a longer time.
 
 ### Where a task's skills come from
 
@@ -1368,11 +1333,6 @@ Things to know:
   Esc, or declining a request, shows `interrupted`. OpenCode starts a
   conversation at its first prompt, so a task stopped before one starts a
   new conversation on `s`.
-- Roost's task sessions stay out of the corner where tmux-control names other
-  sessions with new output, and its terminals don't show that corner: it
-  lights up whenever an agent prints anything, and only shows its terminal.
-  Roost tells you when an agent needs you, and `n` or a click on `Roost:N`
-  switches to the task.
 - Since 2.1.284 (2026-09-28), Claude Code starts in auto mode unless a
   permission mode is set, approving most commands itself, so its tasks
   rarely ask. To be asked before each command, add
@@ -1439,7 +1399,7 @@ What runs where:
   digits of its SHA-256 (`roost--helper`, `roost--request`), so a new
   version of Roost installs a new file. One that no task uses is deleted
   once it is a week old.
-- The helper runs `git`, `tmux`, `gh` and the agent with each argument
+- The helper runs `git`, `tmux`, `gh`, `glab` and the agent with each argument
   separate, not through a shell. The command lines that tmux and Claude
   Code and Codex hooks hand to a shell, to start an agent's runner and to
   report its events, are quoted with Python's `shlex.join` and hold only
@@ -1529,8 +1489,8 @@ The network:
   made on GitHub or GitLab that a pull request's head is, in the project's
   primary checkout, once for each such commit, to delete that
   branch once it is merged, and in `roost-doctor` to try a push with
-  `--dry-run`; `gh` on a host, for issues, pull requests, their checks
-  and comments; and `twg` on this machine, when it is installed, for the
+  `--dry-run`; `gh` on a host, or `glab` for a project on GitLab, for
+  issues, pull requests, their checks and comments; and `twg` on this machine, when it is installed, for the
   Jira work items a draft can start from, as you press `C-c C-t`. It sends
   nothing anywhere else: no telemetry and no update checks. Agents reach their own services as they would without Roost.
 - Roost listens on no socket of its own. Hooks report by running the
@@ -1557,8 +1517,7 @@ What Roost never does:
   it, such as build output or a `.env` made there.
 
 Dependencies: Emacs 29.1 or newer, transient, ghostel-tmux and the Ghostel
-terminal it uses (or, if you choose them, tmux-control and Eat), and on
-each host tmux, Git and Python 3.9 or newer. The helper is one file of
+terminal it uses, and on each host tmux, Git and Python 3.9 or newer. The helper is one file of
 Python's standard library.
 
 ### Sandboxes
@@ -1630,8 +1589,8 @@ Git and isolated tmux sockets (fixture agents drive the actual hook commands,
 without model calls), and a warning-free byte-compile. `make test` uses every
 core, each Emacs and Python taking a share (`test/run.py`): about four minutes
 on four cores, where one process takes eighteen. While you work, `make quick`
-runs one case in twelve of each sweep, and leaves out the Python suite when
-neither the helper nor its tests have changed since it last passed: half a
+runs one case in twelve of each sweep, and leaves out a suite, ERT or
+Python, that passed in full on what it reads now: half a
 minute after a change to `roost.el` alone. `make quick K=REGEXP` runs only the
 tests that match. CI runs it on Emacs 29.1
 and 30.1, except for a change only to Markdown files or `docs/`, which no test
@@ -1721,63 +1680,46 @@ waits on a host needs an entry in `roost-sweep-late--commands`, and a new
 question in the minibuffer one in `roost-sweep-late--questions`.
 
 `make qa` uses Roost as you would, in a GUI Emacs of its own: a plain
-configuration with its own server, state directory and tmux socket, and
-`test/fake_claude.py` for Claude Code, so Git, tmux and the host helper are
-real and no model is called. `test/qa/fake_gh.py` stands in for `gh`, with
-what each journey has GitHub say, `test/qa/fake_glab.py` for `glab`, with
-what it has GitLab say, and `test/qa/fake_twg.py` for `twg`, with what it
-has Jira say. The run has a home directory of its own, so your
-tmux, shell and Git configuration don't change it, and the fake agent writes
-its transcripts there, as Claude Code would in yours, for search. Its journeys start a task from the menu, answer
-it in its terminal, go through the tasks waiting with `n` and back, fold and unfold a long prompt with the mouse, resize the
-frame, merge a commit, review a change in Magit and send a note, edit,
-cancel, remove, send and discard review notes, with tmux-control work in the
-terminal with its own keys (split a pane, open and move between
-tmux windows, switch to another task and back), open a shell beside the
-agent, use the dashboard, turn the panel and sidebar off and on, stop and
-resume an agent, retire a task or discard its work, discard a task by
-typing its name and from its row's menu, send a prompt, bring a
-task up to date, restart Emacs with agents at work, search the
-conversations, work in a second frame, start a task from an Org heading,
-draft one from a compilation error, a file and a URL, change a draft's
-project, agent and issue, from Jira or GitHub, quote a region or a Flymake warning from
-a task's file, keep a tab per task, two of the same name among them, forget a task, fork
-one's commits, follow a pull request from GitHub's checks and review to
-its merge, resume an agent that exited, see a host it can't reach,
-check the setup with `roost-doctor`,
-with tmux-control read back through a long reply in its scrollback and
-reconnect a terminal whose connection dropped, move between
-agents that all print at once, and forget a host with tasks on it. One leaves something unfinished, as you do (`M-x` or Roost's own
-question open, its menu, a draft, a task whose host hasn't replied yet, a
-mouse press in a terminal that never let go, a review note half written,
-the question before discarding a task), and
-then goes to a task another way: a click, `l`, `n` or `t` in the sidebar, a
-click on a notification, or a click in the terminal. They press keys
-and click through Emacs's command loop. A menu or dialog of the system's
-own, which a right click or a question after a click opens, would hold Emacs
-up, so the journey says beforehand what you would choose in it. After each step it checks for Lisp errors, in
-commands, timers and process filters alike, for a backtrace, for lines of
-Roost's views cut off at the window's edge, for another task's terminal
-beside the current task's, for a terminal that shows other than what
-tmux has in its pane, or history nobody scrolled it to, and for a question
-open in the minibuffer that you aren't in, unless the journey left it so,
-or anything Roost holds back until such a question is done. With tmux-control's
-`tmux-control-pause-log-mode`, it also fails a step in which Emacs stopped
-responding for a second or more, and says what Emacs was doing and how
-often the step's keys and clicks had it collect garbage, with what their
-commands set off, such as Roost's timers: many times, and the pause was
-that garbage; few, and the machine's load more likely. A key sequence or
-click that has Emacs collect garbage more than 20 times fails its step
-too. It runs the
-sweep where text is measured in pixels, too. It takes about 25 minutes,
-writes `report.html` with each step's windows, the echo area and, on macOS, a
-screenshot, and fails if anything was wrong. The report ends with the commands
-of Roost and tmux-control that no journey ran: where the next journeys should
-go. A problem known to come from elsewhere, such as a bug in tmux-control
-awaiting its release, is marked `Known` in its journey: it is reported,
-without failing the run, until it stops happening. Look at the
-screenshots too: the checks don't see what merely looks wrong. Emacs needs
-Ghostel, with its native module, ghostel-tmux and Magit:
+configuration with its own server, state directory, tmux socket and home
+directory, so your tmux, shell and Git configuration don't change it.
+`test/fake_claude.py` stands in for Claude Code, so Git, tmux and the host
+helper are real and no model is called; `test/qa/fake_gh.py`,
+`fake_glab.py` and `fake_twg.py` stand in for `gh`, `glab` and `twg`, with
+what each journey has GitHub, GitLab and Jira say.
+
+Its journeys, the functions of `test/qa/qa.py`, go through what you do in a
+day: start a task from the menu, an Org heading, an error, a file or an
+issue, answer the agent in its terminal, go through the waiting tasks with
+`n`, review in Magit and send notes, merge, follow a pull request to its
+merge, stop, resume, retire, discard and forget, restart Emacs with agents
+at work, and lose a host. One leaves something unfinished, as you do
+(`M-x` or Roost's own question open, its menu, a draft, a task whose host
+hasn't replied yet, a mouse press in a terminal that never let go, a review
+note half written, the question before discarding a task), and then goes
+to a task another way: a click, `l`, `n` or `t` in the sidebar, a click on
+a notification, or a click in the terminal. They press keys and click
+through Emacs's command loop. A menu or dialog of the system's own, which a
+right click or a question after a click opens, would hold Emacs up, so the
+journey says beforehand what you would choose in it.
+
+After each step it checks for Lisp errors, in commands, timers and process
+filters alike, for a backtrace, for lines of Roost's views cut off at the
+window's edge, for another task's terminal beside the current task's, for
+a terminal that shows other than what tmux has in its pane, or history
+nobody scrolled it to, and for a question open in the minibuffer that you
+aren't in, unless the journey left it so, or anything Roost holds back
+until such a question is done. A key sequence or click that has Emacs
+collect garbage more than 20 times fails its step too. It also runs the
+sweep where text is measured in pixels.
+
+A run takes about 25 minutes, writes `report.html` with each step's
+windows, the echo area and a screenshot, and fails if anything was wrong.
+The report ends with the commands of Roost that no journey ran: where the
+next journeys should go. A problem known to come from elsewhere, such as a
+bug in a package awaiting its release, is marked `Known` in its journey: it
+is reported, without failing the run, until it stops happening. Look at
+the screenshots too: the checks don't see what merely looks wrong. Emacs
+needs Ghostel, with its native module, ghostel-tmux and Magit:
 
     make qa QA_FLAGS="-L ../ghostel/lisp -L ../ghostel-tmux --package-dir ~/.emacs.d/elpa"
 
@@ -1809,9 +1751,7 @@ the terminals' connections and TRAMP all go through it, so replies arrive as
 late as a remote host's do, which is where races between them show. Magit's
 review is left out there: over TRAMP's `ssh` method it takes most of a minute.
 `--tuned` gives Emacs settings many configurations have: pixel scrolling, a
-1 GB garbage collection threshold and, with tmux-control, its idle
-collection and pane directories, which make a remote terminal's directory a
-TRAMP one.
+1 GB garbage collection threshold.
 `--popular` adds packages many configurations have, from `-L` or
 `--package-dir`: vertico in vertico-posframe's popup, which hides a question
 you click away from, recursive minibuffers, and perspective.el, a
@@ -1819,12 +1759,6 @@ perspective for each task. Pass them in `QA_FLAGS`, as make takes long
 options for itself:
 
     make qa QA_FLAGS="--remote --tuned -L ../ghostel/lisp -L ../ghostel-tmux --package-dir ~/.emacs.d/elpa"
-
-`--backend tmux-control` takes the journeys with `roost-terminal-backend`
-set to it, given tmux-control and Eat with `-L` or `--package-dir`. It adds
-the journeys that press tmux-control's own commands (`panes`,
-`window_buffers`, `reconnect_away`, `scrollback`, `dropped`), which a run on
-ghostel-tmux leaves out.
 
 The agents update often, and Roost relies on what they report.
 `make contract` scans each installed agent for the events and fields Roost
@@ -1862,10 +1796,10 @@ again, and the diff shows what changed.
 
 | Agent | Captured | Scanned | How Roost hears it |
 | --- | --- | --- | --- |
-| Claude Code | 2.1.303, with and without relay; 2.1.310 relayed | hook events, notifications, payload fields | hooks given with `--settings` |
+| Claude Code | 2.1.303, with and without relay; 2.1.310 relayed; 2.1.322 | hook events, notifications, payload fields | hooks given with `--settings` |
 | Codex | 0.163.0, with and without relay | hook events and payload fields | hooks given with `-c`, reviewed once in Codex |
-| Pi | 1.3.0 | extension events, context, options | an extension given with `--extension` |
-| OpenCode | 1.19.4 | events, settings | a plugin named in `OPENCODE_CONFIG_CONTENT` |
+| Pi | 1.3.0, 1.5.2 | extension events, context, options | an extension given with `--extension` |
+| OpenCode | 1.19.3, 1.19.4 | events, settings | a plugin named in `OPENCODE_CONFIG_CONTENT` |
 
 See [validation](validation.md) for the live runs with Claude Code, Codex and
 Pi on local and remote hosts, [the demo notes](demo.md) for how the screenshots

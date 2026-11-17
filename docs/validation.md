@@ -35,6 +35,26 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## Before 0.13.0 — 2026-11-17
+
+- **`make test compile`** on the release commit, on macOS 27.2 with Emacs
+  32.0.50, tmux 3.6a, Git 2.54.0 and Python 3.9.6: 660 ERT tests (36
+  skipped, for lack of Magit, Evil and perspective.el on the load path) and
+  606 Python tests (8 skipped) passed, with no byte-compile warnings.
+- **`make contract`**: Claude Code, Codex and Pi as installed here, Pi at
+  1.5.2, all as expected; OpenCode isn't installed and was skipped.
+- **The docs**, read against the code: every key, command, option and
+  default the manual and README name, and every relative link. What was
+  stale is corrected in this release's commit.
+- **Live**, the sections below since 0.12.0: terminals through
+  ghostel-tmux, on this machine and a host; images from Pi and beside the
+  terminal; Roost's tools in Codex, OpenCode and Pi; search in Codex and Pi
+  conversations; and a pull request left to a real agent.
+- **Not this time.** The list above wasn't gone through by hand for the
+  release, and no whole `make qa` or `make crash` ran on the release
+  commit, which changes only the docs and the version since the runs
+  below.
+
 ## Search in Codex and Pi conversations — 2026-11-17
 
 On a Mac, with search (`/`) reading what Codex and Pi keep, as it did

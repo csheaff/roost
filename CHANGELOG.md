@@ -4,6 +4,31 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+## 0.13.0
+
+To upgrade from 0.12:
+
+- Install [Ghostel](https://github.com/dakra/ghostel) (from MELPA) and
+  [ghostel-tmux](https://github.com/dakra/ghostel-tmux), which draw the
+  terminals now, as [Install](docs/manual.md#install) shows. Ghostel offers
+  to download its native module the first time a terminal opens. Roost no
+  longer uses tmux-control, which you can remove.
+- A straight.el or Doom recipe for Roost with `:files ("roost.el" "scripts")`
+  needs `("roost*.el" "scripts")`, for `roost-ghostel-tmux.el`.
+- A terminal's keys are ghostel-tmux's: tmux's own after `C-t`, such as
+  `C-t o` for the next pane.
+- Restart Emacs after updating, for the new `L` key.
+- Tasks of every agent start with Roost's tools, which add a few sentences
+  to each request the agent makes. Set `roost-agent-offers` to nil to start
+  agents without them.
+- Stop and resume (`K`, then `s`) a running Claude Code task to give it
+  `show_image`. A Codex, OpenCode or Pi task started before the upgrade
+  stays without Roost's tools.
+- Nothing else: each host gets the new helper with Roost's next request to
+  it, and agents at work carry on.
+
+Changes since 0.12.0:
+
 - **A page a Pi task writes shows as it is written.** With
   `roost-agent-pages` on, a Pi task on this machine opens its page beside
   its terminal as the model starts on it, and the page fills in as the
@@ -49,28 +74,16 @@ What each release changes, and what to do when upgrading. Newest first.
   shows the draft as you left it, another offer opens in place of one you
   only looked at, and the draft has a **Dismiss offer** button. Nothing to
   do when upgrading.
-- **Terminals are drawn by Ghostel, through ghostel-tmux, by default.**
-  `roost-terminal-backend` is now `ghostel-tmux`, and Roost needs
+- **Terminals are drawn by Ghostel, through ghostel-tmux.** Roost needs
   [Ghostel](https://github.com/dakra/ghostel) 0.65.0 and
-  [ghostel-tmux](https://github.com/dakra/ghostel-tmux) 0.3.0 or newer in
+  [ghostel-tmux](https://github.com/dakra/ghostel-tmux) 0.3.0 or newer, in
   place of tmux-control. A terminal draws the images an agent sends in the
   Kitty graphics protocol, as [Pi does](docs/manual.md#images-in-a-terminal):
   Roost starts Pi so that it sends them. A task's terminal is named in its
-  mode line by its host and task. Tasks, their tmux
-  sessions and the helper are unchanged, and agents at work stay at work.
-  When upgrading, do one of two things:
-  - Install Ghostel (from MELPA) and ghostel-tmux, as
-    [Install](docs/manual.md#install) shows. A terminal's keys become
-    ghostel-tmux's, tmux's own after `C-t`. A straight.el or Doom recipe
-    for Roost with `:files ("roost.el" "scripts")` needs
-    `("roost*.el" "scripts")`, for `roost-ghostel-tmux.el`.
-  - Or keep tmux-control: `(setq roost-terminal-backend 'tmux-control)`
-    before Roost opens a task. The manual's
-    [Terminals through tmux-control](docs/manual.md#terminals-through-tmux-control)
-    says what differs.
-
-  Without either, opening a task says which package is missing.
-  ghostel-tmux has been used with Roost for less time than tmux-control:
+  mode line by its host and task. Tasks, their tmux sessions and the helper
+  are unchanged, and agents at work stay at work. When upgrading, install
+  the two packages, as the notes above say; without them, opening a task
+  says which is missing. ghostel-tmux is new to Roost:
   [A task's terminal](docs/manual.md#a-tasks-terminal) lists what is
   untried, and that Emacs 30.2 on macOS can crash after a host's connection
   drops.

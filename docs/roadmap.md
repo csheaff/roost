@@ -34,10 +34,10 @@ more work on noticing after them.
 
 Small, and probably worth the most.
 
-- **Ready for MELPA.** Keep tmux-control and Roost passing MELPA's checks,
-  with [the recipes and their status](melpa.md) current, and send them,
-  tmux-control first, once people ask for them there. Features don't wait
-  for it.
+- **Ready for MELPA.** Keep Roost passing MELPA's checks, with
+  [the recipe and its status](melpa.md) current, and send it once
+  ghostel-tmux is on MELPA and people ask for Roost there. Features don't
+  wait for it.
 - **Your phone, through Claude Code's Remote Control**, is in Roost now:
   `roost-remote-control` starts each Claude task with `--remote-control`
   and `--name`. Until Roost keeps a presence file
@@ -203,39 +203,15 @@ account, with no badge or verdict.
   the other way. From dmux, workmux (`-A`), Orca and agent-deck.
 - **Review notes from file buffers**, for diff-hl users who review in the
   file rather than in Magit.
-- **Ghostel in place of Eat.** In Roost now: terminals are drawn by
-  Ghostel, through ghostel-tmux, unless you choose tmux-control. What led
-  to it follows. [Ghostel](https://github.com/dakra/ghostel)
-  runs Ghostty's terminal engine in Emacs as a native module, with the Kitty
-  keyboard and graphics protocols and synchronized output. tmux-control
-  would draw panes with it instead of Eat. Speed is no longer the reason to
-  move for terminals you can see. With four agents streaming, Ghostel used
-  less than half the Emacs CPU Eat did (draft
-  [#78](https://github.com/csheaff/roost/pull/78)), but most of Eat's was
-  Emacs redrawing after every chunk. tmux-control 0.8.3 redraws a streaming
-  terminal at most 30 times a second, and Eat now uses about what Ghostel
-  did ([validation](validation.md), 2026-10-26). Terminals out of sight
-  still cost: ten streaming with one shown take 65% of a core. An option
-  for tmux to pause the output of terminals no window shows would bring
-  that to about 12%; Ghostel wasn't measured with hidden terminals. First
-  check that Ghostel can show output it doesn't read from its own process.
-  The module is a prebuilt download, one more thing to install.
-  [ghostel-tmux](https://github.com/dakra/ghostel-tmux) since does this
-  outside tmux-control, and Roost can show a task's terminal with it:
-  `roost-terminal-backend` ([validation](validation.md), 2026-11-15).
-  What is left is use, the journeys not yet run on it, and what its
-  layer reads of ghostel-tmux that is private: whether a client ended by
-  a detach or a dropped connection.
-- **Images in a task's terminal.** Pi shows the images its tools read in a
-  terminal that draws Kitty or iTerm2 images, and a line of text in their
-  place otherwise; under tmux it assumes neither unless `PI_IMAGE_PROTOCOL`
-  names one. tmux 3.6a's control mode already hands tmux-control all three
-  kinds byte for byte, and Ghostel draws a Kitty image it is fed with no
-  process of its own ([validation](validation.md), 2026-10-30), so images
-  would come with Ghostel in place of Eat (above). Eat draws only Sixel,
-  and only once tmux-control gives it the cell size `eat-mode` does.
-  Either way an image goes when tmux-control redraws a screen from tmux's
-  text, as after a resize. tmux's main branch takes Kitty graphics from a
+- **Ghostel draws the terminals**, in Roost now, through
+  [ghostel-tmux](https://github.com/dakra/ghostel-tmux), with the Kitty
+  keyboard and graphics protocols and synchronized output
+  ([validation](validation.md), 2026-11-15 and 2026-11-16). What is left
+  is use, and what Roost reads of ghostel-tmux that is private: whether a
+  client ended by a detach or a dropped connection.
+- **Images in a task's terminal** are in Roost now for Pi, which Roost
+  starts with `PI_IMAGE_PROTOCOL=kitty`. An image goes when Pi redraws its
+  screen, as after a resize. tmux's main branch takes Kitty graphics from a
   program in a pane (2026-10-16) and draws them on a terminal that shows
   them (2026-10-29), in no release yet: 3.8 is the latest.
 - **A second sign on the count, beside colour**, is in Roost now: the
@@ -322,8 +298,8 @@ Larger, or undecided.
   close it, and push events for its exit code and its program status (OSC
   7501, which tmux blocks for now; see Known gaps). Its IDs are never
   reused, so a stale ID can't reach another terminal. Missing: a documented
-  way for Emacs to attach to a terminal and stream it, as tmux-control does
-  with control mode. Rex's stream starts with a snapshot in Ghostty's own
+  way for Emacs to attach to a terminal and stream it, as ghostel-tmux does
+  with tmux's control mode. Rex's stream starts with a snapshot in Ghostty's own
   format, and `rex block stream` isn't implemented: asked for in the beta
   on 2026-10-21, and still so on 2026-10-26 ([validation](validation.md)).
   Look again once Emacs can attach.
@@ -331,13 +307,11 @@ Larger, or undecided.
   keeps each task's terminal in a small daemon of its own and redraws it
   from Ghostty's engine when you attach. Emacs would show a task as a plain
   Ghostel terminal running `zmx attach`, through `ssh -t` for a remote host,
-  with no Eat and no tmux-control. The draft
+  with no tmux. The draft
   [#78](https://github.com/csheaff/roost/pull/78) tried it on 2026-10-20:
   links, Shift+Enter and program status worked without patches, and remote
   terminals shared one SSH connection, but zmx 0.8.1 isn't ready. It used
-  less Emacs CPU too, but for terminals you can see tmux-control 0.8.3
-  closed that gap (see Ghostel, above), so speed is no longer the reason;
-  zmx's own readiness is what decides it. Look again
+  Speed is not the reason: zmx's own readiness is what decides it. Look again
   once a zmx release keeps the whole scrollback when you reattach
   ([zmx#296](https://github.com/neurosnap/zmx/pull/296)) and shows a task
   started with nothing attached (fixed on zmx's main), and once an upgrade
@@ -348,7 +322,7 @@ Larger, or undecided.
   a background process with a documented API, answers the agent's status
   probe (OSC 7501) itself and keeps what it reports. Emacs would show a
   task as a Ghostel terminal running `hc attach`, through `ssh -t` for a
-  remote host, with no tmux-control or Eat. The draft
+  remote host, with no tmux. The draft
   [#180](https://github.com/csheaff/roost/pull/180) tried it on 2026-10-29,
   on a Mac and on a Linux host over SSH: status came through with no relay
   and nothing attached, links and the whole scrollback survived a
@@ -356,7 +330,7 @@ Larger, or undecided.
   running agents alone. Not taken up: herdr-core is at 0.1.14 with a
   preview API, and no feature needs it. The relay covers status under
   tmux, which has agreed to keep that status itself (see Known gaps), and
-  Ghostel can come to tmux-control (see Ghostel, above). It also starts
+  Roost draws with Ghostel already. It also starts
   every terminal at 200×120, so the agent's first redraw
   leaves copies in the scrollback, and on Linux it turns on systemd
   lingering for you without asking. Look again once it has a stable
