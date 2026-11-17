@@ -1788,7 +1788,14 @@ An alist of each prompt and when, as `float-time' gives it.")
   "The page this buffer shows while its agent writes it: (CALL CODE WHOLE).
 CALL is the tool call's ID, CODE what there is of the page, and WHOLE
 whether that is all of it.  Nil for a page its host sent whole.")
+(defvar-local roost--shown-live-handed nil
+  "What this buffer's view was last handed: that `roost--shown-live', or nil.
+The very list, once the view had loaded the page that takes it.")
+(defvar-local roost--shown-page-loaded nil
+  "Whether this buffer's web view has loaded its page.")
 (put 'roost--shown-live 'permanent-local t)
+(put 'roost--shown-live-handed 'permanent-local t)
+(put 'roost--shown-page-loaded 'permanent-local t)
 (put 'roost--shown-page 'permanent-local t)
 (put 'roost--shown-page-file 'permanent-local t)
 (put 'roost--shown-page-timer 'permanent-local t)
@@ -12170,7 +12177,8 @@ that came while one filled the frame, to the windows as they were."
     (mapc #'kill-xwidget (get-buffer-xwidgets (current-buffer))))
   (when (and roost--shown-page-file (file-exists-p roost--shown-page-file))
     (ignore-errors (delete-file roost--shown-page-file)))
-  (setq roost--shown-page-timer nil roost--shown-page-file nil roost--shown-page-drawn nil))
+  (setq roost--shown-page-timer nil roost--shown-page-file nil roost--shown-page-drawn nil
+        roost--shown-page-loaded nil))
 
 (defun roost--drop-pages ()
   "Remove the file of each page shown, as Emacs goes.
@@ -12267,10 +12275,13 @@ dark.  What the page asks to send becomes a draft to its task."
                              "window.roostMode && roostMode(%S)")
                      (or (face-background 'default nil t) "white")
                      (if (eq (frame-parameter nil 'background-mode) 'dark) "dark" "light")))
-       ;; What its agent wrote of the page while the view loaded.
+       ;; What its agent wrote of the page while the view loaded, which
+       ;; had nothing to take it until now.
        (when (buffer-live-p (xwidget-buffer view))
          (with-current-buffer (xwidget-buffer view)
-           (roost--hand-live)))))
+           (when (eq view (roost--page-view))
+             (setq roost--shown-page-loaded t)
+             (roost--hand-live))))))
     ('javascript-callback
      (let* ((reply (nth 4 last-input-event))
             (asked (and (stringp reply)
@@ -12453,13 +12464,16 @@ nil if FILE is no page of a task this Emacs knows."
       (if whole 'whole 'writing))))
 
 (defun roost--hand-live ()
-  "Hand this buffer's view what its agent has written of its page so far."
+  "Hand this buffer's view what its agent has written of its page so far.
+Once the view has loaded its page: until then nothing in it takes what
+it is handed, and it is handed what there is by then."
   (pcase roost--shown-live
     (`(,_ ,code ,whole)
-     (when-let* ((view (roost--page-view)))
+     (when-let* ((view (and roost--shown-page-loaded (roost--page-view))))
        (xwidget-webkit-execute-script
         view (format "void (window.roostLive && roostLive(%s, %s))"
-                     (json-encode code) (if whole "true" "false")))))))
+                     (json-encode code) (if whole "true" "false")))
+       (setq roost--shown-live-handed roost--shown-live)))))
 
 (defun roost--live-escaped (code)
   "CODE as the helper writes it in a page's frame: its bytes, escaped."
@@ -12471,16 +12485,28 @@ nil if FILE is no page of a task this Emacs knows."
     code t t)
    'utf-8 t))
 
+(defun roost--page-frame (page)
+  "What the frame of PAGE holds, escaped as the helper wrote it, or nil."
+  (when-let* ((attribute " srcdoc=\"")
+              (start (string-search attribute page))
+              (start (+ start (length attribute)))
+              (end (string-search "\"" page start)))
+    (substring page start end)))
+
 (defun roost--live-shows-p (page)
   "Whether this buffer's view shows PAGE already, having shown it being written.
 PAGE is a page as its host sent it whole.  Only once all of it was
-handed to a view that is still there, and PAGE holds that same code."
+handed to a view that had loaded and is still there, and PAGE's frame
+holds what that view's held and then that same code, and no more."
   (pcase roost--shown-live
     (`(,_ ,code t)
      (and (roost--page-view)
+          (eq roost--shown-live-handed roost--shown-live)
+          (stringp roost--shown-page)
           (eq roost--shown-page-drawn roost--shown-page)
-          (string-search (roost--live-escaped code) page)
-          t))))
+          (when-let* ((held (roost--page-frame roost--shown-page))
+                      (whole (roost--page-frame page)))
+            (string= whole (concat held (roost--live-escaped code))))))))
 
 (defun roost--show-waiting (task)
   "Show the image TASK's agent showed while its terminal was off screen.

@@ -3000,9 +3000,10 @@ Invariants:
   under the same policy, as markup (`roostLive`). Its scripts wait: once it
   is whole, a page with scripts is loaded as one its host sent whole.
 - I10. What you see once the page is whole is what its host kept: the page its
-  host then sends replaces the one shown being written unless it holds the
-  very code the view was handed, and then the view stays as you have it
-  (`roost--live-shows-p`).
+  host then sends replaces the one shown being written unless its frame holds
+  just the code the view was handed, all of it, once the view had loaded the
+  page that takes it. Then the view stays as you have it
+  (`roost--live-shows-p`, `roost--hand-live`).
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
@@ -3023,9 +3024,9 @@ Invariants:
 | Closed, Waiting | the panel's Image line, `roost-show-image` | you stayed | On screen | fetched again, beside the window you are in | `roost-show-image` |
 | any | task retired, discarded, forgotten or gone from a list | | None | copy, buffer and both tables' entries go | `Store.remove`, `roost--forget-shown` |
 | any | Pi's model starts a `show_widget` call | a Pi task on this machine, known to this Emacs, which has a web view and watches | Being written | its buffer shows the page so far: beside the terminal if on screen, waiting otherwise | `roost--read-live`, `roost--take-live` |
-| Being written | the model writes more of the page | the same call | Being written | the view is handed the page so far | `roost--hand-live` |
-| Being written | its host sends the page whole | it holds the code the view was handed, all of it | On screen, Waiting or Closed, as it was | the view stays as it is, and one you closed meanwhile stays closed | `roost--take-shown`, `roost--live-shows-p` |
-| Being written | its host sends another page, or an image | | On screen or Waiting | shown in its place, as any is | `roost--take-shown` |
+| Being written | the model writes more of the page | the same call | Being written | the view is handed the page so far, once it has loaded the page that takes it | `roost--hand-live`, `roost--page-event` |
+| Being written | its host sends the page whole | its frame holds just the code the view, loaded, was handed, all of it | On screen, Waiting or Closed, as it was | the view stays as it is, and one you closed meanwhile stays closed | `roost--take-shown`, `roost--live-shows-p` |
+| Being written | its host sends another page or an image, or that page before the view was handed all of it | | On screen or Waiting | shown in its place, as any is | `roost--take-shown` |
 | Being written | another call's page starts | | Being written | the new page takes its place | `roost--take-live` |
 
 Open: a reply its host read before the agent showed an image, with the same

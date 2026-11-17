@@ -10800,6 +10800,15 @@ print(json.dumps(dict(data=data)))
         self.assertIn("var roostHead = null;", roost.widget_page("<p>whole</p>"))
         self.assertIn(html.escape(roost.WIDGET_HEAD + "<p>whole</p>", quote=True), roost.widget_page("<p>whole</p>"))
 
+        # What Emacs goes by to leave a page it showed being written as it
+        # is: the whole page's frame holds what that page's held, then the
+        # agent's code, escaped, and no more (`roost--live-shows-p`).
+        def frame(page):
+            start = page.index(' srcdoc="') + len(' srcdoc="')
+            return page[start:page.index('"', start)]
+        code = "<p title=\"R&D's\">caf\u00e9</p>"
+        self.assertEqual(frame(roost.widget_page(code)), frame(roost.live_page()) + html.escape(code, quote=True))
+
     @unittest.skipUnless(shutil.which("node"), "needs Node")
     def test_pis_extension_keeps_a_page_as_the_model_writes_it(self):
         store = roost.Store(str(self.state))

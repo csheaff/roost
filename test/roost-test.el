@@ -16213,10 +16213,25 @@ it of the same ID's, or nil for the first."
           (key '(nil "1111111111111111"))
           (file (expand-file-name "live/1111111111111111.json" roost-state-directory))
           (code "<svg viewBox=\"0 0 8 8\"><text>R&D's</text>")
-          (write (lambda (code whole)
+          (write (lambda (code whole &optional call)
                    (with-temp-file file
-                     (insert (json-encode `((id . "call_1") (title . "Clock") (code . ,code)
+                     (insert (json-encode `((id . ,(or call "call_1")) (title . "Clock") (code . ,code)
                                             (whole . ,(if whole t :json-false))))))))
+          ;; The page a view loads to show one being written, and a whole
+          ;; page, as the helper writes them: a frame that holds what every
+          ;; page starts with, and in a whole one its agent's code after it.
+          (live (concat "<iframe id=\"widget\" sandbox=\"allow-scripts\" srcdoc=\"head\"></iframe>"
+                        "<script>var roostHead = roostFrame.getAttribute('srcdoc');</script>"))
+          (page (lambda (code)
+                  (concat "<iframe id=\"widget\" sandbox=\"allow-scripts\" srcdoc=\"head"
+                          (roost--live-escaped code) "\"></iframe><script>var roostHead = null;</script>")))
+          (shown (lambda (at code)
+                   (roost--take-shown key `((id . "0a1b2c3d") (name . "Clock") (kind . "html") (at . ,at)
+                                            (data . ,(base64-encode-string (funcall page code) t))))))
+          ;; The view has loaded its page.
+          (loaded (lambda ()
+                    (let ((last-input-event (list 'xwidget-event 'load-changed 'view "load-finished")))
+                      (roost--page-event 'view 'load-changed))))
           drawn displayed said handed timers)
      (unwind-protect
          (cl-letf (((symbol-function 'roost--pages-p) (lambda () t))
@@ -16227,6 +16242,7 @@ it of the same ID's, or nil for the first."
                         (push window drawn)
                         (setq roost--shown-page-drawn roost--shown-page))))
                    ((symbol-function 'roost--page-view) (lambda () 'view))
+                   ((symbol-function 'xwidget-buffer) (lambda (_view) (roost--shown-buffer key)))
                    ((symbol-function 'xwidget-webkit-execute-script)
                     (lambda (_view script &optional _fun) (push script handed)))
                    ((symbol-function 'roost--display-shown)
@@ -16239,7 +16255,7 @@ it of the same ID's, or nil for the first."
                     (lambda (format &rest arguments) (push (apply #'format-message format arguments) said))))
            (make-directory (file-name-directory file) t)
            (with-temp-file (expand-file-name "live/page.html" roost-state-directory)
-             (insert "<p>the page a view loads</p>"))
+             (insert live))
            (roost--cache-task nil (append '((name . "budget")) (roost-test--task "1111111111111111" "running")))
            ;; The first of it: its buffer, with the page a view loads to
            ;; show one being written, beside the terminal.
@@ -16248,12 +16264,15 @@ it of the same ID's, or nil for the first."
            (should (equal displayed '("*roost image: budget*")))
            (should (equal (car said) "budget is drawing a page"))
            (with-current-buffer (roost--shown-buffer key)
-             (should (equal roost--shown-page "<p>the page a view loads</p>"))
+             (should (equal roost--shown-page live))
              (should (equal roost--shown-live '("call_1" "<svg viewBox=\"0 0 8 8\">" nil))))
-           ;; More of it goes to the same view, and opens nothing.
+           ;; More of it opens nothing, and waits for the view to have
+           ;; loaded its page, which is then handed what there is.
            (funcall write code nil)
            (should (eq (roost--take-live file) 'writing))
            (should (= (length displayed) 1))
+           (should-not handed)
+           (funcall loaded)
            (should (equal (car handed)
                           (format "void (window.roostLive && roostLive(%s, false))" (json-encode code))))
            ;; All of it.
@@ -16262,11 +16281,9 @@ it of the same ID's, or nil for the first."
            (should (string-suffix-p ", true))" (car handed)))
            ;; Its host's copy of that page, whole: the view has it already.
            (let ((views (length drawn))
-                 (whole (concat "<iframe srcdoc=\"head" (roost--live-escaped code) "\"></iframe>")))
+                 (whole (funcall page code)))
              (should (string-search "&lt;text&gt;R&amp;D&#x27;s&lt;/text&gt;" whole))
-             (roost--take-shown key `((id . "0a1b2c3d") (name . "Clock") (kind . "html")
-                                      (at . "2026-11-17T10:05:00+00:00")
-                                      (data . ,(base64-encode-string whole t))))
+             (funcall shown "2026-11-17T10:05:00+00:00" code)
              (with-current-buffer (roost--shown-buffer key)
                (should-not roost--shown-live)
                (should (equal roost--shown-page whole))
@@ -16288,6 +16305,34 @@ it of the same ID's, or nil for the first."
            (with-current-buffer (roost--shown-buffer key)
              (should-not roost--shown-live)
              (should (equal roost--shown-page "<p>yo</p>")))
+           ;; All of a page that comes before its view has loaded was handed
+           ;; to nothing: the page its host then sends is drawn, as any is.
+           (funcall write "<p>soon" nil "call_3")
+           (should (eq (roost--take-live file) 'writing))
+           (funcall write "<p>soon</p>" t "call_3")
+           (let ((scripts (length handed))
+                 (views (length drawn)))
+             (should (eq (roost--take-live file) 'whole))
+             (should (= (length handed) scripts))
+             (funcall shown "2026-11-17T10:12:00+00:00" "<p>soon</p>")
+             (with-current-buffer (roost--shown-buffer key)
+               (should-not roost--shown-live)
+               (should (equal roost--shown-page (funcall page "<p>soon</p>"))))
+             (should (= (length drawn) (1+ views))))
+           ;; A page its host sends that holds that code and more is another
+           ;; page, and is drawn too.
+           (funcall write "<p>Clock</p>" nil "call_4")
+           (should (eq (roost--take-live file) 'writing))
+           (funcall loaded)
+           (funcall write "<p>Clock</p>" t "call_4")
+           (should (eq (roost--take-live file) 'whole))
+           (should (string-suffix-p ", true))" (car handed)))
+           (let ((views (length drawn)))
+             (funcall shown "2026-11-17T10:15:00+00:00" "<p>Clock</p><p>Updated</p>")
+             (with-current-buffer (roost--shown-buffer key)
+               (should-not roost--shown-live)
+               (should (equal roost--shown-page (funcall page "<p>Clock</p><p>Updated</p>"))))
+             (should (= (length drawn) (1+ views))))
            ;; A page of a task this Emacs doesn't know is nobody's.
            (should-not (roost--take-live (expand-file-name "live/2222222222222222.json" roost-state-directory)))
            ;; The folder is watched where Emacs can show a page, and what
@@ -16315,7 +16360,9 @@ it of the same ID's, or nil for the first."
              (roost--forget-shown key))
            (should (file-exists-p file))
            (roost--cache-task nil (append '((name . "budget")) (roost-test--task "1111111111111111" "running")))
+           (funcall write "<p>last" nil "call_5")
            (roost--take-live file)
+           (should (roost--shown-buffer key))
            (roost--forget-shown key)
            (should-not (file-exists-p file))
            (should-not (roost--shown-buffer key)))
