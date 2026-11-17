@@ -12,7 +12,8 @@ To upgrade from 0.12:
   [ghostel-tmux](https://github.com/dakra/ghostel-tmux), which draw the
   terminals now, as [Install](docs/manual.md#install) shows. Ghostel offers
   to download its native module the first time a terminal opens. Roost no
-  longer uses tmux-control, which you can remove.
+  longer uses tmux-control, which you can remove; if you set
+  `roost-terminal-backend`, remove that setting first.
 - A straight.el or Doom recipe for Roost with `:files ("roost.el" "scripts")`
   needs `("roost*.el" "scripts")`, for `roost-ghostel-tmux.el`.
 - A terminal's keys are ghostel-tmux's: tmux's own after `C-t`, such as
@@ -21,9 +22,10 @@ To upgrade from 0.12:
 - Tasks of every agent start with Roost's tools, which add a few sentences
   to each request the agent makes. Set `roost-agent-offers` to nil to start
   agents without them.
-- Stop and resume (`K`, then `s`) a running Claude Code task to give it
-  `show_image`. A Codex, OpenCode or Pi task started before the upgrade
-  stays without Roost's tools.
+- Stop and resume (`K`, then `s`) a running Claude Code task that started
+  with `roost-agent-offers` on to give it `show_image`. A Codex, OpenCode
+  or Pi task started before the upgrade, and any task started with the
+  option off, stays without Roost's tools: start a new one to have them.
 - Nothing else: each host gets the new helper with Roost's next request to
   it, and agents at work carry on.
 
