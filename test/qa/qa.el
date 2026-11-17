@@ -1118,6 +1118,17 @@ question from another of the same prompt asked after it."
                                                   (image (ignore-errors (image-get-display-property)))
                                                   (size (ignore-errors (image-display-size image t))))
                                         (vector (car size) (cdr size)))))
+                          ;; Those of images shown together, in order.
+                          (images . ,(with-current-buffer buffer
+                                       (when (derived-mode-p 'roost-shown-sheet-mode)
+                                         (let ((at (point-min)) sizes)
+                                           (while (< at (point-max))
+                                             (let ((display (get-text-property at 'display)))
+                                               (when (eq (car-safe display) 'image)
+                                                 (let ((size (ignore-errors (image-display-size display t))))
+                                                   (push (vector (car size) (cdr size)) sizes))))
+                                             (setq at (1+ at)))
+                                           (vconcat (nreverse sizes))))))
                           (text . ,(qa--visible-text window))
                           (overflow . ,(qa--overflow window)))))
                     (qa--windows))))

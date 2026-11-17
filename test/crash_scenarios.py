@@ -424,6 +424,32 @@ class Show(KeepsTask):
                 problems.append("its record names an image whose copy is not there whole")
 
 
+class ShowSeveral(Show):
+    """An agent shows two images together: whenever the helper stops, the
+    task's record names none, or two whose copies are each there whole."""
+
+    def prepare(self, box):
+        super().prepare(box)
+        (Path(self.task["worktree"]) / "after.png").write_bytes(self.png + b"after")
+
+    def show(self, box, mode=None, at=None):
+        return offer(box, self.task, mode, at, tool="show_image", arguments=dict(paths=["shot.png", "after.png"]))
+
+    def holds(self, box, problems):
+        KeepsTask.holds(self, box, problems)
+        shown = (box.record(self.task["id"]) or {}).get("shown")
+        if self.final and self.final.get("ok") and not shown:
+            problems.append("said shown, and its task's record names no images")
+        if shown:
+            parts = shown.get("images") or []
+            if len(parts) != 2 or shown["id"] != parts[0]["id"]:
+                problems.append("its record does not name the two images shown, the first as one alone")
+            for part, data in zip(parts, (self.png, self.png + b"after")):
+                copy = box.state / "shown" / self.task["id"] / ("%s.%s" % (part["id"], part["kind"]))
+                if not copy.exists() or copy.read_bytes() != data:
+                    problems.append("its record names an image whose copy is not there whole")
+
+
 class ShowPage(Show):
     """An agent shows a page it wrote, which is kept as an image is."""
     action = "show_widget"
@@ -579,4 +605,4 @@ ALL = [Merge, MergeSquash, MergeAway, SquashAway, MergeTeardown, MergeSubmodule,
        RetireDead, RetireSquashedOnGitHub, Update, UpdateConflict, Discard, DiscardDirty, DiscardTeardown, Forget, Rename,
        Retarget,
        Stop, Resume, Seen, Turn, Send, Leave, Tell, Shell, Attach, Inspect, Look, PullRequest, PullRequestPush, Create, CreateFromRemote,
-       Propose, Show, ShowPage, TakeOffer, CreateFromOffer, CreateFork, CreateConversation]
+       Propose, Show, ShowSeveral, ShowPage, TakeOffer, CreateFromOffer, CreateFork, CreateConversation]
