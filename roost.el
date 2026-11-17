@@ -11883,8 +11883,9 @@ file's name."
          (live (window-live-p window))
          (column (frame-char-width (and live (window-frame window))))
          (line (frame-char-height (and live (window-frame window))))
-         (width (if live (window-body-width window t) (* 80 column)))
-         (height (if live (window-body-height window t) (* 24 line)))
+         (space (roost--sheet-space window))
+         (width (if space (car space) (* 80 column)))
+         (height (if space (cdr space) (* 24 line)))
          ;; Unmeasured, each has a row and its own size.
          (arranged (if sizes
                        (roost--sheet-arrange sizes width height column line)
@@ -11923,6 +11924,15 @@ file's name."
       (set-window-start window (point-min)))
     (add-hook 'window-size-change-functions #'roost--sheet-resized nil t)))
 
+(defun roost--sheet-space (window)
+  "The pixels this buffer's images have to fit in, as (WIDTH . HEIGHT), or nil.
+Those of the smallest of WINDOW and the other windows that show the
+buffer: it has one layout, which each of them draws."
+  (when-let* ((windows (delete-dups (append (and (window-live-p window) (list window))
+                                            (get-buffer-window-list nil nil t)))))
+    (cons (apply #'min (mapcar (lambda (each) (window-body-width each t)) windows))
+          (apply #'min (mapcar (lambda (each) (window-body-height each t)) windows)))))
+
 (defun roost--sheet-resized (window)
   "Lay this buffer's images out again soon, as WINDOW is resized."
   (run-with-idle-timer 0.3 nil #'roost--redraw-sheet window))
@@ -11932,8 +11942,7 @@ file's name."
   (when (window-live-p window)
     (with-current-buffer (window-buffer window)
       (when (and (derived-mode-p 'roost-shown-sheet-mode)
-                 (not (equal roost--sheet-drawn
-                             (cons (window-body-width window t) (window-body-height window t)))))
+                 (not (equal roost--sheet-drawn (roost--sheet-space window))))
         (roost--draw-sheet window)))))
 
 (defun roost--step-image (by)
@@ -11990,15 +11999,7 @@ back to them all."
     (unless (buffer-local-value 'roost--shown-task buffer)
       (user-error "No image a task's agent showed is here"))
     (if (if several one (roost--shown-enlarged-p window))
-        ;; Back: to them all, and to the windows as they were.
-        (let ((back (and (roost--shown-enlarged-p window) (window-parameter window 'roost-shown-back))))
-          (with-current-buffer buffer
-            (setq roost--shown-one nil))
-          (set-window-parameter window 'roost-shown-back nil)
-          (when back
-            (set-window-configuration (cdr back)))
-          (when-let* ((window (get-buffer-window buffer)))
-            (roost--draw-shown buffer window)))
+        (roost--shown-go-back window)
       (when several
         (with-current-buffer buffer
           (setq roost--shown-one
@@ -12017,12 +12018,27 @@ back to them all."
                    "Click the image, or type q, to go back; n and p show the others"
                  "Click the image, or type q, to put the windows back")))))
 
+(defun roost--shown-go-back (window)
+  "Put back the windows WINDOW's image took to fill its frame, if it did.
+And show all of several images again, where it showed one alone."
+  (let ((buffer (window-buffer window))
+        (back (and (roost--shown-enlarged-p window) (window-parameter window 'roost-shown-back))))
+    (with-current-buffer buffer
+      (setq roost--shown-one nil))
+    (set-window-parameter window 'roost-shown-back nil)
+    (when back
+      (set-window-configuration (cdr back)))
+    (when-let* ((window (get-buffer-window buffer)))
+      (roost--draw-shown buffer window))))
+
 (defun roost-quit-image ()
-  "Close this image's window, or put the windows back if it fills the frame."
+  "Close this image's window, or put the windows back if it fills the frame.
+From one of several images alone, go back to them all; from several
+that came while one filled the frame, to the windows as they were."
   (interactive)
   (if (or (roost--shown-enlarged-p (selected-window))
           (and roost--shown-images roost--shown-one))
-      (roost-enlarge-image)
+      (roost--shown-go-back (selected-window))
     (quit-window)))
 
 (defvar-keymap roost-shown-mode-map

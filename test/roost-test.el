@@ -16847,6 +16847,16 @@ report.py, and the third alone changes src/totals.py."
                                 '("before" "after")))
                  (should (string-match-p "before\\.png" (buffer-string)))
                  (should (string-match-p "after\\.png" (buffer-string))))
+               ;; Shown in a second, smaller window too, they are laid out
+               ;; for the smaller: both windows draw the one layout.
+               (let ((other (split-window terminal 6 'above)))
+                 (set-window-buffer other buffer)
+                 (with-current-buffer buffer
+                   (should (equal (roost--sheet-space window)
+                                  (cons (min (window-body-width window t) (window-body-width other t))
+                                        (min (window-body-height window t) (window-body-height other t)))))
+                   (should (< (cdr (roost--sheet-space window)) (window-body-height window t))))
+                 (delete-window other))
                ;; The second, clicked, fills the frame alone; `image-mode'
                ;; draws no image in a test, so the drawing is left out.
                (cl-letf (((symbol-function 'roost--draw-shown) #'ignore))
@@ -16865,6 +16875,21 @@ report.py, and the third alone changes src/totals.py."
                    (roost-quit-image))
                  (should-not (buffer-local-value 'roost--shown-one buffer))
                  (should (= (length (window-list)) 2))))
+             ;; Several that come while one fills the frame take its place
+             ;; there, and `q' still puts the windows back.
+             (cl-letf (((symbol-function 'roost--draw-shown) #'ignore))
+               (let ((window (get-buffer-window buffer)))
+                 (roost-enlarge-image (list 'mouse-1 (list window 1 '(0 . 0) 0)))
+                 (should (one-window-p))
+                 (roost--take-shown key '((name . "c.png and d.png") (kind . "png")
+                                          (at . "2026-11-17T10:02:00+00:00")
+                                          (images ((name . "c.png") (kind . "png") (data . "Yw=="))
+                                                  ((name . "d.png") (kind . "png") (data . "ZA==")))))
+                 (should-not (buffer-local-value 'roost--shown-one buffer))
+                 (should (roost--shown-enlarged-p (selected-window)))
+                 (with-current-buffer buffer (roost-quit-image))
+                 (should (= (length (window-list)) 2))
+                 (should-not (buffer-local-value 'roost--shown-one buffer))))
              ;; One image shown next is one again, with nothing to step to.
              (cl-letf (((symbol-function 'roost--draw-shown) #'ignore))
              (roost--take-shown key '((name . "shot.png") (kind . "png") (at . "2026-11-17T10:05:00+00:00")
