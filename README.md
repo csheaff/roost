@@ -38,9 +38,9 @@ the middle, and what to do next at the right.*
 
    ![A task's terminal above the Magit diff of ledger.py, with a review note under a changed line: the bars come out in the order the entries were imported; sort them largest first, so the chart reads at a glance. Beside them, the task's panel lists the file it changed, one review note for the agent, and the two other tasks that change the same file](docs/images/roost-review.png)
 
-4. **Finish.** `C-c r m` squashes the task into the branch it started from
-   and removes its worktree, branch and terminal. `C-c r P` opens a pull
-   request instead.
+4. **Finish.** Once the agent has committed, `C-c r m` squashes the task
+   into the branch it started from and removes its worktree, branch and
+   terminal. `C-c r P` opens a pull request instead.
 
 **Or talk first.** `C-c r C` opens an agent in no project. Ask it to plan a
 piece of work, and each task it proposes waits under the conversation, a
