@@ -13011,7 +13011,9 @@ class ProgramStatus(unittest.TestCase):
                 % (json.dumps(plugin.as_uri()), json.dumps(configs)))
             env = dict(os.environ, ROOST_PYTHON=sys.executable, ROOST_HELPER="/dev/null",
                        ROOST_OPENCODE_ATTACHMENTS=folder)
-            env.pop("ROOST_OPENCODE_OBSERVER", None)
+            # As a task of OpenCode's would hand them down, were the tests run in one.
+            for name in ("ROOST_OPENCODE_OBSERVER", "ROOST_OPENCODE_TOOLS"):
+                env.pop(name, None)
             done = subprocess.run(["node", str(driver)], env=env, check=True, timeout=30,
                                   capture_output=True, text=True)
             empty, yours = json.loads(done.stdout.splitlines()[-1])
