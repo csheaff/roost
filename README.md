@@ -14,131 +14,77 @@ used Orca, it's that idea, inside Emacs.
 
 ![Emacs with three columns: Roost's sidebar listing nine agents on two hosts, the one you are on marked with a band, five ready, one working, one with changes not looked at and one asking permission, with what it asks under it; that agent's Pi terminal, named local › spending-chart in its mode line, where it has read the chart it drew, and the bar chart shows above its reply; and the task's panel, which says to review its changes in Magit and lists the file it changed](docs/images/roost-hero.png)
 
-*Nine agents on two hosts, eight of them Pi and one Claude Code. The Pi agent
-in the middle drew a chart and looked at it, and its terminal shows the
-picture. Every task is at the left, and at the right is what to do next and
-what it changed.*
+*Nine agents on two hosts: every task at the left, one agent's terminal in
+the middle, and what to do next at the right.*
 
 ## A task, start to finish
 
-One task, from a heading in an Org file to `main`. `C-c r` opens Roost's
-menu, as in the setup [below](#get-started); in the dashboard, the sidebar
-and a task's panel its keys work alone.
+`C-c r` is Roost's menu, as in the [setup below](#get-started).
 
-1. **Start where the work is.** `C-c r c` on an Org heading drafts a task,
-   with the heading and its notes as the prompt; a selected region, a
-   GitHub issue or a Jira work item works the same way. `C-c C-c` makes the
-   worktree and branch and starts the agent.
+1. **Start where the work is.** `C-c r c` on an Org heading drafts a task
+   with the heading and its notes as the prompt; a region, a GitHub issue
+   or a Jira work item works the same way. `C-c C-c` starts the agent in a
+   worktree and branch of its own.
 
    ![An Org file of plans beside the draft that C-c r c made from its heading, Chart spending by category: Cancel and Create buttons at the top, the project ledger on this machine, the agent pi, one attempt, starting from main and merging into main, the task named chart-spending-category, each with its key beside it, and the heading and its notes as the prompt](docs/images/roost-new-task.png)
 
-2. **Go where you're needed.** While it works, another agent asks to run
-   its tests. `C-c r n` takes you to the next agent waiting for you, and
-   you answer it in its own terminal. With perspective.el or `tab-bar-mode`
-   on, each task has a perspective or tab of its own, which keeps its
-   terminal, diffs and files together as you left them.
+2. **Go where you're needed.** `C-c r n` takes you to the next agent
+   waiting for you, and you answer it in its own terminal. With
+   perspective.el or `tab-bar-mode`, each task has a perspective or tab of
+   its own.
 3. **Review, and reply in place.** The panel beside the terminal lists the
-   files the agent changed, and the other tasks that change them too. A
-   click opens one's diff in Magit, `;` writes a note on a line, and `@` in
-   Magit, or `e`, sends your notes to the agent. `C-c r r` opens Magit on
-   the whole worktree, over TRAMP for a remote task.
+   files the agent changed. Click one for its diff in Magit, write a note
+   on a line with `;`, and send your notes to the agent with `@`.
 
    ![A task's terminal above the Magit diff of ledger.py, with a review note under a changed line: the bars come out in the order the entries were imported; sort them largest first, so the chart reads at a glance. Beside them, the task's panel lists the file it changed, one review note for the agent, and the two other tasks that change the same file](docs/images/roost-review.png)
 
-4. **Finish.** The agent revises and commits. `C-c r m` squashes the task
+4. **Finish.** Once the agent has committed, `C-c r m` squashes the task
    into the branch it started from and removes its worktree, branch and
-   terminal. On the same menu, `u` brings a task up to date first, and `P`
-   opens a pull request instead.
+   terminal. `C-c r P` opens a pull request instead.
 
-**Or talk first.** `C-c r C` opens an agent in no project, with nothing to
-write beforehand. Ask it to look at a project and plan a piece of work: each
-task it would split it into waits under the conversation, and a click opens
-it as a draft in that project, to start as it is or change first. An agent
-at work in a task does the same with what it comes across outside its task,
-such as a bug in code it read.
+**Or talk first.** `C-c r C` opens an agent in no project. Ask it to plan a
+piece of work, and each task it proposes waits under the conversation, a
+click away from a draft.
 
-**Watch them all.** `M-x roost-dashboard` lists every agent on every host: what
-it's doing right now (`Running make test`, `Editing ledger.py`), what it
-changed, and its latest reply or what it asks. A notification says the same
-when one finishes or asks for something.
+**Watch them all.** `M-x roost-dashboard` lists every agent on every host:
+what it's doing (`Running make test`), what it changed, and its latest reply
+or what it asks. A notification says when one finishes or asks.
 
 ![The dashboard, counting 1 permission, 7 ready and 1 seen: six Pi tasks on dev, five ready and one seen, and three local ones, two Pi tasks ready and a Claude Code task asking to run python3 -m unittest, each with a light in the shape of its status, its agent, its changes, and its latest reply or what it asks](docs/images/roost-dashboard.png)
 
 ## What an agent can show you
 
-An agent's terminal is text. When an agent has a picture for you, Roost
-opens it beside the terminal: you open nothing, and you stay where you
-are.
+When an agent has a picture for you, Roost opens it beside its terminal.
 
 **Images.** Ask for a plot, a screenshot, or a before and an after. The
-agent shows up to six together, each over its file's name, and a click on
-one fills the frame.
+agent shows up to six together, and a click on one fills the frame.
 
 ![A task's terminal, named local › vectorise-signals, alone in the frame. Claude Code is asked to show the signals and the reconstruction together; it calls Roost, and a window opens beside the terminal with two images, one over the other: signals.png, red and blue arcs of pressure across a line of detectors against time, and reconstruction.png, two large and five small targets, bright in a hot colour map](docs/images/roost-show-images.gif)
 
-*A Claude Code task on a photoacoustic tomography simulation, asked for
-the signals its detectors record and the targets reconstructed from them.*
-
-**A page the agent writes.** With `(setq roost-agent-pages t)`, an agent
-in a task you start from then on can also write a small page of its own: a
-diagram you can click, a mock-up, controls to try. What moves in it works
-there, and a button in it that asks the agent something opens a draft for
-you to send. A page needs a graphical Emacs built with xwidgets.
+**Pages.** With `(setq roost-agent-pages t)`, an agent in a new task can
+also write a small page: a diagram you can click, a mock-up, controls to
+try. Pages need a graphical Emacs built with xwidgets.
 
 ![A task's terminal, named local › replay-reconstruction, alone in the frame. Claude Code is asked to show the reconstruction building once more; it calls Roost, and a page opens beside the terminal and plays: bright rays sweep across a Shepp-Logan phantom, a sinogram fills in from the left as a heat map, and above them the filtered back projection sharpens from streaks into the phantom as the count of views climbs to 181, over a pause button, a slider and a control for the filter](docs/images/roost-show-page.gif)
 
-*Asked to show a filtered back projection building as each projection is
-added, the agent wrote this page: the reconstruction, the rays through the
-phantom and the sinogram filling in, with a slider to scrub through them.*
-
 **As it is written.** A Pi task on this machine shows its page as the
-model writes it: the window opens when the model starts on the page, and
-the page fills in from there. That takes a model server that sends the
-page as it is written, as OpenAI's did here; LM Studio sends it whole, and
-the page then fills in at once.
+model writes it, when the model's server sends it piece by piece, as
+OpenAI's did here (played at twice its speed).
 
 ![A task's terminal, named local › explain-back-projection, alone in the frame. Pi is asked to draw back-projection once more with each arc in its detector's colour; a window opens beside the terminal while Pi is still working, and a page fills in: a heading, then a half circle from each of eleven detectors, one after another and each in its own colour, all crossing at a bright target, then the detectors along the bottom and a line on what the arcs are](docs/images/roost-show-as-written.gif)
 
-*A Pi task with gpt-6.2-sol, asked to draw how back-projection finds a
-target: each detector's arc appears as the model writes it. Played at
-twice its speed.*
-
 Pi also draws the images it reads
 [inside its terminal](docs/manual.md#images-in-a-terminal), as in the
-picture at the top; the other agents send none there. The
-[manual](docs/manual.md#a-day-with-roost) has the keys, sizes and limits.
-
-## How it differs
-
-Other Emacs packages run coding agents too, among them
-[agent-shell](https://github.com/xenodium/agent-shell),
-[claude-code.el](https://github.com/stevemolitor/claude-code.el) and
-[M-x Machina](https://github.com/eliraz-refael/m-x-machina). Roost differs in
-three ways:
-
-- **Agents run outside Emacs.** Each one runs in tmux, and Emacs shows its
-  terminal, drawn by [Ghostel](https://github.com/dakra/ghostel), with the
-  pictures an agent sends. Restart Emacs, and an agent at work is still at
-  work, rather than resumed from its saved conversation.
-- **On any machine you can reach over SSH.** One dashboard covers this
-  machine and your remote hosts, and Magit reviews their work over TRAMP,
-  fastest with [tramp-rpc](docs/manual.md#fitting-your-setup).
-  Close the laptop, and a remote agent carries on.
-- **It sees a task through.** Each task has its own worktree and branch. You
-  review it in Magit and send notes on its lines back to the agent; Roost
-  brings it up to date, merges it or opens a pull request, and cleans up.
-
-Each agent keeps its own terminal interface, so its prompts, menus and slash
-commands work as they always do, new ones included. Roost adds what lives
-outside the agent.
+picture at the top. The [manual](docs/manual.md#a-day-with-roost) has the
+keys, sizes and limits.
 
 ## Get started
 
-Roost needs Emacs 29.1 or newer, and two packages that draw the agents'
-terminals: [Ghostel](https://github.com/dakra/ghostel) 0.65.0 and
-[ghostel-tmux](https://github.com/dakra/ghostel-tmux) 0.3.0, or newer. Each
-host needs Python 3.9+, Git, tmux 3.1+ and a signed-in agent CLI; remote hosts
-need SSH with keys or an agent. With Emacs 30:
+Roost needs Emacs 29.1+, and [Ghostel](https://github.com/dakra/ghostel)
+0.65.0+ and [ghostel-tmux](https://github.com/dakra/ghostel-tmux) 0.3.0+ to
+draw the terminals. Each host needs Python 3.9+, Git, tmux 3.1+ and a
+signed-in agent CLI; remote hosts need SSH with keys or an agent. With
+Emacs 30:
 
 ```elisp
 (use-package ghostel :ensure t)             ; from MELPA
@@ -158,10 +104,10 @@ need SSH with keys or an agent. With Emacs 30:
 ```
 
 Ghostel offers to download its native module the first time a terminal
-opens. For straight.el, Doom, Emacs 29, Evil and other modal setups, see the
-[manual](docs/manual.md#install). Roost showed terminals with
-[tmux-control](docs/manual.md#terminals-through-tmux-control) until 0.13.0,
-and still can.
+opens. The [manual](docs/manual.md#install) covers straight.el, Doom, Emacs
+29, Evil and other modal setups, and
+[tmux-control](docs/manual.md#terminals-through-tmux-control), which drew
+the terminals before 0.13.0 and still can.
 
 1. `M-x roost-doctor` checks this machine and each host, with a fix for
    anything missing.
@@ -177,42 +123,42 @@ and still can.
 | `e` | Send the agent a prompt | `x` | Retire it, or discard it |
 | `/` | Search agents' conversations | `?` | Every command |
 
-These work in the dashboard, the sidebar and a task's panel, and on the menu.
-`C` starts a conversation, `B` changes the branch a task merges into, and
-`=` compares several attempts at one prompt.
+These work on the menu, and alone in the dashboard, the sidebar and a
+task's panel.
 
 ## Good to know
 
-- Roost is built around Claude Code and checked against each new release of
-  it. Codex, Pi and OpenCode tasks show the same statuses; Codex asks before
-  each commit, and its approvals show only once it moves on unless
-  `roost-program-status` is on.
+- Agents run in tmux, each in its own terminal interface: its prompts,
+  menus and slash commands work as always. Restart Emacs and they are still
+  at work; close the laptop and remote ones carry on.
 - Roost never answers an agent's prompts, never changes your global agent
   settings, and never stages or commits your work. It deletes work only when
   you discard a task and type its name.
-- Claude Code 2.1.284 and later start in auto mode unless a permission mode
-  is set, and rarely ask. To be asked before each command, add
-  `"--permission-mode" "manual"` to its entry in `roost-agent-commands`.
-- A task's agent has three tools of Roost's, to offer you tasks, to name
-  your projects and to [show you an image](#what-an-agent-can-show-you)
-  beside its terminal; `(setq roost-agent-offers nil)` starts tasks
-  without them.
-  `(setq roost-remote-control t)` shows each Claude task in the Claude
-  app, which notifies your phone when its agent needs a decision.
+- Roost is built around Claude Code and checked against each new release.
+  Codex, Pi and OpenCode tasks show the same statuses; Codex asks before
+  each commit, and its approvals show only once it moves on unless
+  `roost-program-status` is on.
+- Claude Code 2.1.284+ starts in auto mode and rarely asks. To be asked
+  before each command, add `"--permission-mode" "manual"` to its entry in
+  `roost-agent-commands`.
+- Each agent gets three tools from Roost, to offer you tasks, name your
+  projects and show you images; `(setq roost-agent-offers nil)` starts
+  tasks without them.
+- `(setq roost-remote-control t)` shows each Claude task in the Claude app,
+  which notifies your phone when its agent needs a decision.
 
 ## More
 
-- [The manual](docs/manual.md): every command and option, a day of work in
-  detail, and how Roost works.
+- [The manual](docs/manual.md): every command and option, and how Roost
+  works.
 - [Changes](CHANGELOG.md), with what to do when upgrading.
-- [A possible roadmap](docs/roadmap.md): ideas being considered, and the
-  tools and [research](docs/research.md) they come from.
-- [Validation](docs/validation.md): live runs with Claude Code and Codex, on
-  local and remote hosts. [How the screenshots were made](docs/demo.md),
-  and [the MELPA recipes](docs/melpa.md).
+- [A possible roadmap](docs/roadmap.md), and the
+  [research](docs/research.md) behind it.
+- [Validation](docs/validation.md) runs,
+  [how the screenshots were made](docs/demo.md), and
+  [the MELPA recipes](docs/melpa.md).
 
-[Orca](https://www.onorca.dev/) shaped the workflow: a worktree per task, a
-terminal nearby, review before finishing. See the
+[Orca](https://www.onorca.dev/) shaped the workflow; see the
 [comparison](docs/orca-comparison.md).
 
 ## License
