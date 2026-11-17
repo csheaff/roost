@@ -296,8 +296,14 @@ without asking you: Claude Code from `--mcp-config`, Codex from config
 overrides on its command line, OpenCode from its inline config, and Pi
 from Roost's extension (Pi 0.99.0 or newer, which has an MCP client; an
 older one goes without). Pi is shown the tools but not the
-sentences on when to use them, so it offers when you ask it to. A server of
-your own named `roost` in Pi's `mcp.json` stands in place of Roost's. Only
+sentences on when to use them, so it offers when you ask it to. Roost's
+server is named `roost`: one of your own by that name in Pi's `mcp.json`
+stands in place of it, and in Codex's or OpenCode's config is replaced by
+it for the task, so give yours another name. With Pi's MCP support turned
+off in its settings, Pi reports Roost's server as an extension's error
+when a task starts; `--no-mcp` in the task's command leaves it out. Codex
+was run at 0.163.0; an older one that does not know a server's
+`default_tools_approval_mode` asks before each of the tools. Only
 tasks you start after turning the option on have the tools. How often an
 agent offers rests on the model. This is an experiment: it may change or
 go.

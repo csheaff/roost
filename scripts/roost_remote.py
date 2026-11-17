@@ -1309,7 +1309,10 @@ class CodexAgent:
         command = shlex.join([sys.executable, hook_shim(store)])
         argv = list(task["command"])
         for event in CODEX_HOOK_EVENTS:
-            handler = '{ hooks = [{ type = "command", command = ' + json.dumps(command) + ', timeout = 3 }] }'
+            # A JSON string reads as TOML's with each character as itself:
+            # TOML takes no escaped pair, as JSON writes one past the BMP.
+            handler = ('{ hooks = [{ type = "command", command = ' + json.dumps(command, ensure_ascii=False)
+                       + ', timeout = 3 }] }')
             argv += ["-c", "hooks." + event + "=[" + handler + "]"]
         if task.get("mayOffer") is True:
             # Roost's tools, for this launch alone, as config overrides:
@@ -1319,8 +1322,6 @@ class CodexAgent:
             server = dict(command=sys.executable, args=mcp_arguments(store, task),
                           default_tools_approval_mode="approve")
             for key, value in server.items():
-                # A JSON string, or a list of them, reads as TOML's, with
-                # each character as itself: TOML takes no escaped pair.
                 argv += ["-c", "mcp_servers.roost.%s=%s" % (key, json.dumps(value, ensure_ascii=False))]
         session = task.get("agentSession")
         prompt = [first_message(task)] if first_message(task) else []
@@ -1494,7 +1495,9 @@ export default function (pi) {
   // server for this session, saved nowhere, its few tools declared to the
   // model as Pi's own are. A Pi with no MCP client, or with it turned
   // off, goes without them.
-  if (process.env.ROOST_PI_TOOLS && typeof pi.registerMcpServer === "function") {
+  // Pi reports a server nothing connects as this extension's error.
+  if (process.env.ROOST_PI_TOOLS && typeof pi.registerMcpServer === "function"
+      && !process.argv.includes("--no-mcp")) {
     try {
       pi.registerMcpServer("roost", { command: process.env.ROOST_PYTHON,
         args: JSON.parse(process.env.ROOST_PI_TOOLS), exposure: "direct",
@@ -4980,12 +4983,11 @@ class McpServer:
     def instructions(self):
         """What the agent is told of Roost's tools: as a task's, or as a
         conversation's, which has no project of its own."""
-        try:
+        task, reads = {}, ""
+        with contextlib.suppress(RoostError, OSError, ValueError):
             task = self.store.read(self.task_id)
             # With what its agent reads them with, if that needs no asking.
             reads = getattr(agent_for(task), "reads_projects", "")
-        except (RoostError, OSError, ValueError):
-            task, reads = {}, ""
         return ((MCP_CONVERSATION_INSTRUCTIONS % reads if task.get("conversation") is True else MCP_INSTRUCTIONS)
                 + (MCP_PAGES if self.pages() else ""))
 
@@ -4999,8 +5001,7 @@ class McpServer:
 
     def tools(self):
         """The tools this task's agent has, by name."""
-        return {name: definition for name, definition in MCP_TOOLS.items()
-                if name != "show_widget" or self.pages()}
+        return {name: MCP_TOOLS[name] for name in mcp_tool_names(dict(mayShowPages=self.pages()))}
 
     def answer(self, method, params):
         if method == "initialize":

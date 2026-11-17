@@ -337,11 +337,16 @@ def uses_roosts_tools(session):
     image with Roost's tools, told which to call, as a small model may not
     think to: both reach the task's record, and neither asks."""
     session.step("offer a task and show an image")
-    (Path(session.record()["worktree"]) / "contract.png").write_bytes(PNG)
-    seen, record = session.turn(
-        "Use two of Roost's tools, then reply DONE. Call propose_task with the title \"Add a docstring\" and "
-        "the brief \"Add a module docstring to contract_check.py.\" Then call show_image with the path "
-        "contract.png.", 240, "the turn with Roost's tools")
+    image = Path(session.record()["worktree"]) / "contract.png"
+    image.write_bytes(PNG)
+    try:
+        seen, record = session.turn(
+            "Use two of Roost's tools, then reply DONE. Call propose_task with the title \"Add a docstring\" and "
+            "the brief \"Add a module docstring to contract_check.py.\" Then call show_image with the path "
+            "contract.png.", 240, "the turn with Roost's tools")
+    finally:
+        # Roost keeps a copy, and a file left here would keep the task from retiring.
+        image.unlink(missing_ok=True)
     session.check(record.get("mayOffer") is True, "the task may offer", record.get("mayOffer"))
     offers = record.get("offers") or []
     session.check([offer.get("title") for offer in offers] == ["Add a docstring"],

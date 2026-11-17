@@ -62,6 +62,11 @@ On a Mac, with `roost-agent-offers` as each task's `mayOffer`:
   Pi called both tools, declared to the model as its own are.
 - All three captures kept: `codex-0.163.0`, `pi-1.5.2` and, new,
   `opencode-1.19.3`.
+- After the code review's fixes (the server's tool list from one function,
+  no registration under Pi's `--no-mcp`, Codex's hook commands written as
+  its MCP server's are), Pi's live run was repeated and passed again, and
+  its capture is that run's. Codex's and OpenCode's were not repeated:
+  `make test` covers what changed for them.
 - Not run: these tools in a task started from Emacs with each agent, a
   page (`show_widget`) from any of the three, a conversation with one of
   them, and Codex older than 0.163.0 or Pi older than 1.5.2. Pi is given

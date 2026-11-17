@@ -10732,8 +10732,10 @@ print(json.dumps(dict(data=data)))
         odd = roost.Store(str(self.root / "\U0001f426 \"\u00e9tat\""))
         argv = roost.CodexAgent().launch(odd, dict(task, mayOffer=True), False)
         args = next(arg for arg in argv if arg.startswith("mcp_servers.roost.args="))
-        self.assertNotIn("\\ud83d", args)
         self.assertIn(str(odd.root), json.loads(args.split("=", 1)[1]))
+        # In its hooks' commands too.
+        self.assertFalse([arg for arg in argv if "\\ud83d" in arg])
+        self.assertTrue([arg for arg in argv if arg.startswith("hooks.Stop=") and "\U0001f426" in arg])
 
     def test_opencode_takes_the_helper_as_its_mcp_server_in_its_inline_config(self):
         store = roost.Store(str(self.state))
@@ -10789,10 +10791,11 @@ print(json.dumps(dict(data=data)))
             "console.log(JSON.stringify(made));\n" % json.dumps(extension.as_uri()))
         arguments = roost.mcp_arguments(store, dict(id="0" * 16))
 
-        def registered(has, tools=json.dumps(arguments)):
+        def registered(has, tools=json.dumps(arguments), *options):
             env = dict(os.environ, ROOST_PYTHON=sys.executable, ROOST_HELPER="/dev/null", PI_HAS_MCP=has,
                        ROOST_PI_TOOLS=tools)
-            done = subprocess.run(["node", str(driver)], env=env, check=True, timeout=30, capture_output=True, text=True)
+            done = subprocess.run(["node", str(driver), *options], env=env, check=True, timeout=30,
+                                  capture_output=True, text=True)
             return json.loads(done.stdout.splitlines()[-1])
 
         # Declared to the model as Pi's own tools are, for this session alone.
@@ -10805,6 +10808,8 @@ print(json.dumps(dict(data=data)))
         self.assertEqual(registered("no"), [])
         self.assertEqual(registered("off"), [])
         self.assertEqual(registered("yes", "{"), [])
+        # Nor with Pi's MCP client off for the run, which Pi would report as an error.
+        self.assertEqual(registered("yes", json.dumps(arguments), "--no-mcp"), [])
 
     def test_every_agent_may_offer_and_only_when_asked(self):
         # Asked for: the task's record says so, and keeps it for a resume.
