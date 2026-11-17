@@ -398,6 +398,10 @@ Larger, or undecided.
   a new task's first one can, shows `ready` while Codex works.
 - A Pi extension's dialog names only its title ("Run this command?"), not
   what it asks about, so that is all the request shows.
+- `/` searches what Claude Code, Codex and Pi keep of a task's
+  conversations, as files of one message a line. OpenCode keeps its
+  sessions in a store of its own, which Roost doesn't read, so its tasks'
+  conversations are not searched, and the results say so.
 - While you write a commit message in a remote task, Magit can't show the
   diff beside it ("Error showing commit diff"); the commit goes through.
   The bug is Magit's, with any TRAMP method: from a linked worktree's Git

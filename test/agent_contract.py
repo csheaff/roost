@@ -181,6 +181,12 @@ def scan_codex():
                 + (": missing " + ", ".join(absent) + "; check CodexAgent.launch" if absent else ""))
     # In Plan mode a reply's plan is between these tags, and once the turn
     # ends a menu asks whether to implement it, of which no hook says.
+    # Search reads its rollouts: a session's first entry, then its messages.
+    absent = [word.decode() for word in (b"session_meta", b"response_item", b"input_text", b"output_text",
+                                         b"content_item_kinds", b"user.text")
+              if word not in data]
+    scan.report(not absent, "the rollout entries search reads"
+                + (": missing " + ", ".join(absent) + "; check CodexAgent.started_in and wrote" if absent else ""))
     gone = [name for name, words in (("the <proposed_plan> tag", b"<proposed_plan>"),
                                      ('the menu "Implement this plan?"', b"Implement this plan?"))
             if words not in data]
@@ -211,6 +217,15 @@ def scan_pi():
     code = "".join(file.read_text(errors="replace") for file in (root / "dist").glob("**/*.js"))
     absent = [flag for flag in PI_FLAGS if '"%s"' % flag not in code]
     scan.report(not absent, "options Roost passes" + (": missing " + ", ".join(absent) if absent else ""))
+    # Search reads its session files: a first entry that says where the
+    # session started, then each message as an entry.
+    manager = root / "dist/core/session-manager.js"
+    written = manager.read_text(errors="replace") if manager.is_file() else ""
+    absent = [what for what, pattern in (("a first entry with its folder", r'type: "session",[^}]*\bcwd\b'),
+                                         ("messages as entries", r'type: "message",[^}]*\bmessage\b'))
+              if not re.search(pattern, written)]
+    scan.report(not absent, "the session entries search reads"
+                + (": missing " + ", ".join(absent) + "; check PiAgent.started_in and wrote" if absent else ""))
     # An older Pi, with no MCP client, goes without Roost's tools.
     absent = [word for word in ("registerMcpServer", '"direct"') if word not in code]
     scan.report(not absent, "what Roost's extension registers its MCP server with"
@@ -315,6 +330,7 @@ class CodexSession(claude_contract.Session):
         self.check(record.get("lastEvent") in ("Interrupt", "Stop"), "a turn stopped with Esc shows ready",
                    record.get("lastEvent"))
         uses_roosts_tools(self)
+        search_finds_what_was_said(self, "DONE")
 
     def clean_up(self):
         super().clean_up()
@@ -354,6 +370,17 @@ def uses_roosts_tools(session):
     session.check((record.get("shown") or {}).get("name") == "contract.png", "and shows an image through show_image",
                   record.get("shown"))
     session.check("permission" not in seen, "Roost's tools never ask", seen)
+
+
+def search_finds_what_was_said(session, word):
+    """Search SESSION's store for WORD, which a prompt of the run and the
+    agent's reply to it hold: both are found, in the task, as its agent's.
+    A check of the files the agent keeps, so it marks no step of its own."""
+    found = session.rpc("search", query=word)
+    hits = next((task["hits"] for task in found["tasks"] if task.get("id") == session.task["id"]), [])
+    said = sorted({(hit.get("agent"), hit["role"]) for hit in hits})
+    session.check(said == [(session.agent, "assistant"), (session.agent, "user")],
+                  "search finds what you and the agent wrote", said or found)
 
 
 def send_while_it_works(session):
@@ -432,6 +459,7 @@ class PiSession(claude_contract.Session):
                    record.get("lastPrompt"))
         send_while_it_works(self)
         uses_roosts_tools(self)
+        search_finds_what_was_said(self, "PING")
 
 
 class OpenCodeSession(claude_contract.Session):

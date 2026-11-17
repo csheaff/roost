@@ -3338,6 +3338,50 @@ terminal's, on a pty.  Skips the test where it can't be made."
                                      (buffer-string))))
          (when (get-buffer roost--search-buffer) (kill-buffer roost--search-buffer)))))))
 
+(ert-deftest roost-search-names-each-messages-agent-and-agents-not-searched ()
+  (roost-test--isolated
+   (let ((roost-hosts '("dev" nil)) requests)
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (host _action _params success failure) (push (list host success failure) requests))))
+       (unwind-protect
+           (save-window-excursion
+             (roost-search "heron")
+             (set-buffer roost--search-buffer)
+             (funcall (nth 1 (assoc "dev" requests))
+                      '((tasks ((past . t) (key . "0a1b2c3d4e/herons-9f8e7d") (name . "herons") (repo)
+                                (hits ((at . "2026-10-01T10:01:00Z") (role . "user") (agent . "codex")
+                                       (session . "s1") (line . 2)
+                                       (snippet . "Count the herons") (text . "Count the herons"))
+                                      ((at . "2026-10-01T10:02:00Z") (role . "assistant") (agent . "codex")
+                                       (session . "s1") (line . 3)
+                                       (snippet . "Three herons, by Codex") (text . "Three herons, by Codex"))
+                                      ((at . "2026-10-01T10:03:00Z") (role . "assistant") (agent . "pi")
+                                       (session . "s2") (line . 2)
+                                       (snippet . "Four herons, by Pi") (text . "Four herons, by Pi"))
+                                      ;; A message that names no agent is Claude's.
+                                      ((at . "2026-10-01T10:04:00Z") (role . "assistant")
+                                       (session . "s3") (line . 2)
+                                       (snippet . "Five herons, by Claude") (text . "Five herons, by Claude")))
+                                (more . 0)))
+                        (moreTasks . 0) (unsearched "opencode")))
+             (funcall (nth 1 (assoc nil requests)) '((tasks) (moreTasks . 0) (unsearched)))
+             (let ((shown (buffer-string)))
+               (should (string-match-p (concat "  2026-10-0.*You    Count the herons\n"
+                                               "  2026-10-0.*Codex  Three herons, by Codex\n"
+                                               "  2026-10-0.*Pi     Four herons, by Pi\n"
+                                               "  2026-10-0.*Claude Five herons, by Claude\n")
+                                       shown))
+               ;; A host with a task whose agent keeps its conversations
+               ;; where Roost doesn't read them says which agent.
+               (should (string-match-p "^OpenCode's conversations on dev are not searched$" shown))
+               (should-not (string-match-p "conversations on local are not searched" shown)))
+             ;; A host that failed says nothing of what it searched.
+             (setq requests nil)
+             (roost-search-again)
+             (dolist (request requests) (funcall (nth 2 request) "down"))
+             (should-not (string-match-p "are not searched" (buffer-string))))
+         (when (get-buffer roost--search-buffer) (kill-buffer roost--search-buffer)))))))
+
 (ert-deftest roost-mode-line-counts-agents-waiting ()
   (roost-test--isolated
    (should-not (roost--mode-line-count))
