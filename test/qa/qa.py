@@ -22,6 +22,7 @@ by --latency seconds.  Replies then come as late as a remote host's do.
 import argparse
 import datetime
 import html
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -4509,13 +4510,110 @@ def show_page(qa, repo):
 # --backend tmux-control.
 TMUX_CONTROL_ONLY = {"panes", "window_buffers", "reconnect_away", "scrollback", "dropped"}
 
+@journey("A page as its agent writes it")
+def page_as_written(qa, repo):
+    """What a task on this machine has written of a page shows as it
+    grows. Only Pi says what there is of a tool call's input before it is
+    whole, through Roost's extension in it, so here the files that
+    extension and the helper keep are written by hand, as they write them.
+    The page opens beside the terminal with the first of it and takes more
+    as it comes; the page the agent then shows whole, being that one,
+    leaves the view as it is."""
+    if qa.host:
+        qa.notes.add("A page shows as it is written only for a task on this machine, so that journey was not taken")
+        return
+    if qa.emacs.eval("(and (roost--pages-p) t)") != "t":
+        qa.notes.add("This Emacs has no web view (xwidgets), so the journey of a page being written was not taken")
+        return
+    qa.emacs.eval("(setq roost-agent-offers t roost-agent-pages t)")
+    task = start_task(qa, "Draw the seat plan")
+    open_task(qa, task)
+    ident = json.loads(qa.emacs.eval(
+        "(let (id) (maphash (lambda (_ task) (when (equal (alist-get 'name task) %s)"
+        " (setq id (alist-get 'id task)))) roost--tasks) id)" % lisp(task)))
+    # Emacs watches the folder from its next poll, once pages are on.
+    deadline = time.monotonic() + 20
+    while qa.emacs.eval("(and roost--live-watch t)") != "t":
+        if time.monotonic() > deadline:
+            raise Stuck("Emacs never watched for pages being written")
+        time.sleep(0.5)
+    spec = importlib.util.spec_from_file_location("roost_remote_for_qa", CHECKOUT / "scripts" / "roost_remote.py")
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+    live = qa.work / "state" / "live"
+    (live / "page.html").write_text(helper.live_page())
+
+    def written(code, whole=False):
+        part = live / (ident + ".json.part")
+        part.write_text(json.dumps(dict(id="call_qa", title="seat plan", code=code, whole=whole)))
+        part.replace(live / (ident + ".json"))
+    # The page test/fake_claude.py shows for "page seat plan", to the letter:
+    # the one its host sends whole is then the one already on screen.
+    code = ('<button id="go" onclick="sendPrompt(\'Explain the seat plan\')">Explain the seat plan</button>'
+            '<input type="range" id="level" min="1" max="9" value="1">'
+            '<script>var born = Date.now(), pressed = false;'
+            'addEventListener("resize", function () {'
+            ' if (!pressed && Date.now() - born > 2500) {'
+            ' pressed = true; document.getElementById("go").click(); } });</script>')
+    name = "*roost image: %s*" % task
+    page = lambda s: next((w for w in s["windows"] if w["mode"] == "roost-shown-page-mode"), None)
+    view = "(with-current-buffer %s (roost--page-view))" % lisp(name)
+    so_far = lambda: qa.emacs.json(
+        "(json-encode (let ((live (buffer-local-value 'roost--shown-live (get-buffer %s))))"
+        " (and live (vector (length (nth 1 live)) (if (nth 2 live) t :json-false)))))" % lisp(name))
+
+    written(code[:40])
+    qa.wait("the page", page, timeout=30)
+    qa.step("The first of a page its agent is writing opens beside its terminal", expect=[
+        ("the page has a window of its own", lambda s: page(s)["buffer"] == name),
+        ("a web view draws it", lambda s: qa.emacs.eval("(and %s t)" % view) == "t"),
+        ("it holds what is written so far", lambda s: so_far() == [40, False]),
+        ("you stay in the terminal", lambda s: selected_terminal(s) is not None),
+        ("the agent has shown nothing yet", lambda s: "Page   seat plan" not in qa.window(s, "roost-task-info-mode")["text"])])
+
+    qa.emacs.eval("(progn (setq qa-page-view %s) t)" % view)
+    middle = code.index("<script>")
+    written(code[:middle])
+    deadline = time.monotonic() + 15
+    while so_far() != [middle, False]:
+        if time.monotonic() > deadline:
+            raise Stuck("The page never took more of what was written")
+        time.sleep(0.2)
+    qa.settle(1)
+    qa.step("More of it comes to the same page", expect=[
+        ("it is the same view", lambda s: qa.emacs.eval("(and (eq qa-page-view %s) t)" % view) == "t"),
+        ("in one window", lambda s: len([w for w in s["windows"] if w["buffer"] == name]) == 1)])
+
+    written(code, whole=True)
+    deadline = time.monotonic() + 15
+    while so_far() != [len(code), True]:
+        if time.monotonic() > deadline:
+            raise Stuck("The page never took the whole of what was written")
+        time.sleep(0.2)
+    # The call, whole, reaches the helper: the agent shows that page.
+    qa.keys("C-c r e")
+    qa.wait("the prompt", lambda s: s["prompt"])
+    qa.type("page seat plan\r")
+    qa.wait("the panel to name the page", lambda s: "Page   seat plan" in qa.window(s, "roost-task-info-mode")["text"],
+            timeout=30)
+    deadline = time.monotonic() + 15
+    while so_far() is not None:
+        if time.monotonic() > deadline:
+            raise Stuck("The page its host sent whole never took the place of the one being written")
+        time.sleep(0.2)
+    qa.step("The page its agent then shows whole is the one on screen already", expect=[
+        ("the view is the one that showed it being written", lambda s: qa.emacs.eval("(and (eq qa-page-view %s) t)" % view) == "t"),
+        ("the page still shows", lambda s: page(s) and page(s)["buffer"] == name),
+        ("the agent says it showed it", lambda s: any("SHOWED Shown." in w["text"] for w in terminals(s)))])
+
+
 JOURNEYS = [sweep, answer, next_waiting, fold, resize, merge, review, notes, since_looked, panes, window_buffers, reconnect_away, shell,
             dashboard, panel_keys, stop_resume, retire, discard, teardown, send, attach, update, conflicts, restart,
             search, workload, question_left,
             walk_away,
             frames, draft_frames, org, drafts, draft_fields, by_clicks, conversation, clicks, overlap, region, tabs,
             own_workspace,
-            forget, rename, fork, offer, left_pull_request, show, show_page, other_branch, switched_branch, merged, large, pull_request, merge_request, exits,
+            forget, rename, fork, offer, left_pull_request, show, show_page, page_as_written, other_branch, switched_branch, merged, large, pull_request, merge_request, exits,
             include, slow_create,
             unreachable,
             doctor, scrollback,

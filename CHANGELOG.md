@@ -4,6 +4,16 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- **A page a Pi task writes shows as it is written.** With
+  `roost-agent-pages` on, a Pi task on this machine opens its page beside
+  its terminal as the model starts on it, and the page fills in as the
+  model writes it, where it used to show once whole. Pi tells Roost's
+  extension what there is of a tool call's input as it comes, and Roost
+  does this for Pi alone so far: other agents' pages, and a Pi task's on
+  another host, show once whole, as before. It needs a model whose server
+  sends a tool call's input as it is written; LM Studio sends it whole, and
+  the page then fills in at once. Nothing to do when upgrading: Pi tasks
+  started from now on do this.
 - `/` searches the conversations of Codex and Pi tasks too, retired tasks'
   included; until now it found only what was said in Claude Code tasks.
   Each host reads the rollouts Codex keeps in `~/.codex/sessions`, those

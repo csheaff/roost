@@ -3491,7 +3491,7 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(seen.read_text(), "none")
         self.create(name="other", terminalImages="kitty")
         # The one you set yourself stands.
-        none = dict(ROOST_PI_TOOLS="")
+        none = dict(ROOST_PI_TOOLS="", ROOST_PI_LIVE="")
         self.assertEqual(roost.PiAgent().environment(store, dict(terminalImages="kitty"), dict()),
                          dict(none, PI_IMAGE_PROTOCOL="kitty"))
         self.assertEqual(roost.PiAgent().environment(
@@ -10768,12 +10768,103 @@ print(json.dumps(dict(data=data)))
         task = dict(id="1234567890abcdef", command=["pi"], prompt="Look")
         # For Roost's extension to register; empty for a task that may not
         # offer, whatever its runner's environment came with.
-        self.assertEqual(roost.PiAgent().environment(store, task, dict(ROOST_PI_TOOLS="[1]")), dict(ROOST_PI_TOOLS=""))
+        self.assertEqual(roost.PiAgent().environment(store, task, dict(ROOST_PI_TOOLS="[1]")),
+                         dict(ROOST_PI_TOOLS="", ROOST_PI_LIVE=""))
         env = roost.PiAgent().environment(store, dict(task, mayOffer=True), {})
         self.assertEqual(json.loads(env["ROOST_PI_TOOLS"]), [str(SOURCE.resolve()), "mcp", str(store.root), task["id"]])
         # Its command line is as it was.
         self.assertEqual(roost.PiAgent().launch(store, dict(task, mayOffer=True), False),
                          roost.PiAgent().launch(store, task, False))
+
+    def test_pi_is_told_where_to_keep_a_page_as_it_is_written(self):
+        store = roost.Store(str(self.state))
+        task = dict(id="1234567890abcdef", command=["pi"], prompt="Look", mayOffer=True)
+        # Only a task that may show pages, whose Emacs is on this machine
+        # to read them, and nothing of its runner's own.
+        self.assertEqual(roost.PiAgent().environment(store, task, dict(ROOST_PI_LIVE="/elsewhere"))["ROOST_PI_LIVE"], "")
+        for without in (dict(task, mayOffer=False, mayShowPages=True, pagesAsWritten=True),
+                        dict(task, mayShowPages=True), dict(task, pagesAsWritten=True),
+                        dict(task, mayShowPages=True, pagesAsWritten="yes")):
+            self.assertEqual(roost.PiAgent().environment(store, without, {})["ROOST_PI_LIVE"], "")
+        self.assertFalse((store.root / "live").exists())
+        env = roost.PiAgent().environment(store, dict(task, mayShowPages=True, pagesAsWritten=True), {})
+        self.assertEqual(env["ROOST_PI_LIVE"], str(store.root / "live" / "1234567890abcdef.json"))
+        self.assertEqual(stat.S_IMODE((store.root / "live").stat().st_mode), 0o700)
+        # Beside it, the page Emacs loads to show one being written: its
+        # frame holds what every page starts with and nothing of an agent's,
+        # and it alone takes what Emacs hands it.
+        page = (store.root / "live" / "page.html").read_text()
+        self.assertEqual(page, roost.live_page())
+        self.assertIn('srcdoc="%s"' % html.escape(roost.WIDGET_HEAD, quote=True), page)
+        self.assertIn("var roostHead = roostFrame.getAttribute('srcdoc');", page)
+        self.assertIn("var roostHead = null;", roost.widget_page("<p>whole</p>"))
+        self.assertIn(html.escape(roost.WIDGET_HEAD + "<p>whole</p>", quote=True), roost.widget_page("<p>whole</p>"))
+
+        # What Emacs goes by to leave a page it showed being written as it
+        # is: the whole page's frame holds what that page's held, then the
+        # agent's code, escaped, and no more (`roost--live-shows-p`).
+        def frame(page):
+            start = page.index(' srcdoc="') + len(' srcdoc="')
+            return page[start:page.index('"', start)]
+        code = "<p title=\"R&D's\">caf\u00e9</p>"
+        self.assertEqual(frame(roost.widget_page(code)), frame(roost.live_page()) + html.escape(code, quote=True))
+
+    @unittest.skipUnless(shutil.which("node"), "needs Node")
+    def test_pis_extension_keeps_a_page_as_the_model_writes_it(self):
+        store = roost.Store(str(self.state))
+        roost.PiAgent().launch(store, dict(id="0" * 16, command=["pi"], prompt=None), False)
+        extension = next(store.root.glob("pi-observer-*.mjs"))
+        live = Path(self.temp.name) / "live.json"
+        driver = Path(self.temp.name) / "live-driver.mjs"
+        # Pi's updates of a call as its input streams: its start, two
+        # more of it, and its end; then another tool's, and one too large.
+        driver.write_text("""
+import { existsSync, readFileSync } from "node:fs";
+const { default: observe } = await import(%s);
+const handlers = {};
+observe({ on: (event, handler) => { handlers[event] = handler; } });
+const read = () => existsSync(process.env.ROOST_PI_LIVE) ? JSON.parse(readFileSync(process.env.ROOST_PI_LIVE, "utf8")) : null;
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+const seen = [];
+if (!handlers.message_update) { console.log(JSON.stringify("no handler")); process.exit(0); }
+const call = (name, args) => ({ type: "toolCall", id: "call_1", name, arguments: args });
+const update = (type, name, args) => handlers.message_update({ assistantMessageEvent:
+  type === "toolcall_end" ? { type, contentIndex: 1, toolCall: call(name, args) }
+                          : { type, contentIndex: 1, partial: { content: [{ type: "text" }, call(name, args)] } } });
+update("toolcall_start", "mcp__roost__show_widget", {});
+seen.push(read());
+await wait(250);
+seen.push(read());
+update("toolcall_delta", "mcp__roost__show_widget", { title: "Cl", widget_code: "<svg><circle" });
+update("toolcall_delta", "mcp__roost__show_widget", { title: "Clock", widget_code: "<svg><circle r='1'/>" });
+await wait(250);
+seen.push(read());
+update("toolcall_end", "mcp__roost__show_widget", { title: "Clock", widget_code: "<svg><circle r='1'/></svg>" });
+seen.push(read());
+update("toolcall_end", "mcp__roost__show_image", { path: "x.png" });
+update("toolcall_end", "write", { path: "x", content: "y" });
+handlers.message_update({ assistantMessageEvent: { type: "text_delta", delta: "hi" } });
+update("toolcall_end", "mcp__roost__show_widget", { title: "Big", widget_code: "x".repeat(500001) });
+await wait(250);
+seen.push(read());
+console.log(JSON.stringify(seen));
+""" % json.dumps(extension.as_uri()))
+
+        def kept(path):
+            env = dict(os.environ, ROOST_PYTHON=sys.executable, ROOST_HELPER="/dev/null", ROOST_PI_TOOLS="",
+                       ROOST_PI_LIVE=path)
+            done = subprocess.run(["node", str(driver)], env=env, check=True, timeout=30,
+                                  capture_output=True, text=True)
+            return json.loads(done.stdout.splitlines()[-1])
+        # Nowhere to keep one: it does not listen at all.
+        self.assertEqual(kept(""), "no handler")
+        start = dict(id="call_1", title="", code="", whole=False)
+        more = dict(id="call_1", title="Clock", code="<svg><circle r='1'/>", whole=False)
+        whole = dict(id="call_1", title="Clock", code="<svg><circle r='1'/></svg>", whole=True)
+        # Not at once, but within a moment; the latest of what came
+        # meanwhile; all of it at once; and nothing of the rest.
+        self.assertEqual(kept(str(live)), [None, start, more, whole, whole])
+        self.assertFalse(Path(str(live) + ".part").exists())
 
     @unittest.skipUnless(shutil.which("node"), "needs Node")
     def test_pis_extension_registers_the_helper_as_an_mcp_server(self):
@@ -10830,6 +10921,8 @@ print(json.dumps(dict(data=data)))
                 record = roost.Store(str(self.state)).read(other["id"])
                 self.assertIs(record["mayOffer"], True)
                 self.assertIs(record["mayShowPages"], True)
+                # No Emacs said it would show a page as it is written.
+                self.assertNotIn("pagesAsWritten", record)
                 self.assertNotIn("mayOffer", self.create(name="plain " + agent, agent=agent,
                                                          command=[sys.executable, str(FAKE_AGENT), agent]))
 
@@ -10884,6 +10977,11 @@ print(json.dumps(dict(data=data)))
         self.assertNotIn("mayShowPages", store.read(plain["id"]))
         # Nor without the tools it comes with.
         self.assertNotIn("mayShowPages", store.read(self.create(name="bare", mayShowPages=True)["id"]))
+        # A page as it is written comes with pages, where its Emacs asks.
+        self.assertNotIn("pagesAsWritten", store.read(
+            self.create(name="no pages", mayOffer=True, pagesAsWritten=True)["id"]))
+        self.assertIs(store.read(self.create(name="as written", mayOffer=True, mayShowPages=True,
+                                             pagesAsWritten=True)["id"])["pagesAsWritten"], True)
 
         task = self.create(name="parent", mayOffer=True, mayShowPages=True)
         listed = self.serve(task, dict(id=1, method="initialize", params={}), dict(id=2, method="tools/list"))
