@@ -28,6 +28,8 @@ The title bar was cropped from each capture.
 | `roost-new-task.png` | `plans.org` beside the draft that `C-c r c` made from its heading |
 | `roost-review.png` | `spending-chart`'s terminal above the diff of `ledger.py`, with a review note under a line |
 | `roost-dashboard.png` | The dashboard of the same nine tasks, with `budget-alerts` asking |
+| `roost-show-images.gif` | `vectorise-signals`' terminal alone, then beside the two images its agent shows together: the signals a line of detectors records, and the reconstruction |
+| `roost-show-page.gif` | `replay-reconstruction`'s terminal alone, then beside the page its agent wrote, as it plays a filtered back projection one projection at a time |
 
 ## How they were made
 
@@ -54,6 +56,52 @@ GitHub shows the README: 172 columns by 38 lines for the hero, 132 by 20 for
 the draft and 132 by 18 for the dashboard, with the sidebar and panel off,
 and 156 by 36 for the review, with the sidebar off. The disposable projects,
 tasks and capture state were removed afterwards.
+
+## What an agent shows
+
+The two GIFs under "What an agent can show you" were taken on 2026-11-17,
+with Roost as it is after 0.12.0, in the same capture Emacs at 150 columns
+by 42 lines, with the sidebar and panel off and `roost-agent-pages` on.
+Both agents were Claude Code 2.1.326 with Sonnet 5.5, in the auto mode it
+starts in. Their projects were disposable copies of two small public
+repositories of the author's:
+[filt-back-proj](https://github.com/csheaff/filt-back-proj), a filtered
+back projection of the Shepp-Logan phantom, and
+[pa-tomography-xu-wang](https://github.com/csheaff/pa-tomography-xu-wang),
+Xu and Wang's universal back-projection for photoacoustic tomography. The
+agents' Python had numpy, scipy, matplotlib and Pillow.
+
+Each GIF begins with the terminal alone, so that it shows Roost opening
+the window: nothing but the request was typed. Each is of a picture its
+agent had shown before, closed with `q` and asked for again.
+
+`vectorise-signals` was asked to make `py/pa_tom_sim.py` run without a
+display, which it no longer did, to vectorise `getSignals`, and to show two
+pictures together: the signals the detectors along y = 0 record, signed, in
+blue and red, and the reconstruction in a hot colour map. It showed one
+figure of both. Asked for two images on a black background, kept in the
+repository, with zero black in the signals and their colour scale clipped
+at a third of the peak, it showed the two in the GIF, and said what each
+shows. The GIF is it being asked for them once more, as it happened: the
+images came three seconds after the request.
+
+`replay-reconstruction` was asked for a page that shows the reconstruction
+building as each projection is added, with a play button and a slider, by
+the script's own filter and back projection. Claude Code has a tool of its
+own that publishes a page, and began with that; told to show the page
+beside its terminal, it used Roost's. It was then asked to play the page
+as it opens and again at its end, to keep the rays off the reconstruction,
+and to lay it out for the window Roost gives a page, which nobody resized.
+The GIF is it being asked for the page once more. The agent took a minute
+to send the page again, and the GIF leaves that minute out, where the
+count of seconds in the terminal jumps; it ends when the replay has gone
+through once.
+
+Frames were taken with `screencapture` at about nine a second and made
+into GIFs 1,000 pixels wide with ffmpeg, of 128 colours for the images and
+64 for the page. WebKit paints
+nothing while its frame is covered, so the frame was kept above the others
+while the page played.
 
 ## Try the same workflow
 
