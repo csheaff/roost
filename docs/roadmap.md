@@ -263,9 +263,9 @@ Larger, or undecided.
   [#203](https://github.com/csheaff/roost/issues/203)), and a conversation,
   which has no project, plans a piece of work as tasks in your projects,
   each waiting under it for you to open and start. What it may grow, if
-  real offers ask for it, is reading the tasks an offer started, setting an
-  offer aside for later, and Codex, Pi and OpenCode, each after a recorded
-  live run. A fuller build is on branch `agent-offered-tasks`.
+  real offers ask for it, is reading the tasks an offer started and setting
+  an offer aside for later. Codex, OpenCode and Pi have the tools too. A
+  fuller build is on branch `agent-offered-tasks`.
 - **A map of the agent's work** beside its terminal: the files it reads and
   edits over time, drawn with Emacs 32's canvas images. Prototype on branch
   `work-map`.

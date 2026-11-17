@@ -493,7 +493,7 @@ A diagram, a mock-up or controls to try, beside its terminal, as it
 shows an image.  Off unless you turn it on: the tool for it adds to each
 request the agent makes, and a page shows only in a graphical Emacs built
 with xwidgets.  It comes with Roost's other tools, so it needs
-`roost-agent-offers' too.  Claude Code only.  New tasks follow this."
+`roost-agent-offers' too.  New tasks follow this."
   :type 'boolean)
 
 (defcustom roost-agent-offers t
@@ -509,8 +509,9 @@ An agent can also show you an image, such as a screenshot: it opens in
 a window beside the task's terminal, or once you open the task.
 Roost gives the agent tools for this, from an MCP server of its own,
 with a few sentences on when to use them, which cost tokens on each of
-its requests.  Only Claude Code takes them so far.  Tasks you start
-after changing this follow it; nil gives agents no tools of Roost's."
+its requests.  Each agent takes them for the one task, with nothing
+written to its own settings.  Tasks you start after changing this follow
+it; nil gives agents no tools of Roost's."
   :type 'boolean)
 
 (defcustom roost-remote-control nil

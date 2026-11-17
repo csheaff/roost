@@ -1016,6 +1016,9 @@ class ClaudeAgent:
     waits_for_hooks = True
     # It can have Roost's MCP server, to offer tasks (`roost-agent-offers').
     offers = True
+    # What it reads your projects with, from a conversation, without asking
+    # (see `claude_hook_settings').
+    reads_projects = " with your Read, Grep and Glob tools, which need no permission there,"
     # It can be reached from the Claude app (`roost-remote-control').
     remote_control = True
     answers = staticmethod(claude_answers)
@@ -1290,6 +1293,8 @@ class CodexAgent:
     # say when a turn starts and how it ends.
     reports_turns = False
     waits_for_hooks = True
+    # It can have Roost's MCP server, named for one launch on its command line.
+    offers = True
     answers = staticmethod(tool_answers)
 
     def validate(self, command):
@@ -1304,8 +1309,20 @@ class CodexAgent:
         command = shlex.join([sys.executable, hook_shim(store)])
         argv = list(task["command"])
         for event in CODEX_HOOK_EVENTS:
-            handler = '{ hooks = [{ type = "command", command = ' + json.dumps(command) + ', timeout = 3 }] }'
+            # A JSON string reads as TOML's with each character as itself:
+            # TOML takes no escaped pair, as JSON writes one past the BMP.
+            handler = ('{ hooks = [{ type = "command", command = ' + json.dumps(command, ensure_ascii=False)
+                       + ', timeout = 3 }] }')
             argv += ["-c", "hooks." + event + "=[" + handler + "]"]
+        if task.get("mayOffer") is True:
+            # Roost's tools, for this launch alone, as config overrides:
+            # ~/.codex is as it was. They need no asking, as an offer only
+            # waits in Roost and an image only shows beside the terminal,
+            # so Codex runs them as if approved.
+            server = dict(command=sys.executable, args=mcp_arguments(store, task),
+                          default_tools_approval_mode="approve")
+            for key, value in server.items():
+                argv += ["-c", "mcp_servers.roost.%s=%s" % (key, json.dumps(value, ensure_ascii=False))]
         session = task.get("agentSession")
         prompt = [first_message(task)] if first_message(task) else []
         if resume_conversation and session:
@@ -1474,6 +1491,19 @@ export default function (pi) {
   pi.on("ui_prompt_start", (event, ctx) => report("ui_prompt_start", ctx, { title: event.title }));
   pi.on("ui_prompt_end", (_event, ctx) => report("ui_prompt_end", ctx, { idle: idleOf(ctx) }));
   // Pi emits shutdown when replacing a session too; the runner records actual exit.
+  // Roost's own tools, where the task may offer: its helper as an MCP
+  // server for this session, saved nowhere, its few tools declared to the
+  // model as Pi's own are. A Pi with no MCP client, or with it turned
+  // off, goes without them.
+  // Pi reports a server nothing connects as this extension's error.
+  if (process.env.ROOST_PI_TOOLS && typeof pi.registerMcpServer === "function"
+      && !process.argv.includes("--no-mcp")) {
+    try {
+      pi.registerMcpServer("roost", { command: process.env.ROOST_PYTHON,
+        args: JSON.parse(process.env.ROOST_PI_TOOLS), exposure: "direct",
+        description: "Offer the user a task of its own, or show them an image, in Roost" });
+    } catch {}
+  }
 }
 '''
 
@@ -1488,6 +1518,9 @@ class PiAgent:
     default_command = ["pi"]
     # Pi 1.1.0 and later report their status, and say when a turn ends and how.
     reports_turns = True
+    # A Pi with an MCP client of its own can have Roost's MCP server, which
+    # Roost's extension registers for the one session.
+    offers = True
 
     def validate(self, command):
         validate_command(command, "Pi")
@@ -1516,11 +1549,15 @@ class PiAgent:
     def environment(self, store, task, env):
         """The protocol for the images TASK's terminal draws, if Emacs named
         one.  Under tmux Pi sends none unless told, as it cannot ask the
-        terminal behind tmux.  One you set yourself stands."""
+        terminal behind tmux.  One you set yourself stands.
+        And the arguments that run Roost's MCP server, for Roost's extension
+        to register where the task may offer: empty otherwise, whatever the
+        runner's own environment came with."""
+        added = dict(ROOST_PI_TOOLS=json.dumps(mcp_arguments(store, task)) if task.get("mayOffer") is True else "")
         images = task.get("terminalImages")
         if images in TERMINAL_IMAGES and not env.get("PI_IMAGE_PROTOCOL"):
-            return dict(PI_IMAGE_PROTOCOL=images)
-        return {}
+            added["PI_IMAGE_PROTOCOL"] = images
+        return added
 
     def observe(self, payload, current=None):
         event = payload.get("event")
@@ -1678,13 +1715,19 @@ export const RoostObserver = async () => {
     // The task's attachments are outside its worktree, which OpenCode asks
     // about: allowed for every agent once your config, files and inline
     // alike, is merged, as the last rule, so the rest is as you set it.
+    // So are Roost's own tools, where the task has them: an offer only
+    // waits in Roost, and an image only shows beside the terminal.
     config: async config => {
       const pattern = process.env.ROOST_OPENCODE_ATTACHMENTS;
-      if (!pattern || !config || typeof config !== "object") return;
+      const tools = (process.env.ROOST_OPENCODE_TOOLS || "").split(",").filter(Boolean);
+      if (!(pattern || tools.length) || !config || typeof config !== "object") return;
       if (!config.agent || typeof config.agent !== "object") config.agent = {};
       for (const name of new Set(["build", "plan", "general", "explore", ...Object.keys(config.agent)])) {
         const agent = config.agent[name] && typeof config.agent[name] === "object" ? config.agent[name] : {};
-        config.agent[name] = { ...agent, permission: allowing(agent.permission, "external_directory", pattern) };
+        let permission = agent.permission;
+        if (pattern) permission = allowing(permission, "external_directory", pattern);
+        for (const tool of tools) permission = allowing(permission, tool, "*");
+        config.agent[name] = { ...agent, permission };
       }
     },
     event: async ({ event }) => {
@@ -1771,6 +1814,8 @@ class OpenCodeAgent:
     default_command = ["opencode"]
     # Its sessions say when they work and when they idle, and what ended a turn.
     reports_turns = True
+    # It can have Roost's MCP server, named in its inline config.
+    offers = True
     # Its TUI's options that take a value, and one that takes several.
     valued = {"--model", "-m", "--agent", "--log-level", "--replay-limit", "--port", "--hostname", "--mdns-domain"}
     listed = {"--cors"}
@@ -1826,7 +1871,9 @@ class OpenCodeAgent:
         """The inline config that loads the plugin, added to any the user set:
         OpenCode merges it over their files rather than in place of them.
         The plugin lets TASK's agents read its attachments, named here, which
-        OpenCode would ask about, as outside its worktree."""
+        OpenCode would ask about, as outside its worktree.
+        Where TASK may offer, the config names Roost's MCP server too, and
+        the plugin allows its tools, named here as OpenCode names them."""
         if (env.get("OPENCODE_PURE") or "").lower() in ("1", "true", "yes", "on"):
             raise RoostError("OPENCODE_PURE leaves out every plugin, Roost's observer too; unset it for Roost's tasks")
         config = {}
@@ -1839,10 +1886,19 @@ class OpenCodeAgent:
                 raise RoostError("Roost adds its observer to OPENCODE_CONFIG_CONTENT, which must be a JSON object")
         plugins = config.get("plugin") if isinstance(config.get("plugin"), list) else []
         config["plugin"] = plugins + [self.plugin(store).as_uri()]
+        tools = ""
+        if task.get("mayOffer") is True:
+            servers = config.get("mcp") if isinstance(config.get("mcp"), dict) else {}
+            # OpenCode gives a server five seconds to answer unless told; an
+            # image is read whole, and an offer waits its turn at the records.
+            config["mcp"] = dict(servers, roost=dict(type="local", command=[sys.executable] + mcp_arguments(store, task),
+                                                     enabled=True, timeout=30000))
+            tools = ",".join("roost_" + name for name in mcp_tool_names(task))
         # Its plugin marks the OpenCode that reports; one Roost starts, as
         # from another task's shell, is a new one.
         return {"OPENCODE_CONFIG_CONTENT": json.dumps(config), "ROOST_OPENCODE_OBSERVER": "",
-                "ROOST_OPENCODE_ATTACHMENTS": str(store.attachments(task["id"])) + "/*"}
+                "ROOST_OPENCODE_ATTACHMENTS": str(store.attachments(task["id"])) + "/*",
+                "ROOST_OPENCODE_TOOLS": tools}
 
     def request(self, payload):
         """What a question or permission request asks, in Roost's words."""
@@ -4784,7 +4840,7 @@ MCP_CONVERSATION_INSTRUCTIONS = (
     "When they want work done in one of their projects, don't do it from here: offer each piece that "
     "stands by itself as a task with propose_task, naming its project. list_projects names the projects "
     "Roost has run tasks in on this machine, and any Git repository's folder will do. Read those "
-    "projects' files with your Read, Grep and Glob tools, which need no permission there, before you "
+    "projects' files%s before you "
     "plan; run no commands in them. Each offer waits "
     "under this conversation in Roost until the user starts it, as a task with its own agent, worktree "
     "and branch, which they review and merge; you can't start one yourself, nor do it here. Split a larger piece of "
@@ -4937,11 +4993,12 @@ class McpServer:
     def instructions(self):
         """What the agent is told of Roost's tools: as a task's, or as a
         conversation's, which has no project of its own."""
-        try:
-            conversation = self.store.read(self.task_id).get("conversation") is True
-        except (RoostError, OSError, ValueError):
-            conversation = False
-        return ((MCP_CONVERSATION_INSTRUCTIONS if conversation else MCP_INSTRUCTIONS)
+        task, reads = {}, ""
+        with contextlib.suppress(RoostError, OSError, ValueError):
+            task = self.store.read(self.task_id)
+            # With what its agent reads them with, if that needs no asking.
+            reads = getattr(agent_for(task), "reads_projects", "")
+        return ((MCP_CONVERSATION_INSTRUCTIONS % reads if task.get("conversation") is True else MCP_INSTRUCTIONS)
                 + (MCP_PAGES if self.pages() else ""))
 
     def pages(self):
@@ -4954,8 +5011,7 @@ class McpServer:
 
     def tools(self):
         """The tools this task's agent has, by name."""
-        return {name: definition for name, definition in MCP_TOOLS.items()
-                if name != "show_widget" or self.pages()}
+        return {name: MCP_TOOLS[name] for name in mcp_tool_names(dict(mayShowPages=self.pages()))}
 
     def answer(self, method, params):
         if method == "initialize":
@@ -4988,6 +5044,11 @@ class McpServer:
         # Such as a newer protocol's first request, after which the client
         # starts again with an older one.
         raise McpError(-32601, "Unknown method: " + method)
+
+
+def mcp_tool_names(task):
+    """The names of the tools TASK's agent has, as the server lists them."""
+    return [name for name in MCP_TOOLS if name != "show_widget" or task.get("mayShowPages") is True]
 
 
 def mcp_arguments(store, task):

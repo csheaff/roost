@@ -175,6 +175,10 @@ def scan_codex():
     # Its hooks are given on the command line, as -c hooks.EVENT=[...].
     scan.report(b"session_flags" in data, "hooks set with -c count" if b"session_flags" in data
                 else "no longer finds hooks set on the command line; check CodexAgent.launch")
+    # Roost's MCP server is given there too, with its tools approved.
+    absent = [word.decode() for word in (b"mcp_servers", b"default_tools_approval_mode") if word not in data]
+    scan.report(not absent, "an MCP server set with -c, its tools approved"
+                + (": missing " + ", ".join(absent) + "; check CodexAgent.launch" if absent else ""))
     # In Plan mode a reply's plan is between these tags, and once the turn
     # ends a menu asks whether to implement it, of which no hook says.
     gone = [name for name, words in (("the <proposed_plan> tag", b"<proposed_plan>"),
@@ -207,6 +211,10 @@ def scan_pi():
     code = "".join(file.read_text(errors="replace") for file in (root / "dist").glob("**/*.js"))
     absent = [flag for flag in PI_FLAGS if '"%s"' % flag not in code]
     scan.report(not absent, "options Roost passes" + (": missing " + ", ".join(absent) if absent else ""))
+    # An older Pi, with no MCP client, goes without Roost's tools.
+    absent = [word for word in ("registerMcpServer", '"direct"') if word not in code]
+    scan.report(not absent, "what Roost's extension registers its MCP server with"
+                + (": missing " + ", ".join(absent) if absent else ""))
     return scan.problems
 
 
@@ -224,7 +232,7 @@ def scan_opencode():
     events = {event for event in defined if event.startswith(OPENCODE_FAMILIES) and not event.startswith(OPENCODE_NEXT)}
     listened = set(re.findall(r'case "([a-z]+\.[a-z.]+)":', roost.OPENCODE_PLUGIN))
     scan.events(events, listened, OPENCODE_IGNORED_EVENTS, "event")
-    words = (b"OPENCODE_CONFIG_CONTENT", b"OPENCODE_PURE", b"MessageAbortedError")
+    words = (b"OPENCODE_CONFIG_CONTENT", b"OPENCODE_PURE", b"MessageAbortedError", b"McpLocalConfig")
     absent = [word.decode() for word in words if word not in data]
     scan.report(not absent, "the settings and errors Roost names" + (": missing " + ", ".join(absent) if absent else ""))
     return scan.problems
@@ -239,6 +247,7 @@ class CodexSession(claude_contract.Session):
 
     agent = "codex"
     command = ["codex", "--sandbox", "read-only", "--ask-for-approval", "on-request"]
+    asks = {"mayOffer": True}
 
     def __init__(self, program_status=False):
         super().__init__(program_status)
@@ -305,6 +314,7 @@ class CodexSession(claude_contract.Session):
                            30, "the stopped turn to be noticed")
         self.check(record.get("lastEvent") in ("Interrupt", "Stop"), "a turn stopped with Esc shows ready",
                    record.get("lastEvent"))
+        uses_roosts_tools(self)
 
     def clean_up(self):
         super().clean_up()
@@ -315,6 +325,35 @@ class CodexSession(claude_contract.Session):
                 path.write_text(after)
             else:
                 path.unlink()
+
+
+# The smallest PNG: one transparent pixel.
+PNG = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+       b"\x00\x00\x00\rIDATx\x9cc\xf8\xff\xff?\x03\x00\x08\xfc\x02\xfe\xa7\x9a\xa0\xa0\x00\x00\x00\x00IEND\xaeB`\x82")
+
+
+def uses_roosts_tools(session):
+    """Have SESSION's agent, whose task may offer, offer a task and show an
+    image with Roost's tools, told which to call, as a small model may not
+    think to: both reach the task's record, and neither asks."""
+    session.step("offer a task and show an image")
+    image = Path(session.record()["worktree"]) / "contract.png"
+    image.write_bytes(PNG)
+    try:
+        seen, record = session.turn(
+            "Use two of Roost's tools, then reply DONE. Call propose_task with the title \"Add a docstring\" and "
+            "the brief \"Add a module docstring to contract_check.py.\" Then call show_image with the path "
+            "contract.png.", 240, "the turn with Roost's tools")
+    finally:
+        # Roost keeps a copy, and a file left here would keep the task from retiring.
+        image.unlink(missing_ok=True)
+    session.check(record.get("mayOffer") is True, "the task may offer", record.get("mayOffer"))
+    offers = record.get("offers") or []
+    session.check([offer.get("title") for offer in offers] == ["Add a docstring"],
+                  "the agent offers a task through propose_task", offers)
+    session.check((record.get("shown") or {}).get("name") == "contract.png", "and shows an image through show_image",
+                  record.get("shown"))
+    session.check("permission" not in seen, "Roost's tools never ask", seen)
 
 
 def send_while_it_works(session):
@@ -356,6 +395,7 @@ class PiSession(claude_contract.Session):
 
     agent = "pi"
     command = ["pi"]
+    asks = {"mayOffer": True}
 
     def steps(self):
         record = self.until(lambda: self.record().get("lastEvent") == "Stop" and self.record(), 180, "the first reply")
@@ -391,6 +431,7 @@ class PiSession(claude_contract.Session):
         self.check(record.get("lastPrompt") == "Reply with the single word PING.", "your latest prompt is kept",
                    record.get("lastPrompt"))
         send_while_it_works(self)
+        uses_roosts_tools(self)
 
 
 class OpenCodeSession(claude_contract.Session):
@@ -398,6 +439,7 @@ class OpenCodeSession(claude_contract.Session):
 
     agent = "opencode"
     command = ["opencode"]
+    asks = {"mayOffer": True}
 
     def steps(self):
         # Its TUI starts the session with the task's prompt.
@@ -429,6 +471,7 @@ class OpenCodeSession(claude_contract.Session):
         self.check(record.get("lastPrompt") == "Reply with the single word PING.", "your latest prompt is kept",
                    record.get("lastPrompt"))
         send_while_it_works(self)
+        uses_roosts_tools(self)
 
 
 # A TOML table's header, on a line of its own: keys bare or quoted, joined by dots.

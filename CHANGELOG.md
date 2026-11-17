@@ -4,6 +4,18 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- **Codex, OpenCode and Pi tasks have Roost's tools too.** With
+  `roost-agent-offers` on, a task of any agent can offer tasks
+  (`propose_task`) and show you an image beside its terminal
+  (`show_image`), and with `roost-agent-pages` a page it writes; until now
+  only Claude Code tasks could. Each agent is given the helper's MCP server
+  for the one task, with nothing written to its own settings, and runs
+  those tools without asking: Codex by config overrides on its command
+  line, OpenCode in its inline config, and Pi through Roost's extension
+  (Pi 0.99.0 or newer; an older one goes without). When upgrading: tasks you start from now on have the
+  tools, which add a few sentences to each request the agent makes; set
+  `roost-agent-offers` to nil to give agents none. A Codex, OpenCode or Pi
+  task started before the upgrade stays without them.
 - An agent can show several images together, as a before and an after: up
   to six, of 16 MB in all. Roost lays them out in the rows that draw them
   largest in the window, all at one scale and each over its file's name.

@@ -290,9 +290,23 @@ without the offering task's changes, and the agent is told so.
 
 Roost gives the agent a tool, `propose_task`, from an MCP server of the
 helper's, with a few sentences on when to use it, which cost tokens on each
-of its requests. Only Claude Code takes it so far, and only tasks you start
-after turning the option on have it. How often an agent offers rests on the
-model. This is an experiment: it may change or go.
+of its requests. Claude Code, Codex, OpenCode and Pi each take it, for the
+one task and with nothing written to the agent's own settings, and run it
+without asking you: Claude Code from `--mcp-config`, Codex from config
+overrides on its command line, OpenCode from its inline config, and Pi
+from Roost's extension (Pi 0.99.0 or newer, which has an MCP client; an
+older one goes without). Pi is shown the tools but not the
+sentences on when to use them, so it offers when you ask it to. Roost's
+server is named `roost`: one of your own by that name in Pi's `mcp.json`
+stands in place of it, and in Codex's or OpenCode's config is replaced by
+it for the task, so give yours another name. With Pi's MCP support turned
+off in its settings, Pi reports Roost's server as an extension's error
+when a task starts; `--no-mcp` in the task's command leaves it out. Codex
+was run at 0.163.0; an older one that does not know a server's
+`default_tools_approval_mode` asks before each of the tools. Only
+tasks you start after turning the option on have the tools. How often an
+agent offers rests on the model. This is an experiment: it may change or
+go.
 
 **See an image an agent shows.** Most agents send no images to their
 terminal, so ask the agent to show you one, such as a screenshot or a chart
@@ -310,7 +324,7 @@ last showed: click the name, or `M-x roost-show-image`, to bring back one
 you closed. Roost keeps a copy on the task's
 host, so it works on a remote host and after the file has gone, and the copy
 goes with the task. The tool for this, `show_image`, comes with
-`roost-agent-offers`, for Claude Code tasks started or resumed since. It
+`roost-agent-offers`, for tasks of any agent started since. It
 shows a PNG, JPEG, GIF or WebP of at most 8 MB.
 
 Ask for several at once, as a before and an after, and the agent shows them
@@ -329,8 +343,8 @@ place, and what moves in it works there. A button in it that asks the agent
 something opens a draft to the task with its words, for you to send: nothing
 a page does reaches the agent until you do. The agent doesn't see its page
 drawn, so tell it what looks wrong. It needs a graphical Emacs built with
-xwidgets. The tool is `show_widget`, for a page of at most 512 KB, in Claude
-Code tasks started since you turned the option on.
+xwidgets. The tool is `show_widget`, for a page of at most 512 KB, in
+tasks started since you turned the option on.
 
 **Keep them in view.** `b` in the dashboard, or `M-x roost-sidebar-mode`, keeps a
 compact task list at the left of the frame, through `C-x 1`; add
@@ -988,14 +1002,14 @@ header line. A failed creation keeps the draft.
   which wait under its task for you to take
   ([Take the tasks an agent offers](#a-day-with-roost)), and a
   conversation's agent offer tasks in your projects, and either show you
-  an image beside its terminal. Claude Code only. Nil
+  an image beside its terminal. For every agent. Nil
   gives agents no tools of Roost's, for tasks started after you change it.
 - `roost-agent-pages` (nil): with `roost-agent-offers`, let a task's agent
   show you a page it writes, such as a diagram you can click
   ([See a page an agent writes](#a-day-with-roost)). Off by default: its
   tool adds to each request the agent makes, and a page shows only in a
-  graphical Emacs built with xwidgets. Claude Code only, for tasks started
-  after you turn it on.
+  graphical Emacs built with xwidgets. For tasks started after you turn it
+  on.
 - `roost-large-change` (`(:lines 400 :files 10 :directories 3)`): when a
   task's row gets its `±`. Leave one out to mark by the others, as
   `(:lines 400)`; nil marks none.
@@ -1169,9 +1183,12 @@ whether its terminal draws them, so an agent has to be told:
   read, when a task starts or resumes with ghostel-tmux showing the
   terminals; one you set yourself stands. With tmux-control Roost sets
   none, as Eat would not draw them.
-- **Claude Code, Codex and OpenCode** send no images to their terminal. A
-  Claude task can show you one beside its terminal instead, with Roost's
-  `show_image` tool.
+- **Claude Code, Codex and OpenCode** send no images to their terminal.
+
+A task of any of the four can show you an image beside its terminal
+instead, with Roost's `show_image` tool
+([See an image an agent shows](#a-day-with-roost)), which stays when the
+agent draws its screen again.
 
 `clear` leaves an image on the screen; a program that clears the whole
 screen removes it. With Pi 1.5.2, an image goes blank when Pi draws its
@@ -1424,9 +1441,17 @@ What runs where:
   Python, Roost's files in the state directory and the task's IDs. The
   other shell commands are your `roost-setup-command` and
   `roost-teardown-command`.
-- With `roost-agent-offers` on, Claude Code starts the helper as an MCP
-  server of its own (`--mcp-config`), over its standard input and output,
-  and ends it with itself. Its tool `show_image` copies an image file the
+- With `roost-agent-offers` on, the task's agent starts the helper as an
+  MCP server of its own, over its standard input and output, and ends it
+  with itself. Each is told of it for that one launch: Claude Code by
+  `--mcp-config`, Codex by `-c mcp_servers.roost…` overrides, OpenCode in
+  the inline config Roost already sets, and Pi by Roost's extension, which
+  registers it for the session. Each runs its tools without asking: Claude
+  Code by an allow rule in the task's settings file, Codex by the server's
+  `default_tools_approval_mode`, OpenCode by a rule Roost's plugin adds
+  after yours, and Pi asks about no tool unless an extension of yours does.
+  Nothing is written to `~/.claude`, `~/.codex`, `~/.config/opencode` or
+  `~/.pi`. Its tool `show_image` copies an image file the
   agent names into Roost's state directory, if its first bytes say it is a
   PNG, JPEG, GIF or WebP and it is at most 8 MB, and notes it in the task's
   record; Emacs draws that copy and nothing else. It copies up to six
