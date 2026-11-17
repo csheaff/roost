@@ -420,6 +420,16 @@ Return nil when none holds it."
                     t))))
             (qa--windows)))
 
+(defun qa-click-image ()
+  "Click on the first image on screen that a task's agent showed.
+Return nil when none is on screen."
+  (when-let* ((window (seq-find (lambda (window)
+                                  (buffer-local-value 'roost--shown-task (window-buffer window)))
+                                (qa--windows)))
+              (posn (posn-at-point (window-start window) window)))
+    (qa--input "a click on an image")
+    (qa--click-at posn)))
+
 (defun qa-click-terminal ()
   "Click in the first terminal on screen, as to type in it.
 Return nil when no terminal is on screen."
@@ -1049,6 +1059,7 @@ question from another of the same prompt asked after it."
   (let ((frame (or (frame-parent) (selected-frame))))
     (json-encode
      `((frame . ((columns . ,(frame-width frame)) (lines . ,(frame-height frame))
+                 (character . [,(frame-char-width frame) ,(frame-char-height frame)])
                  (pixels . [,(frame-pixel-width frame) ,(frame-pixel-height frame)])))
        (selected . ,(buffer-name (window-buffer (selected-window))))
        (at . ,(with-current-buffer (window-buffer (selected-window))
@@ -1100,6 +1111,13 @@ question from another of the same prompt asked after it."
                           (columns . ,(window-body-width window))
                           (total . ,(window-total-width window))
                           (lines . ,(window-body-height window))
+                          (pixels . [,(window-body-width window t) ,(window-body-height window t)])
+                          ;; The size an image is drawn at, in pixels.
+                          (image . ,(with-current-buffer buffer
+                                      (when-let* (((derived-mode-p 'image-mode))
+                                                  (image (ignore-errors (image-get-display-property)))
+                                                  (size (ignore-errors (image-display-size image t))))
+                                        (vector (car size) (cdr size)))))
                           (text . ,(qa--visible-text window))
                           (overflow . ,(qa--overflow window)))))
                     (qa--windows))))

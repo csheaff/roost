@@ -40,6 +40,15 @@ What each release changes, and what to do when upgrading. Newest first.
   split of a task with a shell beside its agent could come back in your
   window while the host replied, and Roost then said you had gone to
   another window and opened nothing. Nothing to do when upgrading.
+- An image an agent shows gets a window the size it needs, up to half the
+  terminal's space: to the terminal's right, or below it for a wide image
+  or a terminal with no columns to spare. It was four tenths of the
+  terminal whatever the image. Click the image, or type `z` there, and it
+  fills the frame; a click or `q` puts the windows back. An image much
+  taller than its window is as wide as it, for you to scroll. One that
+  another task's terminal took off the screen comes back when you open its
+  own task again. The next image's window is resized for it unless you
+  have resized it yourself. Nothing to do when upgrading.
 - `roost-task-opened-functions` are your own functions to run once Roost
   has shown a task's terminal, such as a modal setup's that enters its
   insert state there. Nothing to do when upgrading.

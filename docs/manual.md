@@ -294,13 +294,20 @@ of its requests. Only Claude Code takes it so far, and only tasks you start
 after turning the option on have it. How often an agent offers rests on the
 model. This is an experiment: it may change or go.
 
-**See an image an agent shows.** A terminal draws no images, so ask the agent
-to show you one, such as a screenshot or a chart it made: it opens in a window
-beside the task's terminal, fitted to it, and you stay where you are. The next
-image takes its place, and `q` there closes it. Shown while the task is off
-screen, it waits until you open the task; another task's terminal takes it off
-the screen. The task's panel names the image it last showed: click the name,
-or `M-x roost-show-image`, to bring it back. Roost keeps a copy on the task's
+**See an image an agent shows.** Most agents send no images to their
+terminal, so ask the agent to show you one, such as a screenshot or a chart
+it made: it opens in a window beside the task's terminal, and you stay where
+you are. The window is the size the image needs, up to half the terminal's
+space: to its right, or below it for a wide image or a terminal with no
+columns to spare. An image much taller than the window is as wide as it,
+for you to scroll. Click the image, or type `z` there, and it fills the
+frame; a click or `q` puts the windows back. The next image takes its
+place, in a window resized for it unless you have resized it yourself, and
+`q` there closes it. Shown while the task is off screen, it waits until you
+open the task; another task's terminal takes it off the screen, and it comes
+back when you open its own task again. The task's panel names the image it
+last showed: click the name, or `M-x roost-show-image`, to bring back one
+you closed. Roost keeps a copy on the task's
 host, so it works on a remote host and after the file has gone, and the copy
 goes with the task. The tool for this, `show_image`, comes with
 `roost-agent-offers`, for Claude Code tasks started or resumed since. It

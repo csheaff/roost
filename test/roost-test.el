@@ -16677,6 +16677,142 @@ report.py, and the third alone changes src/totals.py."
 
 ;; Images an agent shows.
 
+(ert-deftest roost-an-image-window-is-the-size-its-image-needs ()
+  ;; A terminal of 1600 by 1000 pixels, in characters of 8 by 20: 200
+  ;; columns and 50 lines.
+  (cl-flet ((place (width height &optional direction)
+              (roost--shown-place (cons width height) 1600 1000 8 20 direction)))
+    ;; A screenshot of a whole screen: to the right, in half the width.
+    (should (equal (place 3456 2234) '(right . 100)))
+    ;; A phone's: to the right, in no more columns than it needs at the
+    ;; terminal's height, 980 pixels less a mode line.
+    (should (equal (place 1170 2532) (cons 'right (+ 2 (ceiling (* 1170 (/ 980.0 2532)) 8)))))
+    ;; A wide chart: below, in the lines it needs at the terminal's width.
+    (should (equal (place 3200 600) (cons 'below (+ 2 (ceiling (* 600 0.5) 20)))))
+    ;; A small one is drawn whole either way, and takes what it needs
+    ;; where that is less of the terminal.
+    (should (equal (place 300 200) '(right . 40)))
+    (should (equal (place 800 100) '(below . 7)))
+    ;; Never fewer than twenty columns or five lines.
+    (should (equal (place 16 16) '(right . 20)))
+    (should (equal (place 1500 10) '(below . 5)))
+    ;; A page's whole length: as wide as it can be, to scroll.
+    (should (equal (place 1200 20000) '(right . 100)))
+    (should (equal (place 400 20000) '(right . 52)))
+    ;; On the side its window is on already, the size for that side.
+    (should (equal (place 3200 600 'right) (cons 'right 100)))
+    (should (equal (place 1170 2532 'below) (cons 'below 25))))
+  ;; A terminal with no columns to spare keeps them: the image goes below.
+  (should (eq (car (roost--shown-place '(3456 . 2234) 800 1000 8 20)) 'below))
+  (should (eq (car (roost--shown-place '(300 . 200) 720 1000 8 20)) 'below))
+  ;; One with a few gives up no more than leaves it eighty.
+  (should (equal (roost--shown-place '(1170 . 2532) 960 1000 8 20) '(right . 40))))
+
+(ert-deftest roost-an-image-window-is-resized-only-as-roost-left-it ()
+  ;; The next image's window takes its size, on the side it is on, unless
+  ;; you have resized it since.
+  (roost-test--isolated
+   (let ((buffer (generate-new-buffer "*roost image: budget*"))
+         (size '(30 . 4))
+         drawn)
+     (unwind-protect
+         (cl-letf (((symbol-function 'roost--shown-size) (lambda (_buffer) size))
+                   ((symbol-function 'roost--draw-shown)
+                    (lambda (_buffer window) (push window drawn))))
+           (let ((roost--shown-terminal-columns 20))
+             (delete-other-windows)
+             (let* ((terminal (selected-window))
+                    (lines (window-total-height terminal))
+                    (window (roost--display-shown buffer terminal)))
+               ;; Below: the frame has too few columns to spare.
+               (should (eq (window-in-direction 'below terminal) window))
+               (should (eq (selected-window) terminal))
+               (should (= (window-total-height window) 6))
+               (should (equal drawn (list window)))
+               ;; A taller image: its window grows, to half at most.
+               (setq size '(30 . 8))
+               (should (eq (roost--display-shown buffer terminal) window))
+               (should (= (window-total-height window) 10))
+               (setq size '(30 . 200))
+               (roost--display-shown buffer terminal)
+               (should (= (window-total-height window) (/ lines 2)))
+               ;; Resized by you, it stays as you have it.
+               (window-resize window -2)
+               (let ((yours (window-total-height window)))
+                 (setq size '(30 . 4))
+                 (roost--display-shown buffer terminal)
+                 (should (= (window-total-height window) yours))
+                 (should (= (length drawn) 4))))))
+       (kill-buffer buffer)))))
+
+(ert-deftest roost-an-image-fills-the-frame-and-the-windows-come-back ()
+  (roost-test--isolated
+   (let ((buffer (generate-new-buffer "*roost image: budget*"))
+         said)
+     (unwind-protect
+         (cl-letf (((symbol-function 'roost--shown-size) (lambda (_buffer) '(30 . 4)))
+                   ((symbol-function 'roost--draw-shown) #'ignore)
+                   ((symbol-function 'message)
+                    (lambda (format &rest args) (when format (push (apply #'format format args) said)))))
+           (with-current-buffer buffer
+             (setq roost--shown-task '("dev" "1111111111111111")))
+           (delete-other-windows)
+           (let* ((terminal (selected-window))
+                  (window (roost--display-shown buffer terminal)))
+             (should-not (roost--shown-enlarged-p window))
+             ;; From the window you are in, as a click does: the image's
+             ;; window is the only one, and says how to go back.
+             (roost-enlarge-image (list 'mouse-1 (list window 1 '(0 . 0) 0)))
+             (should (one-window-p))
+             (should (eq (window-buffer (selected-window)) buffer))
+             (should (roost--shown-enlarged-p (selected-window)))
+             (should (equal (car said) "Click the image, or type q, to put the windows back"))
+             ;; `q' puts the windows back, and you where you were.
+             (with-current-buffer buffer (roost-quit-image))
+             (should (= (length (window-list)) 2))
+             (should (eq (window-buffer (get-buffer-window buffer)) buffer))
+             (should-not (eq (window-buffer (selected-window)) buffer))
+             (should-not (buffer-local-value 'roost--shown-back buffer))
+             ;; And there `q' closes its window, as before.
+             (with-selected-window (get-buffer-window buffer)
+               (roost-quit-image))
+             (should (one-window-p))
+             (should-not (get-buffer-window buffer))
+             ;; Elsewhere there is no image to enlarge.
+             (should-error (roost-enlarge-image) :type 'user-error)))
+       (kill-buffer buffer)))))
+
+(ert-deftest roost-an-image-put-away-comes-back-with-its-task ()
+  ;; Another task's terminal takes an image off the screen; it shows
+  ;; again when its own task is opened, as one you closed does not.
+  (roost-test--isolated
+   (let* ((key '("dev" "1111111111111111"))
+          (mine (roost--cache-task "dev" (append '((name . "budget")) (roost-test--task "1111111111111111" "ready"))))
+          (other (roost--cache-task "dev" (append '((name . "ledger")) (roost-test--task "2222222222222222" "ready"))))
+          (buffer (generate-new-buffer "*roost image: budget*"))
+          displayed)
+     (unwind-protect
+         (cl-letf (((symbol-function 'roost--shown-size) (lambda (_buffer) nil))
+                   ((symbol-function 'roost--draw-shown) #'ignore))
+           (with-current-buffer buffer
+             (setq roost--shown-task key))
+           (delete-other-windows)
+           (let ((window (roost--display-shown buffer (selected-window))))
+             ;; Its own task opened again: it stays.
+             (roost--put-away-shown mine)
+             (should (window-live-p window))
+             (should-not (gethash key roost--shown-waiting))
+             ;; Another's: it goes, and waits.
+             (roost--put-away-shown other)
+             (should-not (get-buffer-window buffer))
+             (should (eq (gethash key roost--shown-waiting) buffer)))
+           (cl-letf (((symbol-function 'roost--display-shown)
+                      (lambda (buffer _window) (push buffer displayed))))
+             (roost--show-waiting mine)
+             (should (equal displayed (list buffer)))
+             (should-not (gethash key roost--shown-waiting))))
+       (kill-buffer buffer)))))
+
 (ert-deftest roost-shows-an-image-beside-its-terminal-or-once-opened ()
   ;; What an agent shows is fetched once, as news; what it showed before
   ;; this Emacs knew the task is not.  It shows beside the task's terminal,

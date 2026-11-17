@@ -217,10 +217,11 @@ for line in lines():
         event("Stop", last_assistant_message=said)
         status("done")
     elif line.startswith("show "):
-        # Make an image in the worktree, and show it to you in Roost.
-        name = line[len("show "):].strip()
+        # Make an image in the worktree, and show it to you in Roost: of
+        # a size, if one follows its name, as in "show long.png 400x6000".
+        name, _, size = line[len("show "):].strip().partition(" ")
         with open(name, "wb") as image:
-            image.write(png())
+            image.write(png(*(int(side) for side in size.split("x"))) if size else png())
         event("PreToolUse", tool_name="mcp__roost__show_image")
         said = call("show_image", path=name)
         event("PostToolUse", tool_name="mcp__roost__show_image")

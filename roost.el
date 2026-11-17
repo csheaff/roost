@@ -1725,7 +1725,9 @@ notifies of itself."
 ;; and its record says which, and Emacs fetches it and shows it in a window
 ;; beside the task's terminal, without selecting it.  A task shows one
 ;; image, in one buffer: the next takes its place.  While the task's
-;; terminal isn't on screen the image waits, and shows when you open it.
+;; terminal isn't on screen the image waits, and shows when you open it;
+;; one that another task's terminal took off the screen waits too.  Its
+;; window is the size the image needs, and a click lets it fill the frame.
 
 (defvar roost--shown-at (make-hash-table :test 'equal)
   "When each task's agent showed the image this Emacs last took up, by key.")
@@ -1738,6 +1740,15 @@ notifies of itself."
 ;; Kept as the buffer goes from the image's bytes to the image drawn.
 (put 'roost--shown-task 'permanent-local t)
 (put 'roost--shown-image-at 'permanent-local t)
+(defvar-local roost--shown-measured nil
+  "The size of the image in this buffer, and when it was shown.
+As (AT WIDTH . HEIGHT), in pixels, or (AT) for one that can't be measured.")
+(defvar-local roost--shown-back nil
+  "How to put the windows back while this buffer's image fills its frame.
+As (WINDOW . CONFIGURATION): the window that shows it, and the frame's
+windows as they were.")
+(put 'roost--shown-measured 'permanent-local t)
+(put 'roost--shown-back 'permanent-local t)
 (defvar-local roost--shown-page nil
   "The page in this buffer, if its agent showed a page and not an image.
 Its bytes, as its host sent them.")
@@ -1844,7 +1855,10 @@ or, when you ASKED for it, beside the window you are in."
         (roost--when-out-of-minibuffer
          (lambda ()
            (when (and (buffer-live-p buffer) (eq (gethash key roost--shown-waiting) buffer))
-             (if-let* ((beside (or (roost--shown-beside task)
+             ;; In the window that shows it, as when it fills the frame
+             ;; and its terminal is off screen.
+             (if-let* ((beside (or (get-buffer-window buffer)
+                                   (roost--shown-beside task)
                                    (and asked (roost--window-you-are-in)))))
                  (progn (remhash key roost--shown-waiting)
                         (roost--display-shown buffer beside)
@@ -11538,37 +11552,226 @@ Windows showing the panel keep their scroll position, and the mark stays."
                               'action (lambda (_button) (roost-show-image task)))
             "\n")))
 
+(defconst roost--shown-terminal-columns 80
+  "The columns a terminal keeps when an image goes to its right.")
+
+(defun roost--shown-size (buffer)
+  "The size of the image BUFFER holds, in pixels, as (WIDTH . HEIGHT).
+Nil for a page, and for an image this Emacs can't measure."
+  (with-current-buffer buffer
+    (unless roost--shown-page
+      (unless (and roost--shown-measured (equal (car roost--shown-measured) roost--shown-image-at))
+        (setq roost--shown-measured
+              (cons roost--shown-image-at
+                    (ignore-errors
+                      (let ((size (image-size
+                                   (create-image (buffer-substring-no-properties (point-min) (point-max))
+                                                 nil t :scale 1)
+                                   t)))
+                        (and (> (car size) 0) (> (cdr size) 0) size))))))
+      (cdr roost--shown-measured))))
+
+(defun roost--shown-place (size width height column line &optional direction)
+  "Where an image of SIZE goes beside a terminal, and how large its window is.
+SIZE is (WIDTH . HEIGHT) in pixels, WIDTH and HEIGHT are those of the
+space the terminal has now, and COLUMN and LINE those of a character.
+Return (DIRECTION . TOTAL): `right' and the window's columns, or `below'
+and its lines.  With DIRECTION, the size for that one.
+
+The window is as large as the image drawn in it, and no larger: the
+terminal keeps half its space, and `roost--shown-terminal-columns' of
+its width.  The image goes where it is drawn larger, to the right
+unless below is clearly better, as a terminal reads better tall; one
+drawn whole either way goes where it takes less of the terminal.  An
+image more than twice as tall as the window is fitted to its width,
+for you to scroll, as `roost--shown-long-p' says."
+  (let* ((w (float (car size)))
+         (h (float (cdr size)))
+         (most-wide (min (/ width 2.0) (- width (* roost--shown-terminal-columns column))))
+         (most-tall (/ height 2.0))
+         ;; Less a mode line.
+         (column-height (max line (- height line)))
+         (strip-height (max line (- most-tall line)))
+         (fits-right (>= most-wide (* 20 column)))
+         (long (> (* h (min 1 (/ most-wide w))) (* 2 column-height)))
+         (right (if long
+                    (min 1 (/ most-wide w))
+                  (min 1 (/ most-wide w) (/ column-height h))))
+         (below (min 1 (/ width w) (/ strip-height h)))
+         (direction (cond (direction)
+                          ((not fits-right) 'below)
+                          ((and (>= right 1) (>= below 1))
+                           (if (<= (/ w width) (/ h height)) 'right 'below))
+                          ((>= (* right 1.25) below) 'right)
+                          (t 'below))))
+    ;; Two more than the image, for what a window has around its text.
+    (if (eq direction 'right)
+        (cons 'right (max 20 (min (floor most-wide column) (+ 2 (ceiling (* w right) column)))))
+      (cons 'below (max 5 (min (floor most-tall line) (+ 2 (ceiling (* h below) line))))))))
+
+(defun roost--shown-long-p (buffer window)
+  "Whether the image in BUFFER, as wide as WINDOW, is over twice as tall.
+Such an image, as a screenshot of a whole page is, fitted whole to the
+window would be too small to read."
+  (when-let* ((size (roost--shown-size buffer))
+              ((window-live-p window)))
+    (> (* (cdr size) (min 1.0 (/ (float (window-body-width window t)) (car size))))
+       (* 2 (window-body-height window t)))))
+
 (defun roost--display-shown (buffer terminal)
   "Show BUFFER, an image a task's agent showed, beside its TERMINAL window.
 In the window that shows it already, or else a new one to the terminal's
-right, or below a narrow one.  You stay in the window you are in.
-TERMINAL can be `main', for beside all the frame's windows but those at
-its sides, as `roost--shown-beside' says."
-  (let* ((wide (>= (window-total-width (if (windowp terminal) terminal (window-main-window))) 140))
-         (window (display-buffer
-                  buffer
-                  ;; Elsewhere in the frame when that window can't be split,
-                  ;; as the docked panel's.
-                  `((display-buffer-reuse-window display-buffer-in-direction
-                                                 display-buffer-pop-up-window display-buffer-use-some-window)
-                    (window . ,terminal)
-                    (direction . ,(if wide 'right 'below))
-                    ,(if wide '(window-width . 0.4) '(window-height . 0.4))
-                    (inhibit-same-window . t)))))
+right or below it, of the size `roost--shown-place' gives for the image.
+A page, and an image this Emacs can't measure, get four tenths of the
+terminal: of its width, or of a narrow one's height.  You stay in the
+window you are in.  TERMINAL can be `main', for beside all the frame's
+windows but those at its sides, as `roost--shown-beside' says."
+  (let ((window (get-buffer-window buffer))
+        (size (roost--shown-size buffer)))
+    (if window
+        (roost--refit-shown window size)
+      (let* ((space (if (window-live-p terminal) terminal (window-main-window)))
+             (place (if size
+                        (roost--shown-place size (window-pixel-width space) (window-pixel-height space)
+                                            (frame-char-width) (frame-char-height))
+                      (if (>= (window-total-width space) 140) '(right . 0.4) '(below . 0.4)))))
+        (setq window
+              (display-buffer
+               buffer
+               ;; Elsewhere in the frame when that window can't be split,
+               ;; as the docked panel's.
+               `((display-buffer-reuse-window display-buffer-in-direction
+                                              display-buffer-pop-up-window display-buffer-use-some-window)
+                 (window . ,terminal)
+                 (direction . ,(car place))
+                 (,(if (eq (car place) 'right) 'window-width 'window-height) . ,(cdr place))
+                 (inhibit-same-window . t))))
+        (with-current-buffer buffer
+          (setq roost--shown-back nil))
+        ;; Split from the terminal, its size is Roost's to change for the
+        ;; next image, until you change it.
+        (when (window-live-p window)
+          (set-window-parameter
+           window 'roost-shown-fit
+           (and size (window-live-p terminal) (eq (window-prev-sibling window) terminal)
+                (list (car place) (window-total-width window) (window-total-height window)))))))
     ;; Once it has a window, whose size the image is fitted to.
     (roost--draw-shown buffer window)
     window))
 
+(defun roost--refit-shown (window size)
+  "Size WINDOW, which shows an image already, for one of SIZE in pixels.
+Only a window as Roost left it, beside its terminal: one you have
+resized since stays as you have it, and so does one that fills its
+frame.  It stays on the side it is on."
+  (pcase (window-parameter window 'roost-shown-fit)
+    ((and `(,direction ,width ,height)
+          (guard (and size
+                      (window-prev-sibling window)
+                      (= width (window-total-width window))
+                      (= height (window-total-height window)))))
+     (let* ((across (eq direction 'right))
+            (terminal (window-prev-sibling window))
+            (place (roost--shown-place
+                    size
+                    (+ (window-pixel-width window) (if across (window-pixel-width terminal) 0))
+                    (+ (window-pixel-height window) (if across 0 (window-pixel-height terminal)))
+                    (frame-char-width (window-frame window)) (frame-char-height (window-frame window))
+                    direction))
+            (delta (window-resizable
+                    window
+                    (- (cdr place) (if across (window-total-width window) (window-total-height window)))
+                    across)))
+       (unless (zerop delta)
+         (window-resize window delta across)
+         (set-window-parameter window 'roost-shown-fit
+                               (list direction (window-total-width window) (window-total-height window))))))))
+
+(defvar image-auto-resize)
+(declare-function image-toggle-display-image "image-mode" ())
+(declare-function image-get-display-property "image-mode" ())
+
 (defun roost--draw-shown (buffer window)
   "Draw the image whose bytes BUFFER holds, fitted to WINDOW if it has one.
-Or the page BUFFER holds, if its agent showed one."
+One much taller than WINDOW is fitted to its width alone, or left at
+its own size if that is narrower, and one that fills the frame is made
+as large as its window.  Or draw the page BUFFER holds, if
+its agent showed one."
   (with-current-buffer buffer
     (cond (roost--shown-page (roost--draw-page window))
           ((window-live-p window)
            ;; No longer a page's own, if it was.
            (set-window-dedicated-p window nil)
-           (with-selected-window window (image-mode)))
-          (t (image-mode)))))
+           ;; For its option, which `image-mode' alone would autoload.
+           (require 'image-mode)
+           (let ((image-auto-resize
+                  (cond ((roost--shown-long-p buffer window)
+                         (and (> (car (roost--shown-size buffer)) (window-body-width window t))
+                              'fit-width))
+                        ;; As large as the frame lets it be, a small one too.
+                        ((roost--shown-enlarged-p window) 'fit-window)
+                        (t image-auto-resize)))
+                 ;; Drawn already, `image-mode' leaves it at the size it has.
+                 (drawn (and (derived-mode-p 'image-mode) (image-get-display-property))))
+             (with-selected-window window
+               (image-mode)
+               (when drawn
+                 (image-toggle-display-image))))
+           (roost-shown-mode))
+          (t (image-mode)
+             (roost-shown-mode)))))
+
+(defun roost--shown-enlarged-p (window)
+  "Whether WINDOW shows an image that fills its frame, with a way back."
+  (when-let* (((window-live-p window))
+              (back (buffer-local-value 'roost--shown-back (window-buffer window))))
+    (and (eq (car back) window)
+         (eq (window-configuration-frame (cdr back)) (window-frame window)))))
+
+(defun roost-enlarge-image (&optional event)
+  "Let the image a task's agent showed fill the frame, or put it back.
+The windows at the frame's sides stay.  A click on the image, EVENT,
+does this for the window clicked in, and you stay in the window you
+were in once the windows are back."
+  (interactive (list last-nonmenu-event))
+  (let* ((window (or (and (mouse-event-p event)
+                          (window-live-p (posn-window (event-start event)))
+                          (posn-window (event-start event)))
+                     (selected-window)))
+         (buffer (window-buffer window)))
+    (unless (buffer-local-value 'roost--shown-task buffer)
+      (user-error "No image a task's agent showed is here"))
+    (if (roost--shown-enlarged-p window)
+        (let ((back (buffer-local-value 'roost--shown-back buffer)))
+          (with-current-buffer buffer
+            (setq roost--shown-back nil))
+          (set-window-configuration (cdr back))
+          (when-let* ((window (get-buffer-window buffer)))
+            (roost--draw-shown buffer window)))
+      (with-current-buffer buffer
+        (setq roost--shown-back (cons window (current-window-configuration (window-frame window)))))
+      (delete-other-windows window)
+      (roost--draw-shown buffer window)
+      (message "Click the image, or type q, to put the windows back"))))
+
+(defun roost-quit-image ()
+  "Close this image's window, or put the windows back if it fills the frame."
+  (interactive)
+  (if (roost--shown-enlarged-p (selected-window))
+      (roost-enlarge-image)
+    (quit-window)))
+
+(defvar-keymap roost-shown-mode-map
+  :doc "Keys for an image a task's agent showed, over those of `image-mode'."
+  ;; A click enlarges, and selects nothing: you stay where you type.
+  "<down-mouse-1>" #'ignore
+  "<mouse-1>" #'roost-enlarge-image
+  "z" #'roost-enlarge-image
+  "q" #'roost-quit-image)
+
+(define-minor-mode roost-shown-mode
+  "Keys for an image a task's agent showed: a click or `z' enlarges it."
+  :lighter nil)
 
 ;;;; Pages an agent shows
 
@@ -11767,10 +11970,15 @@ Beside the selected window, which shows the terminal as TASK is opened."
 
 (defun roost--put-away-shown (task)
   "Close the windows of the selected frame that show another task's image.
-As TASK's terminal takes the place of theirs."
+As TASK's terminal takes the place of theirs.  Each waits, to show
+again when its own task is opened."
   (dolist (window (window-list))
     (when-let* ((key (buffer-local-value 'roost--shown-task (window-buffer window))))
       (unless (or (equal key (roost--key task)) (one-window-p))
+        ;; It comes back with its task, as one you closed doesn't.
+        (puthash key (window-buffer window) roost--shown-waiting)
+        (with-current-buffer (window-buffer window)
+          (setq roost--shown-back nil))
         (delete-window window)))))
 
 (defun roost--insert-wrong (task next)
