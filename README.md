@@ -90,10 +90,19 @@ that asks the agent something opens a draft for you to send.
 added, the agent wrote this page: the reconstruction, the rays through the
 phantom and the sinogram filling in, with a slider to scrub through them.*
 
-A Pi task on this machine shows its page as it is written: it opens as the
-model starts on it and fills in from there. Pi also draws the images it
-reads [inside its terminal](docs/manual.md#images-in-a-terminal), as in
-the picture at the top; the other agents send none there. The
+**As it is written.** A Pi task on this machine shows its page as the
+model writes it: the window opens when the model starts on the page, and
+the page fills in from there.
+
+![A task's terminal, named local › explain-back-projection, alone in the frame. Pi is asked to draw back-projection once more with each arc in its detector's colour; a window opens beside the terminal while Pi is still working, and a page fills in: a heading, then a half circle from each of eleven detectors, one after another and each in its own colour, all crossing at a bright target, then the detectors along the bottom and a line on what the arcs are](docs/images/roost-show-as-written.gif)
+
+*A Pi task with gpt-6.2-sol, asked to draw how back-projection finds a
+target: each detector's arc appears as the model writes it. Played at
+twice its speed.*
+
+Pi also draws the images it reads
+[inside its terminal](docs/manual.md#images-in-a-terminal), as in the
+picture at the top; the other agents send none there. The
 [manual](docs/manual.md#a-day-with-roost) has the keys, sizes and limits.
 
 ## How it differs
