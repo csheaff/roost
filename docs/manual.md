@@ -344,7 +344,12 @@ something opens a draft to the task with its words, for you to send: nothing
 a page does reaches the agent until you do. The agent doesn't see its page
 drawn, so tell it what looks wrong. It needs a graphical Emacs built with
 xwidgets. The tool is `show_widget`, for a page of at most 512 KB, in
-tasks started since you turned the option on.
+tasks started since you turned the option on. A Pi task on this machine
+shows its page as the model writes it: the page opens as the model starts
+on it and fills in from there, where the model's server sends a tool
+call's input as it is written (LM Studio sends it whole, and the page then
+fills in at once). Other agents' pages, and a Pi task's on another host,
+show once they are whole.
 
 **Keep them in view.** `b` in the dashboard, or `M-x roost-sidebar-mode`, keeps a
 compact task list at the left of the frame, through `C-x 1`; add
@@ -1464,6 +1469,8 @@ What runs where:
   Fonts, and nothing else load or be sent. So a page cannot open a window,
   send a form, or take itself or the page around it to another address;
   what it asks to send you goes into a draft to the task, which you send.
+  A page shown while it is written is handed to that same frame as markup,
+  so it can do no more than a whole page; its scripts wait until it is whole.
   `show_image` can name any file
   the helper can read, so an agent learns whether a path is such an image,
   and no more: every refusal reads the same. Its tool `propose_task` writes an offer

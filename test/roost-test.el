@@ -16086,7 +16086,16 @@ it of the same ID's, or nil for the first."
            (should (eq (alist-get 'mayShowPages asked) :false))
            (let ((roost-agent-pages t))
              (roost--create-task "/tmp/repo/" "task" nil "Look" "claude")
-             (should (eq (alist-get 'mayShowPages asked) (if setting t :false))))
+             (should (eq (alist-get 'mayShowPages asked) (if setting t :false)))
+             ;; One as it is written, where this Emacs can show a page,
+             ;; for a task on this machine alone.
+             (should (eq (alist-get 'pagesAsWritten asked) :false))
+             (cl-letf (((symbol-function 'roost--pages-p) (lambda () t)))
+               (roost--create-task "/tmp/repo/" "task" nil "Look" "claude")
+               (should (eq (alist-get 'pagesAsWritten asked) (if setting t :false)))
+               (cl-letf (((symbol-function 'roost--directory-host) (lambda (_) "dev")))
+                 (roost--create-task "/ssh:dev:/tmp/repo/" "task" nil "Look" "claude")
+                 (should (eq (alist-get 'pagesAsWritten asked) :false)))))
            (should (eq (alist-get 'remoteControl asked) (if setting :false t)))))))))
 
 (ert-deftest roost-shows-a-page-where-emacs-can-draw-one ()
@@ -16145,6 +16154,125 @@ it of the same ID's, or nil for the first."
              (with-temp-buffer
                (roost--insert-shown `((shown . ((name . "x") (kind . ,(car kind))))))
                (should (string-match-p (cdr kind) (buffer-string))))))
+       (when (get-buffer "*roost image: budget*") (kill-buffer "*roost image: budget*"))))))
+
+(ert-deftest roost-shows-a-page-as-its-agent-writes-it ()
+  ;; A Pi task on this machine keeps what there is of the page it is
+  ;; writing in a file.  Its buffer opens beside its terminal with the
+  ;; first of it, its view is handed each more of it, and the page its
+  ;; host then sends whole, being that one, leaves the view as it is.
+  (roost-test--isolated
+   (let* ((roost-state-directory (make-temp-file "roost-live" t))
+          (roost--live-seen (make-hash-table :test 'equal))
+          (roost--live-watch nil)
+          (roost--live-timer nil)
+          (key '(nil "1111111111111111"))
+          (file (expand-file-name "live/1111111111111111.json" roost-state-directory))
+          (code "<svg viewBox=\"0 0 8 8\"><text>R&D's</text>")
+          (write (lambda (code whole)
+                   (with-temp-file file
+                     (insert (json-encode `((id . "call_1") (title . "Clock") (code . ,code)
+                                            (whole . ,(if whole t :json-false))))))))
+          drawn displayed said handed timers)
+     (unwind-protect
+         (cl-letf (((symbol-function 'roost--pages-p) (lambda () t))
+                   ;; As the real one: a page its view shows already is left.
+                   ((symbol-function 'roost--draw-page)
+                    (lambda (window)
+                      (unless (eq roost--shown-page-drawn roost--shown-page)
+                        (push window drawn)
+                        (setq roost--shown-page-drawn roost--shown-page))))
+                   ((symbol-function 'roost--page-view) (lambda () 'view))
+                   ((symbol-function 'xwidget-webkit-execute-script)
+                    (lambda (_view script &optional _fun) (push script handed)))
+                   ((symbol-function 'roost--display-shown)
+                    (lambda (buffer window)
+                      (push (buffer-name buffer) displayed)
+                      (roost--draw-shown buffer window)))
+                   ((symbol-function 'roost--task-terminal-window) (lambda (_task) (selected-window)))
+                   ((symbol-function 'run-at-time) (lambda (&rest arguments) (push arguments timers) nil))
+                   ((symbol-function 'message)
+                    (lambda (format &rest arguments) (push (apply #'format-message format arguments) said))))
+           (make-directory (file-name-directory file) t)
+           (with-temp-file (expand-file-name "live/page.html" roost-state-directory)
+             (insert "<p>the page a view loads</p>"))
+           (roost--cache-task nil (append '((name . "budget")) (roost-test--task "1111111111111111" "running")))
+           ;; The first of it: its buffer, with the page a view loads to
+           ;; show one being written, beside the terminal.
+           (funcall write "<svg viewBox=\"0 0 8 8\">" nil)
+           (should (eq (roost--take-live file) 'writing))
+           (should (equal displayed '("*roost image: budget*")))
+           (should (equal (car said) "budget is drawing a page"))
+           (with-current-buffer (roost--shown-buffer key)
+             (should (equal roost--shown-page "<p>the page a view loads</p>"))
+             (should (equal roost--shown-live '("call_1" "<svg viewBox=\"0 0 8 8\">" nil))))
+           ;; More of it goes to the same view, and opens nothing.
+           (funcall write code nil)
+           (should (eq (roost--take-live file) 'writing))
+           (should (= (length displayed) 1))
+           (should (equal (car handed)
+                          (format "void (window.roostLive && roostLive(%s, false))" (json-encode code))))
+           ;; All of it.
+           (funcall write code t)
+           (should (eq (roost--take-live file) 'whole))
+           (should (string-suffix-p ", true))" (car handed)))
+           ;; Its host's copy of that page, whole: the view has it already.
+           (let ((views (length drawn))
+                 (whole (concat "<iframe srcdoc=\"head" (roost--live-escaped code) "\"></iframe>")))
+             (should (string-search "&lt;text&gt;R&amp;D&#x27;s&lt;/text&gt;" whole))
+             (roost--take-shown key `((id . "0a1b2c3d") (name . "Clock") (kind . "html")
+                                      (at . "2026-11-17T10:05:00+00:00")
+                                      (data . ,(base64-encode-string whole t))))
+             (with-current-buffer (roost--shown-buffer key)
+               (should-not roost--shown-live)
+               (should (equal roost--shown-page whole))
+               (should (eq roost--shown-page-drawn roost--shown-page))
+               (should (equal roost--shown-image-at "2026-11-17T10:05:00+00:00")))
+             (should (= (length drawn) views)))
+           ;; Another call's page takes its place; a page its host sends
+           ;; that is not that one is shown as any page is.
+           (with-temp-file file
+             (insert (json-encode '((id . "call_2") (title . "") (code . "<p>new") (whole . :json-false)))))
+           (should (eq (roost--take-live file) 'writing))
+           (with-current-buffer (roost--shown-buffer key)
+             (should (equal (car roost--shown-live) "call_2")))
+           (roost--take-shown key `((id . "0a1b2c3e") (name . "Other") (kind . "html")
+                                    (at . "2026-11-17T10:09:00+00:00") (data . "PHA+eW88L3A+")))
+           (with-current-buffer (roost--shown-buffer key)
+             (should-not roost--shown-live)
+             (should (equal roost--shown-page "<p>yo</p>")))
+           ;; A page of a task this Emacs doesn't know is nobody's.
+           (should-not (roost--take-live (expand-file-name "live/2222222222222222.json" roost-state-directory)))
+           ;; The folder is watched where Emacs can show a page, and what
+           ;; is there already is old news: only a file changed since is read.
+           (require 'filenotify)
+           (let ((roost-agent-pages t) taken)
+             (cl-letf (((symbol-function 'file-notify-add-watch) (lambda (&rest _) 'watch))
+                       ((symbol-function 'roost--take-live) (lambda (file) (push file taken) 'whole)))
+               (roost--watch-live)
+               (should (eq roost--live-watch 'watch))
+               (roost--read-live)
+               (should-not taken)
+               (set-file-times file (time-add (current-time) 60))
+               (setq timers nil)
+               (roost--read-live)
+               (should (equal taken (list file)))
+               ;; Whole: its host is asked, shortly, what the task shows.
+               (should (equal (car timers) '(0.5 nil roost-refresh t)))
+               (roost--read-live)
+               (should (= (length taken) 1))))
+           ;; The file goes with its task, as its buffer does, where this
+           ;; Emacs watches the folder; one that doesn't leaves it alone.
+           (let ((roost--live-watch nil))
+             (roost--forget-shown '(nil "2222222222222222"))
+             (roost--forget-shown key))
+           (should (file-exists-p file))
+           (roost--cache-task nil (append '((name . "budget")) (roost-test--task "1111111111111111" "running")))
+           (roost--take-live file)
+           (roost--forget-shown key)
+           (should-not (file-exists-p file))
+           (should-not (roost--shown-buffer key)))
+       (delete-directory roost-state-directory t)
        (when (get-buffer "*roost image: budget*") (kill-buffer "*roost image: budget*"))))))
 
 (ert-deftest roost-a-page-asks-and-you-send ()

@@ -2940,6 +2940,14 @@ An agent's terminal draws no images, so its agent asks Roost to show one
 (`show_widget`) is shown the same way, as kind `html`, through the same
 states: `keep_shown` keeps either, and Emacs draws a page in a web view
 (`roost--draw-page`) where it draws an image with `image-mode`.
+A Pi task on this machine shows its page before its host has it. Pi tells
+Roost's extension what there is of a tool call's input while the model writes
+it, and the extension keeps what there is of a `show_widget` call's page in
+`live/TASK.json` (the call's ID, the page so far, and whether that is all of
+it), for a task whose Emacs said, as it made the task, that it is on the
+task's machine and can show a page (`pagesAsWritten` in its record). Emacs
+watches that folder and shows the page in the task's buffer as it grows
+(`roost--take-live`, the buffer's `roost--shown-live`).
 
 | State | Meaning | How you can tell |
 |---|---|---|
@@ -2949,6 +2957,7 @@ states: `keep_shown` keeps either, and Emacs draws a page in a web view
 | On screen | In a window beside the terminal | its buffer has a window |
 | Filling the frame | In the only window but those at the frame's sides | its window's `roost-shown-back` names its buffer |
 | Closed | Fetched and shown, its window closed since | its buffer has none, and isn't waiting |
+| Being written | A Pi task on this machine is writing a page, shown as far as it has got | its buffer's `roost--shown-live` |
 
 Invariants:
 - I1. The record names an image only once its copy is there whole: under the
@@ -2985,6 +2994,15 @@ Invariants:
 - I8. An image that fills the frame has a way back to the windows as they were,
   by a click or `q`, and to where you were (the window's `roost-shown-back`,
   `roost-enlarge-image`).
+- I9. A page shown while it is written reaches no further than one shown whole.
+  Its view loads a page of the helper's that holds nothing of the agent's
+  (`live_page`), and what the agent has written is handed to the same frame,
+  under the same policy, as markup (`roostLive`). Its scripts wait: once it
+  is whole, a page with scripts is loaded as one its host sent whole.
+- I10. What you see once the page is whole is what its host kept: the page its
+  host then sends replaces the one shown being written unless it holds the
+  very code the view was handed, and then the view stays as you have it
+  (`roost--live-shows-p`).
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
@@ -3004,12 +3022,22 @@ Invariants:
 | On screen | `q` | | Closed | | `roost-quit-image` |
 | Closed, Waiting | the panel's Image line, `roost-show-image` | you stayed | On screen | fetched again, beside the window you are in | `roost-show-image` |
 | any | task retired, discarded, forgotten or gone from a list | | None | copy, buffer and both tables' entries go | `Store.remove`, `roost--forget-shown` |
+| any | Pi's model starts a `show_widget` call | a Pi task on this machine, known to this Emacs, which has a web view and watches | Being written | its buffer shows the page so far: beside the terminal if on screen, waiting otherwise | `roost--read-live`, `roost--take-live` |
+| Being written | the model writes more of the page | the same call | Being written | the view is handed the page so far | `roost--hand-live` |
+| Being written | its host sends the page whole | it holds the code the view was handed, all of it | On screen or Waiting | the view stays as it is | `roost--take-shown`, `roost--live-shows-p` |
+| Being written | its host sends another page, or an image | | On screen or Waiting | shown in its place, as any is | `roost--take-shown` |
+| Being written | another call's page starts | | Being written | the new page takes its place | `roost--take-live` |
 
 Open: a reply its host read before the agent showed an image, with the same
 `updatedAt`, can come after a list that names the image, and the panel's Image line
 then names the one before, or goes, until the next poll. Nothing is fetched twice
 (I4), and the line fetches what the host has now. A helper killed between writing a
 copy and saving the record leaves the copy until the next image or the task's end.
+A `show_widget` call the helper refuses, as for a page too large, leaves the page
+shown as it was written with no record of it: the panel's Image line and
+`roost-show-image` know nothing of it. The file of a page being written goes
+with its task when an Emacs on its machine that watches for such pages sees the
+task go (`roost--forget-shown`), and stays in `live` otherwise.
 A fetch that fails is not tried again by itself: the panel's line brings it up.
 
 ### Opening a task

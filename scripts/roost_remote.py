@@ -1438,6 +1438,7 @@ class CodexAgent:
 
 
 PI_EXTENSION = r'''import { spawn } from "node:child_process";
+import { renameSync, writeFileSync } from "node:fs";
 export default function (pi) {
   // A dialog that outlives its session has a context that throws.
   const sessionOf = ctx => { try { return ctx.sessionManager.getSessionFile(); } catch { return undefined; } };
@@ -1491,6 +1492,33 @@ export default function (pi) {
   pi.on("ui_prompt_start", (event, ctx) => report("ui_prompt_start", ctx, { title: event.title }));
   pi.on("ui_prompt_end", (_event, ctx) => report("ui_prompt_end", ctx, { idle: idleOf(ctx) }));
   // Pi emits shutdown when replacing a session too; the runner records actual exit.
+  // A page as the model writes it, where the task may show pages: Pi says
+  // what there is of a tool call's input so far, so what there is of a
+  // show_widget call's page goes in a file an Emacs on this machine
+  // watches, at most ten times a second, and once more when it is whole.
+  // The call itself then reaches Roost's MCP server as any call does.
+  if (process.env.ROOST_PI_LIVE) {
+    const file = process.env.ROOST_PI_LIVE;
+    let latest, timer;
+    const write = () => {
+      timer = undefined;
+      try { writeFileSync(file + ".part", JSON.stringify(latest)); renameSync(file + ".part", file); } catch {}
+    };
+    pi.on("message_update", event => {
+      const update = event.assistantMessageEvent;
+      if (!update || !String(update.type).startsWith("toolcall_")) return;
+      const whole = update.type === "toolcall_end";
+      const call = whole ? update.toolCall : (update.partial ?? event.message)?.content?.[update.contentIndex];
+      if (!call || call.name !== "mcp__roost__show_widget") return;
+      const code = call.arguments?.widget_code, title = call.arguments?.title;
+      // More than Roost shows: its server will say so, of the whole call.
+      if (typeof code === "string" && code.length > 500000) return;
+      latest = { id: String(call.id ?? ""), title: typeof title === "string" ? title : "",
+                 code: typeof code === "string" ? code : "", whole };
+      if (whole) { clearTimeout(timer); write(); }
+      else if (!timer) timer = setTimeout(write, 100);
+    });
+  }
   // Roost's own tools, where the task may offer: its helper as an MCP
   // server for this session, saved nowhere, its few tools declared to the
   // model as Pi's own are. A Pi with no MCP client, or with it turned
@@ -1554,6 +1582,16 @@ class PiAgent:
         to register where the task may offer: empty otherwise, whatever the
         runner's own environment came with."""
         added = dict(ROOST_PI_TOOLS=json.dumps(mcp_arguments(store, task)) if task.get("mayOffer") is True else "")
+        # Where Roost's extension writes a page as the model writes it,
+        # for an Emacs on this machine to show meanwhile: beside it, the
+        # page that Emacs loads to show one in. Only for a task whose Emacs
+        # said it would: one on another machine reads no file here.
+        added["ROOST_PI_LIVE"] = ""
+        if all(task.get(may) is True for may in ("mayOffer", "mayShowPages", "pagesAsWritten")):
+            folder = store.root / "live"
+            folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+            atomic_text(folder / "page.html", live_page())
+            added["ROOST_PI_LIVE"] = str(folder / (task["id"] + ".json"))
         images = task.get("terminalImages")
         if images in TERMINAL_IMAGES and not env.get("PI_IMAGE_PROTOCOL"):
             added["PI_IMAGE_PROTOCOL"] = images
@@ -2539,6 +2577,10 @@ def make_task(store, request, create_id):
         # And show you pages it writes, with the same tools, if you let it.
         if request.get("mayShowPages") is True:
             task["mayShowPages"] = True
+            # And as it writes them, where the Emacs that asked is on this
+            # machine, and so can read what there is of one from a file.
+            if request.get("pagesAsWritten") is True:
+                task["pagesAsWritten"] = True
     # It shows in the agent's own app, if the agent has one to show it in.
     if request.get("remoteControl") is True and getattr(agent, "remote_control", False):
         task["remoteControl"] = True
@@ -5306,6 +5348,13 @@ addEventListener('message', function (event) {
   if (event.source === parent && event.data && event.data.roostMode)
     document.documentElement.dataset.mode = event.data.roostMode === 'dark' ? 'dark' : 'light';
 });
+// A page its agent is still writing: what there is of it so far, in place
+// of what it showed a moment ago. Set as markup, its scripts wait until it
+// is whole; what else of it runs is in this frame, as a whole page is.
+addEventListener('message', function (event) {
+  if (event.source === parent && event.data && typeof event.data.roostLive === 'string')
+    document.body.innerHTML = event.data.roostLive;
+});
 function sendPrompt(text) { roostPost({roost: 'prompt', kind: 'prompt', text: String(text)}); }
 function openLink(url) { roostPost({roost: 'link', kind: 'link', text: String(url)}); }
 function roostFit() { roostPost({roost: 'height', height: Math.ceil(document.body.getBoundingClientRect().height)}); }
@@ -5343,17 +5392,37 @@ addEventListener('message', function (event) {
   var data = event.data || {};
   if (event.source !== roostFrame.contentWindow) return;
   if (data.roost === 'height') roostFrame.style.height = Math.max(40, Math.min(20000, data.height | 0)) + 'px';
-  else if (data.roost === 'ready' && document.documentElement.dataset.mode) roostMode(document.documentElement.dataset.mode);
+  else if (data.roost === 'ready') {
+    if (document.documentElement.dataset.mode) roostMode(document.documentElement.dataset.mode);
+    if (roostSoFar !== null) roostFrame.contentWindow.postMessage({roostLive: roostSoFar}, '*');
+  }
   else if ((data.roost === 'prompt' || data.roost === 'link') && window.roostOutbox.length < 20)
     window.roostOutbox.push({kind: data.roost, text: String(data.text).slice(0, 4000)});
 });
+// A page its agent is still writing (`live_page`): Emacs hands over what
+// there is of it so far, and the frame shows that as markup, whose scripts
+// wait. Once whole, one with scripts is loaded as any page is, to run them.
+var roostHead = %s;
+var roostSoFar = null;
+function roostLive(code, whole) {
+  if (roostHead === null) return;
+  if (whole && /<script/i.test(code)) { roostSoFar = null; roostFrame.srcdoc = roostHead + code; }
+  else { roostSoFar = code; roostFrame.contentWindow.postMessage({roostLive: code}, '*'); }
+}
 </script>
 """
 
 
 def widget_page(code):
     """The whole page for CODE, an SVG element or an HTML fragment."""
-    return WIDGET_FRAME % html.escape(WIDGET_HEAD + code, quote=True)
+    return WIDGET_FRAME % (html.escape(WIDGET_HEAD + code, quote=True), "null")
+
+
+def live_page():
+    """The page for one its agent is still writing: its frame holds what
+    every page starts with and nothing of the agent's, until Emacs hands
+    over what the agent has written so far (`roostLive`)."""
+    return WIDGET_FRAME % (html.escape(WIDGET_HEAD, quote=True), "roostFrame.getAttribute('srcdoc')")
 
 
 def image_kind(data):

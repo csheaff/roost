@@ -83,6 +83,7 @@
 (declare-function get-buffer-xwidgets "xwidget.c" (buffer))
 (declare-function xwidget-webkit-goto-uri "xwidget.c" (xwidget uri))
 (declare-function xwidget-webkit-execute-script "xwidget.c" (xwidget script &optional fun))
+(declare-function file-notify-add-watch "filenotify" (file flags callback))
 (declare-function persp-is-current-buffer "perspective" (buf &optional include-global))
 (declare-function persp-current-name "perspective" ())
 (declare-function persp-names "perspective" ())
@@ -1732,6 +1733,12 @@ notifies of itself."
 
 (defvar roost--shown-at (make-hash-table :test 'equal)
   "When each task's agent showed the image this Emacs last took up, by key.")
+(defvar roost--live-watch nil
+  "The watch on the folder of pages being written, or nil.")
+(defvar roost--live-seen (make-hash-table :test 'equal)
+  "What was last read of each file of a page being written.
+By its name: (TIME STATE AT), its modification time then, whether the
+page was `writing' or `whole', and when that was read.")
 (defvar roost--shown-waiting (make-hash-table :test 'equal)
   "The buffer of the image each task has to show once it is opened, by key.")
 (defvar-local roost--shown-task nil
@@ -1777,6 +1784,11 @@ An alist of each prompt and when, as `float-time' gives it.")
   "The file this buffer's web view reads its page from.")
 (defvar-local roost--shown-page-timer nil
   "The timer that asks this buffer's page what you clicked in it.")
+(defvar-local roost--shown-live nil
+  "The page this buffer shows while its agent writes it: (CALL CODE WHOLE).
+CALL is the tool call's ID, CODE what there is of the page, and WHOLE
+whether that is all of it.  Nil for a page its host sent whole.")
+(put 'roost--shown-live 'permanent-local t)
 (put 'roost--shown-page 'permanent-local t)
 (put 'roost--shown-page-file 'permanent-local t)
 (put 'roost--shown-page-timer 'permanent-local t)
@@ -1855,7 +1867,14 @@ or, when you ASKED for it, beside the window you are in."
         (when (string< (gethash key roost--shown-at "") at)
           (puthash key at roost--shown-at))
         (with-current-buffer buffer
-          (unless (or stale same)
+          (cond
+           ((or stale same))
+           ;; The page this buffer showed as its agent wrote it, whole by
+           ;; now: its view has it already, and stays as you have it.
+           ((and (equal kind "html") (roost--live-shows-p data))
+            (setq roost--shown-image-at at roost--shown-page data
+                  roost--shown-page-drawn data roost--shown-live nil))
+           (t
             (let ((inhibit-read-only t))
               (roost--drop-page)
               (fundamental-mode)
@@ -1864,6 +1883,7 @@ or, when you ASKED for it, beside the window you are in."
               (insert data)
               (set-buffer-modified-p nil))
             (setq roost--shown-task key roost--shown-image-at at
+                  roost--shown-live nil
                   roost--shown-page (and (equal kind "html") data)
                   roost--shown-images (and (cdr images)
                                            (mapcar (lambda (part) (list (nth 0 part) (nth 2 part))) images))
@@ -1872,7 +1892,7 @@ or, when you ASKED for it, beside the window you are in."
             (setq buffer-read-only t)
             ;; A window that shows the image before draws this one, not its bytes.
             (when-let* ((window (get-buffer-window buffer t)))
-              (roost--draw-shown buffer window))))
+              (roost--draw-shown buffer window)))))
         ;; Until then it waits, as for a task off screen.  Not an older
         ;; one you didn't ask for, which would bring back an image you closed.
         (when (or asked (not stale))
@@ -1912,6 +1932,14 @@ As when it has been closed, or was shown before this Emacs started."
   "Forget the image of the task with KEY, which went, and kill its buffer."
   (remhash key roost--shown-at)
   (remhash key roost--shown-waiting)
+  ;; What a task on this machine kept of a page it was writing, where
+  ;; this Emacs watches for those.
+  (pcase key
+    ((and (guard roost--live-watch)
+          `(nil ,(and (pred stringp) (pred (string-match-p "\\`[0-9a-f]+\\'")) id)))
+     (let ((file (expand-file-name (concat id ".json") (roost--live-directory))))
+       (remhash file roost--live-seen)
+       (ignore-errors (delete-file file)))))
   (when-let* ((buffer (roost--shown-buffer key)))
     ;; With its window, and once you are out of the minibuffer.
     (roost--close-buffer buffer)))
@@ -3617,6 +3645,10 @@ EXTRA is an alist of further request fields, such as the issue."
            ,(cons 'terminalImages (roost--terminal-images))
            ,(cons 'mayOffer (if roost-agent-offers t :false))
            ,(cons 'mayShowPages (if (and roost-agent-offers roost-agent-pages) t :false))
+           ;; And one as it is written, which only an Emacs on the task's
+           ;; own machine shows: it reads the page so far from a file there.
+           ,(cons 'pagesAsWritten (if (and roost-agent-offers roost-agent-pages (null host) (roost--pages-p))
+                                      t :false))
            ,(cons 'remoteControl (if roost-remote-control t :false))
            ,(cons 'leavePr (if roost-leave-pull-requests t :false))
            ,(cons 'size (roost--terminal-size))
@@ -12221,7 +12253,11 @@ dark.  What the page asks to send becomes a draft to its task."
         view (format (concat "document.documentElement.style.background = %S;"
                              "window.roostMode && roostMode(%S)")
                      (or (face-background 'default nil t) "white")
-                     (if (eq (frame-parameter nil 'background-mode) 'dark) "dark" "light")))))
+                     (if (eq (frame-parameter nil 'background-mode) 'dark) "dark" "light")))
+       ;; What its agent wrote of the page while the view loaded.
+       (when (buffer-live-p (xwidget-buffer view))
+         (with-current-buffer (xwidget-buffer view)
+           (roost--hand-live)))))
     ('javascript-callback
      (let* ((reply (nth 4 last-input-event))
             (asked (and (stringp reply)
@@ -12264,6 +12300,174 @@ is decided once the question is done, as the task may have gone by then."
                      (cons (cons text now)
                            (seq-take (assoc-delete-all text roost--shown-page-asked) 30))))
              (roost--send-draft task text))))))))
+
+;;;; A page as its agent writes it
+
+;; Pi tells Roost's extension what there is of a tool call's input while
+;; the model writes it, and the extension keeps what there is of a
+;; `show_widget' call's page in a file of the state directory's `live'
+;; folder.  So for a Pi task on this machine Emacs opens the page's buffer
+;; as the call starts and shows the page as it grows: it watches that
+;; folder, and hands the page so far to the view (`roostLive' in the
+;; helper's WIDGET_FRAME), which shows it as markup in the frame a whole
+;; page has, its scripts waiting until it is whole.
+;; The call, once whole, reaches the helper as any does, and the page the
+;; helper keeps is the one the view shows by then.  Other agents say
+;; nothing of a call until it is whole, and a task on another host has no
+;; folder here to watch: their pages show whole, as before.
+
+(defvar roost--live-timer nil
+  "The timer that reads the pages being written again, or nil.")
+
+(defconst roost--live-again 0.1
+  "Seconds until a page still being written is read again.
+A change to its file says so sooner, where the system reports each.")
+
+(defconst roost--live-quiet 10
+  "Seconds a page being written can stay as it is before Roost stops looking.")
+
+(defun roost--live-directory ()
+  "The folder where this machine's Pi tasks keep the pages they are writing."
+  (expand-file-name "live" roost-state-directory))
+
+(defun roost--live-files ()
+  "Each file of a page being written, with its modification time."
+  (mapcar (lambda (entry) (cons (car entry) (file-attribute-modification-time (cdr entry))))
+          (ignore-errors
+            (directory-files-and-attributes (roost--live-directory) t "\\.json\\'" t))))
+
+(defun roost--watch-live ()
+  "Watch for the pages this machine's Pi tasks write, where Emacs can show one.
+The pages there already are old news."
+  (when (and roost-agent-pages (not roost--live-watch) (roost--pages-p)
+             (require 'filenotify nil t))
+    (let ((directory (roost--live-directory)))
+      (unless (file-directory-p directory)
+        (with-file-modes #o700
+          (ignore-errors (make-directory directory t))))
+      (pcase-dolist (`(,file . ,time) (roost--live-files))
+        (puthash file (list time 'whole 0) roost--live-seen))
+      (setq roost--live-watch
+            (ignore-errors
+              (file-notify-add-watch directory '(change) #'roost--live-changed))))))
+
+(defun roost--live-changed (&rest _)
+  "Read the pages being written that have changed, in a moment."
+  (unless (timerp roost--live-timer)
+    (setq roost--live-timer (run-at-time 0 nil #'roost--read-live))))
+
+(defun roost--read-live ()
+  "Show each page being written as it is now.
+While one is being written, look again shortly, whether or not its
+file's changes are each reported."
+  (setq roost--live-timer nil)
+  (let ((now (float-time))
+        again)
+    (pcase-dolist (`(,file . ,time) (roost--live-files))
+      (let ((seen (gethash file roost--live-seen)))
+        (unless (equal time (car seen))
+          (let ((state (with-demoted-errors "Roost: %S" (roost--take-live file))))
+            (setq seen (puthash file (list time state now) roost--live-seen))
+            ;; Whole: its host has the call next, and says so when asked.
+            (when (eq state 'whole)
+              (run-at-time 0.5 nil #'roost-refresh t))))
+        (when (and (eq (nth 1 seen) 'writing) (< (- now (nth 2 seen)) roost--live-quiet))
+          (setq again t))))
+    (when (and again (not (timerp roost--live-timer)))
+      (setq roost--live-timer (run-at-time roost--live-again nil #'roost--read-live)))))
+
+(defun roost--live-page ()
+  "The page a view loads to show one being written, as the helper wrote it."
+  (let ((file (expand-file-name "page.html" (roost--live-directory))))
+    (and (file-readable-p file)
+         (with-temp-buffer
+           (set-buffer-multibyte nil)
+           (insert-file-contents-literally file)
+           (buffer-string)))))
+
+(defun roost--take-live (file)
+  "Show the page in FILE, which a Pi task on this machine is writing.
+In the buffer of what the task shows, beside its terminal if that is on
+screen, as `roost--take-shown' shows a page that is whole.  Return
+`writing' while the page is being written and `whole' once it is, or
+nil if FILE is no page of a task this Emacs knows."
+  (when-let* ((task (gethash (list nil (file-name-base file)) roost--tasks))
+              (page (with-temp-buffer
+                      (insert-file-contents file)
+                      (json-parse-buffer :object-type 'alist :null-object nil :false-object nil)))
+              (call (alist-get 'id page))
+              (code (alist-get 'code page))
+              ((and (stringp call) (stringp code))))
+    (let* ((key (roost--key task))
+           (whole (eq (alist-get 'whole page) t))
+           (buffer (roost--shown-buffer key))
+           (shows (and buffer (equal (car (buffer-local-value 'roost--shown-live buffer)) call))))
+      (cond
+       (shows
+        (with-current-buffer buffer
+          (setq roost--shown-live (list call code whole))
+          (roost--hand-live)))
+       ;; Whole when first heard of, as after Emacs was busy: its host has
+       ;; the call by now, and shows the page as it shows any.
+       (whole)
+       ((roost--live-page)
+        (unless buffer
+          (setq buffer (generate-new-buffer (format "*roost image: %s*" (roost--task-label task)))))
+        (with-current-buffer buffer
+          (let ((inhibit-read-only t))
+            (roost--drop-page)
+            (fundamental-mode)
+            (erase-buffer)
+            (set-buffer-modified-p nil))
+          (setq roost--shown-task key
+                roost--shown-page (roost--live-page)
+                roost--shown-live (list call code whole)
+                roost--shown-images nil
+                roost--shown-one nil
+                roost--shown-loaded 0
+                buffer-read-only t)
+          (when-let* ((window (get-buffer-window buffer t)))
+            (roost--draw-shown buffer window)))
+        (puthash key buffer roost--shown-waiting)
+        (roost--when-out-of-minibuffer
+         (lambda ()
+           (when (and (buffer-live-p buffer) (eq (gethash key roost--shown-waiting) buffer))
+             (if-let* ((beside (or (get-buffer-window buffer) (roost--shown-beside task))))
+                 (progn (remhash key roost--shown-waiting)
+                        (roost--display-shown buffer beside)
+                        (message "%s is drawing a page" (roost--field task 'name)))
+               (message "%s is drawing a page: open it to see" (roost--field task 'name))))))))
+      (if whole 'whole 'writing))))
+
+(defun roost--hand-live ()
+  "Hand this buffer's view what its agent has written of its page so far."
+  (pcase roost--shown-live
+    (`(,_ ,code ,whole)
+     (when-let* ((view (roost--page-view)))
+       (xwidget-webkit-execute-script
+        view (format "void (window.roostLive && roostLive(%s, %s))"
+                     (json-encode code) (if whole "true" "false")))))))
+
+(defun roost--live-escaped (code)
+  "CODE as the helper writes it in a page's frame: its bytes, escaped."
+  (encode-coding-string
+   (replace-regexp-in-string
+    "[&<>\"']"
+    (lambda (match)
+      (pcase match ("&" "&amp;") ("<" "&lt;") (">" "&gt;") ("\"" "&quot;") (_ "&#x27;")))
+    code t t)
+   'utf-8 t))
+
+(defun roost--live-shows-p (page)
+  "Whether this buffer's view shows PAGE already, having shown it being written.
+PAGE is a page as its host sent it whole.  Only once all of it was
+handed to a view that is still there, and PAGE holds that same code."
+  (pcase roost--shown-live
+    (`(,_ ,code t)
+     (and (roost--page-view)
+          (eq roost--shown-page-drawn roost--shown-page)
+          (string-search (roost--live-escaped code) page)
+          t))))
 
 (defun roost--show-waiting (task)
   "Show the image TASK's agent showed while its terminal was off screen.
@@ -15682,6 +15886,7 @@ See `roost-watch-unfocused-interval'."
   (when (or (seq-some #'frame-focus-state (frame-list))
             (>= (- (float-time) roost--last-watch) roost-watch-unfocused-interval))
     (setq roost--last-watch (float-time))
+    (roost--watch-live)
     (roost-refresh t)))
 
 ;;;###autoload

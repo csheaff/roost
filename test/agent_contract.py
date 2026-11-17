@@ -50,7 +50,7 @@ PI_IGNORED_EVENTS = dict(
     {event: "a step inside a run, which agent_start and agent_end bound" for event in (
         "after_provider_response", "agent_before_settle", "before_agent_start", "before_provider_headers",
         "before_provider_request", "cache_warming_decision", "context", "context_with_system",
-        "message_end", "message_start", "message_update", "provider_stream_event", "tool_call",
+        "message_end", "message_start", "provider_stream_event", "tool_call",
         "tool_execution_end", "tool_execution_start", "tool_execution_update", "tool_result",
         "turn_end", "turn_start")},
     **{event: "the session changes, not whether it works or waits" for event in (
@@ -67,7 +67,9 @@ PI_API = (r"isIdle\(\): boolean", r"hasPendingMessages\(\): boolean", r"sessionM
           r"interface AgentEndEvent \{[^}]*\bmessages: AgentMessage\[\]",
           r"interface UIPromptStartEvent \{[^}]*\btitle\?: string",
           r"interface InputEvent \{[^}]*\btext: string[^}]*\bsource: InputSource",
-          r"type InputSource = [^;]*\"extension\"")
+          r"type InputSource = [^;]*\"extension\"",
+          # A tool call's input as the model writes it, for a page shown meanwhile.
+          r"interface MessageUpdateEvent \{[^}]*\bassistantMessageEvent: AssistantMessageEvent")
 PI_FLAGS = ("--extension", "--session-dir", "--session")
 
 # OpenCode events, of the kinds Roost's plugin reads, that it does not.
