@@ -5045,9 +5045,19 @@ MCP_TOOLS = {
                        "and %d MB in all" % (SHOWN_MOST, SHOWN_TOGETHER // (1024 * 1024))))),
         annotations=dict(readOnlyHint=False, destructiveHint=False, openWorldHint=False)),
     "show_widget": dict(
+        # When to use it comes first, and here, in the tool's own
+        # description: an agent with a tool of its own that publishes
+        # pages, as Claude Code's Artifact, weighs the two by what each
+        # says of itself. Said in the server's instructions instead, it
+        # moved real tasks little, and said later in this description,
+        # the smallest model little. "Write it and show it", as "call
+        # this tool" had tasks call it at once with an empty page, then
+        # again with the page. docs/validation.md has the counts.
         description=(
-            "Show the user a small page you write, beside this terminal, in Roost: a diagram, a mock-up, a "
-            "chart, or controls to try. It takes the place of what you showed before. widget_code is one "
+            "When the user asks for a page, write it and show it with this tool, not one that publishes "
+            "it, unless they ask to publish or share one. It shows a small page you write, beside this "
+            "terminal, in Roost: a diagram, a mock-up, a chart, or controls to try. It takes the place of "
+            "what you showed before. widget_code is one "
             "SVG element, or an HTML fragment with no doctype, html, head or body: style first, content "
             "next, script last. It is drawn about 680px wide in light or dark mode, so colour it only with "
             "these CSS variables: --text-primary, --text-secondary, --text-muted, --surface-1, --surface-2, "

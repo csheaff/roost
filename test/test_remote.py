@@ -10987,6 +10987,13 @@ console.log(JSON.stringify(seen));
         listed = self.serve(task, dict(id=1, method="initialize", params={}), dict(id=2, method="tools/list"))
         self.assertIn("show_widget", [tool["name"] for tool in listed[2]["result"]["tools"]])
         self.assertIn("write a page with show_widget", listed[1]["result"]["instructions"])
+        # The tool says of itself, before anything else, when to call it:
+        # without that, real Claude Code tasks asked plainly for a page
+        # reached for Claude's own Artifact, which publishes one, more
+        # often than not.
+        said = next(tool for tool in listed[2]["result"]["tools"] if tool["name"] == "show_widget")["description"]
+        self.assertTrue(said.startswith("When the user asks for a page, write it and show it with this tool, not "
+                                        "one that publishes it, unless they ask to publish or share one. "), said)
         argv = roost.ClaudeAgent().launch(store, store.read(task["id"]), False)
         allowed = json.loads(Path(argv[argv.index("--settings") + 1]).read_text())["permissions"]["allow"]
         self.assertIn("mcp__roost__show_widget", allowed)

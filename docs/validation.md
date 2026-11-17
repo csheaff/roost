@@ -35,6 +35,64 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## Which tool a Claude Code task shows a page with — 2026-11-17
+
+On a Mac, Claude Code 2.1.326 in auto mode, real tasks made through the
+helper with `mayOffer` and `mayShowPages`, as `roost-agent-offers` and
+`roost-agent-pages` make them, each a new conversation in a repository of
+one small file, `calc.py`. Claude Code has a tool of its own, Artifact,
+which publishes a page to claude.ai and shows nothing in Emacs, and a task
+asked for a page chooses between it and Roost's `show_widget`. Each task
+was followed to the page it gave `show_widget`, or stopped at its first
+call of Artifact, and counted by which.
+
+- **Before.** As a task's first words, "Make me a page that walks through
+  how calc.py evaluates 2*(3+4), step by step" went to Artifact in 8 of 8
+  Sonnet tasks, 6 of 6 Opus, 6 of 6 Haiku and 6 of 6 with no model named;
+  "Show me how parse_expr and parse_factor in calc.py call each other, as a
+  page" in 6 of 10 Sonnet tasks and 6 of 6 Haiku. Asked once the task had
+  explained something ("Show me that as a page", alone or with what the page
+  should hold), all 24 Sonnet tasks used `show_widget`, as did 4 of 4 asked
+  for a diagram and 3 of 4 asked for a mock-up.
+- **What moved it** is one sentence, the first of `show_widget`'s
+  description: "When the user asks for a page, write it and show it with
+  this tool, not one that publishes it, unless they ask to publish or share
+  one." With it, the two first requests went to Artifact in 0 of 16 Sonnet
+  tasks, the first of them in 1 of 6 Opus, 0 of 6 with no model named and 2
+  of 12 Haiku, and the second in 1 of 6 Haiku. In all, 4 of 46 where it had
+  been 38 of 42: mostly, then, not always.
+- **What still goes to Artifact** with it, on Sonnet: "… as a page I can
+  share with my team" in 6 of 6, "Publish a page that explains … and give me
+  its link" in 6 of 6, "Make me an artifact that explains …" in 4 of 4, and
+  the first in 4 of 4 Haiku. "Add an about page to this project, about.html"
+  was written as a file, with neither tool, in 4 of 4, as before.
+- **What did less**, on Sonnet's "Make me a page" unless said. The same said
+  in the server's instructions alone: 7 of 8 still to Artifact. As the
+  description's second sentence, "A page the user asks to see goes here,
+  unless they ask to publish or share one": 4 of 8; with "asks for": 0 of
+  16, 0 of 6 Opus and 0 of 6 unnamed, but 4 of 6 Haiku; and that sentence
+  moved to the front, where "here" says nothing yet, 6 of 8. The sentence
+  that was kept, placed second: 0 of 8, but 4 of 6 Haiku. "When the user
+  asks for a page, call this tool, not one that publishes it, …" first: 0 of
+  8, and 0 of 6 Haiku, but 5 of those 8 tasks called `show_widget` at once
+  with an empty page titled "placeholder", while they read the file, and
+  again with the page; "write it and show it" had none do that in 16. Naming
+  Artifact in the second sentence: 2 of 6 Haiku.
+- A count of 0 in 8 is not never: the same wording gave 0 of 8 and 1 of 6 on
+  two models. Each number is of that many tasks, once.
+- **Stopping a task at its Artifact call is too late to keep a page from
+  being published**: of the first tasks, followed further to see where the
+  page went, two published theirs, private, in the half second before they
+  were stopped. After that the fixture's own `.claude/settings.json` held
+  any call of Artifact but a read (a `PreToolUse` hook that waits, then
+  refuses), added with `git add -f`, as a global gitignore leaves `.claude`
+  out; it held ten, and nothing more was published.
+- Not looked at: Codex, OpenCode and Pi, which are given the same
+  description and have no tool that publishes a page; a request late in a
+  long conversation that has shown images, as the one this began with; and a
+  Claude Code other than 2.1.326, whose description of Artifact is what this
+  sentence is weighed against. It is worth counting again when that changes.
+
 ## Search in Codex and Pi conversations — 2026-11-17
 
 On a Mac, with search (`/`) reading what Codex and Pi keep, as it did
