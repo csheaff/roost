@@ -64,6 +64,50 @@ when one finishes or asks for something.
 
 ![The dashboard, counting 1 permission, 7 ready and 1 seen: six Pi tasks on dev, five ready and one seen, and three local ones, two Pi tasks ready and a Claude Code task asking to run python3 -m unittest, each with a light in the shape of its status, its agent, its changes, and its latest reply or what it asks](docs/images/roost-dashboard.png)
 
+## What an agent can show you
+
+An agent's terminal is text. When an agent has a picture for you, Roost
+opens it beside the terminal: you open nothing, and you stay where you
+are.
+
+**Images.** Ask for a plot, a screenshot, or a before and an after. The
+agent shows up to six together, each over its file's name, and a click on
+one fills the frame.
+
+![A task's terminal, named local › vectorise-signals, alone in the frame. Claude Code is asked to show the signals and the reconstruction together; it calls Roost, and a window opens beside the terminal with two images, one over the other: signals.png, red and blue arcs of pressure across a line of detectors against time, and reconstruction.png, two large and five small targets, bright in a hot colour map](docs/images/roost-show-images.gif)
+
+*A Claude Code task on a photoacoustic tomography simulation, asked for
+the signals its detectors record and the targets reconstructed from them.*
+
+**A page the agent writes.** With `(setq roost-agent-pages t)`, an agent
+in a task you start from then on can also write a small page of its own: a
+diagram you can click, a mock-up, controls to try. What moves in it works
+there, and a button in it that asks the agent something opens a draft for
+you to send. A page needs a graphical Emacs built with xwidgets.
+
+![A task's terminal, named local › replay-reconstruction, alone in the frame. Claude Code is asked to show the reconstruction building once more; it calls Roost, and a page opens beside the terminal and plays: bright rays sweep across a Shepp-Logan phantom, a sinogram fills in from the left as a heat map, and above them the filtered back projection sharpens from streaks into the phantom as the count of views climbs to 181, over a pause button, a slider and a control for the filter](docs/images/roost-show-page.gif)
+
+*Asked to show a filtered back projection building as each projection is
+added, the agent wrote this page: the reconstruction, the rays through the
+phantom and the sinogram filling in, with a slider to scrub through them.*
+
+**As it is written.** A Pi task on this machine shows its page as the
+model writes it: the window opens when the model starts on the page, and
+the page fills in from there. That takes a model server that sends the
+page as it is written, as OpenAI's did here; LM Studio sends it whole, and
+the page then fills in at once.
+
+![A task's terminal, named local › explain-back-projection, alone in the frame. Pi is asked to draw back-projection once more with each arc in its detector's colour; a window opens beside the terminal while Pi is still working, and a page fills in: a heading, then a half circle from each of eleven detectors, one after another and each in its own colour, all crossing at a bright target, then the detectors along the bottom and a line on what the arcs are](docs/images/roost-show-as-written.gif)
+
+*A Pi task with gpt-6.2-sol, asked to draw how back-projection finds a
+target: each detector's arc appears as the model writes it. Played at
+twice its speed.*
+
+Pi also draws the images it reads
+[inside its terminal](docs/manual.md#images-in-a-terminal), as in the
+picture at the top; the other agents send none there. The
+[manual](docs/manual.md#a-day-with-roost) has the keys, sizes and limits.
+
 ## How it differs
 
 Other Emacs packages run coding agents too, among them
@@ -149,12 +193,11 @@ These work in the dashboard, the sidebar and a task's panel, and on the menu.
 - Claude Code 2.1.284 and later start in auto mode unless a permission mode
   is set, and rarely ask. To be asked before each command, add
   `"--permission-mode" "manual"` to its entry in `roost-agent-commands`.
-- A terminal draws the images an agent sends in the Kitty graphics
-  protocol. [Pi sends them](docs/manual.md#images-in-a-terminal), as in the
-  picture above; Claude Code and Codex send none.
-- A task's agent has three tools of Roost's, to offer you tasks, to
-  name your projects and to show you an image beside its terminal; `(setq roost-agent-offers nil)` starts tasks without
-  them. `(setq roost-remote-control t)` shows each Claude task in the Claude
+- A task's agent has three tools of Roost's, to offer you tasks, to name
+  your projects and to [show you an image](#what-an-agent-can-show-you)
+  beside its terminal; `(setq roost-agent-offers nil)` starts tasks
+  without them.
+  `(setq roost-remote-control t)` shows each Claude task in the Claude
   app, which notifies your phone when its agent needs a decision.
 
 ## More
