@@ -732,7 +732,7 @@ counted once you stop and resume it (`K`, then `s`).
 | `B` | `roost-retarget` | Change the branch the task starts from and merges into, as after you rebased its branch onto another: `m`, `u` and its counts follow; no commit moves, and a pull request already open keeps its base |
 | `L` | `roost-leave-pull-request` | Leave the task's pull request to its agent, or take it back: left, Roost tells the agent itself when a check fails, a review thread waits or it conflicts, once for each ([below](#a-pull-request-left-to-its-agent)) |
 | `l` | `roost-switch-task` | Choose a task by name, waiting tasks first |
-| `/` | `roost-search` | Find messages in your tasks' conversations, retired tasks' too; `RET` opens a live task, `TAB` shows more of a message (its first 1,500 characters) |
+| `/` | `roost-search` | Find messages in your tasks' conversations, retired tasks' too; `RET` opens a live task, `TAB` shows more of a message (its first 1,500 characters). Each host reads the conversations Claude Code, Codex and Pi keep there, and each message names its agent; OpenCode's are not searched, and a host with an OpenCode task says so |
 | `b` | `roost-sidebar-mode` | Keep the task list at the left of the frame |
 | `I` | `roost-task-panel-mode` | Dock the open task's panel beside its terminal |
 | `u` | `roost-update` | Bring the task up to date: merge the branch it merges into, such as `main`, into it; for uncommitted changes or conflicts, offers to have its agent do it |

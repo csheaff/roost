@@ -1241,6 +1241,39 @@ class ClaudeAgent:
                             "[Request interrupted by user"))
         return False
 
+    def conversations(self, store, tasks, deadline):
+        """The transcripts that may hold what was said in STORE's TASKS, or
+        in tasks since retired, for search. Retiring a task deletes its
+        record and worktree, but Claude keeps its conversations, in a folder
+        named after the worktree's path. That naming is lossy ("/a/b" and
+        "/a-b" share a name), so `wrote_in' tells their messages apart.
+        Subagents' conversations are in subfolders; only the task's own are
+        searched. Past DEADLINE, a `time.monotonic' value, it raises
+        SearchTimeUp."""
+        projects = Path.home() / ".claude" / "projects"
+        # Folders of directories in the worktrees begin so; Claude cuts long
+        # names, and so the start of this one, at the same length.
+        prefix = (claude_project_folder(str(store.root / "worktrees"), whole=True) + "-")[:CLAUDE_FOLDER_LIMIT]
+        folders = {projects / claude_project_folder(task["worktree"]) for task in tasks}
+        with contextlib.suppress(OSError):
+            for folder in projects.iterdir():
+                if time.monotonic() > deadline:
+                    raise SearchTimeUp
+                if folder.name[:CLAUDE_FOLDER_LIMIT].startswith(prefix):
+                    folders.add(folder)
+        for folder in folders:
+            with contextlib.suppress(OSError):
+                yield from folder.glob("*.jsonl")
+
+    def wrote(self, entry):
+        """(ROLE, TEXT) of what you or Claude wrote in transcript ENTRY, or None."""
+        return conversation_text(entry)
+
+    def wrote_in(self, entry):
+        """The directory and branch Claude recorded transcript ENTRY in. It
+        says so with each, as it follows its shell from folder to folder."""
+        return entry.get("cwd"), text(entry.get("gitBranch"))
+
 
 # Codex asks the user to review hook commands and remembers the approval.
 # The command runs this fixed shim, which hands the event to the helper
@@ -1274,6 +1307,11 @@ PROPOSED_PLAN = re.compile(r"^[ \t]*<proposed_plan>[ \t]*$(.*?)(?:^[ \t]*</propo
 # that for a task's last event: no hook of Codex's says it.
 PLAN_REQUEST = "Asks whether to implement its plan"
 PLAN_EVENT = "Plan"
+
+
+# What Codex records as yours that it wrote itself, such as the folder and
+# shell it runs in: the whole of it is one tagged block.
+CODEX_NOTE = re.compile(r"\s*<([a-z_]+)>.*</\1>\s*\Z", re.S)
 
 
 def asks_about_plan(task):
@@ -1435,6 +1473,32 @@ class CodexAgent:
         if entries is None:
             return None
         return last_assistant_text(entries, lambda entry: self.said(entry, "assistant"))
+
+    def conversations(self, store, tasks, deadline):
+        """Every rollout Codex keeps, for search. It files them by day, not
+        by directory, and keeps them when a task goes: `started_in' says
+        which are a task's."""
+        return (Path.home() / ".codex" / "sessions").glob("*/*/*/rollout-*.jsonl")
+
+    def started_in(self, first):
+        """The directory and branch of the session whose rollout starts with
+        entry FIRST, or None: for a rollout that doesn't say, and for a
+        subagent's, whose prompts are the agent's and not yours."""
+        payload = first.get("payload") if isinstance(first, dict) and first.get("type") == "session_meta" else None
+        if not isinstance(payload, dict) or isinstance(payload.get("source"), dict):
+            return None
+        repo = payload.get("git") if isinstance(payload.get("git"), dict) else {}
+        return payload.get("cwd"), text(repo.get("branch"))
+
+    def wrote(self, entry):
+        """(ROLE, TEXT) of what you or Codex wrote in rollout ENTRY, or None:
+        for tool calls and their output, its instructions, and its own
+        notes among your messages."""
+        for role in ("user", "assistant"):
+            found = self.said(entry, role)
+            if found:
+                return None if role == "user" and CODEX_NOTE.match(found) else (role, found)
+        return None
 
 
 PI_EXTENSION = r'''import { spawn } from "node:child_process";
@@ -1614,6 +1678,27 @@ class PiAgent:
                 return message_text(message.get("content"))
 
         return last_assistant_text(transcript_tail(session), extract)
+
+    def conversations(self, store, tasks, deadline):
+        """The session files in the folders Roost gives Pi, one for each
+        task, for search: they stay when the task goes."""
+        return (store.root / "sessions").glob("*/**/*.jsonl")
+
+    def started_in(self, first):
+        """The directory of the session whose file starts with entry FIRST,
+        or None if it doesn't say. Pi records no branch."""
+        if not isinstance(first, dict) or first.get("type") != "session":
+            return None
+        return first.get("cwd"), None
+
+    def wrote(self, entry):
+        """(ROLE, TEXT) of what you or Pi wrote in session ENTRY, or None:
+        for tool calls and their output, and what an extension added."""
+        message = entry.get("message") if isinstance(entry, dict) and entry.get("type") == "message" else None
+        if not isinstance(message, dict) or message.get("role") not in ("user", "assistant"):
+            return None
+        found = message_text(message.get("content"))
+        return (message["role"], found) if found else None
 
 
 OPENCODE_PLUGIN = r'''import { spawn } from "node:child_process";
@@ -6841,8 +6926,9 @@ class SearchTimeUp(Exception):
 
 
 def conversation_text(entry):
-    """(role, text) of what you or Claude wrote in transcript ENTRY, or None
-    for tool calls and their output, thinking, and Claude Code's own notes."""
+    """(role, text) of what you or Claude wrote in Claude Code's transcript
+    ENTRY, or None for tool calls and their output, thinking, and Claude
+    Code's own notes."""
     if not isinstance(entry, dict) or entry.get("type") not in ("user", "assistant"):
         return None
     if entry.get("isMeta") or entry.get("isCompactSummary"):
@@ -6887,12 +6973,17 @@ def snippet(found, patterns):
     return ("…" if start else "") + flat[start:end].rstrip() + ("…" if end < len(flat) else "")
 
 
-def search_transcript(path, words, owner, deadline=None):
-    """Messages in the transcript at PATH containing every one of WORDS (in
-    lower case), as (TASK, BRANCH, HIT), one at a time: TASK is what OWNER
-    says of the directory Claude recorded the message in, and messages for
-    which it says None are left out. Past DEADLINE, a `time.monotonic'
-    value, it raises SearchTimeUp."""
+def search_transcript(path, words, owner, deadline=None, agent="claude"):
+    """Messages in the conversation at PATH, which AGENT keeps, containing
+    every one of WORDS (in lower case), as (TASK, BRANCH, HIT), one at a
+    time: TASK is what OWNER says of the directory the message was recorded
+    in, and messages for which it says None are left out. Past DEADLINE, a
+    `time.monotonic' value, it raises SearchTimeUp."""
+    adapter = AGENTS[agent]
+    # Codex and Pi say where a session started, in its first entry; Claude,
+    # where each message was written.
+    started_in = getattr(adapter, "started_in", None)
+    place = None
     # JSON escapes quotes, backslashes and control characters, and may
     # escape any non-ASCII character, as Python's does: so a line that
     # lacks an ASCII word's escaped form cannot contain it, while other
@@ -6903,6 +6994,15 @@ def search_transcript(path, words, owner, deadline=None):
         for number, line in enumerate(handle, 1):
             if deadline and number % 1024 == 0 and time.monotonic() > deadline:
                 raise SearchTimeUp
+            if started_in and number == 1:
+                try:
+                    place = started_in(json.loads(line))
+                except ValueError:
+                    place = None
+                # A session that is no task's: the rest of it is not read.
+                if not place or not owner(place[0]):
+                    return
+                continue
             lower = line.lower()
             if not all(needle in lower for needle in needles):
                 continue
@@ -6910,29 +7010,31 @@ def search_transcript(path, words, owner, deadline=None):
                 entry = json.loads(line)
             except ValueError:
                 continue
-            found = conversation_text(entry)
+            found = adapter.wrote(entry)
             if not found or not all(pattern.search(found[1].lower()) for pattern in patterns):
                 continue
-            task = owner(entry.get("cwd"))
+            cwd, branch = place or adapter.wrote_in(entry)
+            task = owner(cwd)
             if not task:
                 continue
             body = found[1]
             # The session and line name the message, even where times are equal or missing.
-            yield (task, text(entry.get("gitBranch")),
-                   dict(at=text(entry.get("timestamp")), role=found[0], session=path.stem,
+            yield (task, branch,
+                   dict(at=text(entry.get("timestamp")), role=found[0], agent=agent, session=path.stem,
                         line=number, snippet=snippet(body, patterns),
                         text=body if len(body) <= SEARCH_TEXT_LIMIT
                         else body[:SEARCH_TEXT_LIMIT].rstrip() + "…"))
 
 
 def search(store, request):
-    """Messages in the Claude conversations of the store's tasks, live and
+    """Messages in the conversations of the store's tasks, live and
     retired, that contain every word of the request's query; tasks with the
-    newest such message first. Retiring a task deletes its record and
-    worktree, but Claude keeps its conversations, in a folder named after
-    the worktree's path. That naming is lossy ("/a/b" and "/a-b" share a
-    name), so messages are told apart by the directory Claude recorded
-    with each: a live task's worktree, or a retired task's, which was
+    newest such message first. Each agent's adapter says where it keeps
+    conversations (`conversations') and reads one; an agent whose adapter
+    doesn't, as OpenCode's, is named in the reply where a task runs it.
+    Retiring a task deletes its record and worktree, but its agent keeps
+    its conversations. Messages are told apart by the directory they were
+    recorded in: a live task's worktree, or a retired task's, which was
     WORKTREES/REPO-HASH/SLUG-ID."""
     words = (text(request.get("query")) or "").lower().split()
     if not words:
@@ -6941,7 +7043,6 @@ def search(store, request):
     deadline = time.monotonic() + SEARCH_SECONDS
     incomplete = False
     tasks = [task for task in store.all() if isinstance(task.get("worktree"), str)]
-    projects = Path.home() / ".claude" / "projects"
     worktrees = store.root / "worktrees"
     root = os.path.realpath(worktrees)
     worktree_of = {task["id"]: os.path.realpath(task["worktree"]) for task in tasks}
@@ -6970,40 +7071,33 @@ def search(store, request):
     for task in tasks:
         if isinstance(task.get("repo"), str):
             repos[hashlib.sha256(task["repo"].encode()).hexdigest()[:10]] = task["repo"]
-    # Folders of directories in the worktrees begin so; Claude cuts long
-    # names, and so the start of this one, at the same length.
-    prefix = (claude_project_folder(str(worktrees), whole=True) + "-")[:CLAUDE_FOLDER_LIMIT]
-    folders = {projects / claude_project_folder(task["worktree"]) for task in tasks}
-    with contextlib.suppress(OSError):
-        for folder in projects.iterdir():
-            if time.monotonic() > deadline:
-                incomplete = True
-                break
-            if folder.name[:CLAUDE_FOLDER_LIMIT].startswith(prefix):
-                folders.add(folder)
     # Each task keeps only its newest messages as they are found, so a
     # broad search of long conversations holds no more than it returns.
-    # Subagents' conversations are in subfolders; only the task's own are
-    # searched. The newest go first, so that a search cut short by its
-    # time has looked at the conversations most likely wanted.
+    # The newest conversations go first, whichever agent's, so that a
+    # search cut short by its time has looked at those most likely wanted.
     transcripts = []
-    for folder in folders:
-        with contextlib.suppress(OSError):
-            for path in folder.glob("*.jsonl"):
+    for name, adapter in AGENTS.items():
+        kept = getattr(adapter, "conversations", None)
+        try:
+            for path in kept(store, tasks, deadline) if kept else ():
                 if time.monotonic() > deadline:
-                    incomplete = True
-                    break
+                    raise SearchTimeUp
                 with contextlib.suppress(OSError):
-                    transcripts.append((path.stat().st_mtime, str(path), path))
+                    transcripts.append((path.stat().st_mtime, str(path), path, name))
+        except SearchTimeUp:
+            incomplete = True
+            break
+        except OSError:
+            pass
     transcripts.sort(reverse=True)
     groups = {}
     order = lambda hit: (hit["at"] or "", hit["session"], hit["line"])
-    for _, _, path in transcripts:
+    for _, _, path, name in transcripts:
         if time.monotonic() > deadline:
             incomplete = True
             break
         try:
-            for task, branch, hit in search_transcript(path, words, owner, deadline):
+            for task, branch, hit in search_transcript(path, words, owner, deadline, name):
                 group = groups.setdefault(task, dict(hits=[], count=0, branch=None))
                 group["count"] += 1
                 group["branch"] = group["branch"] or branch
@@ -7042,8 +7136,11 @@ def search(store, request):
         result.update(hits=hits, more=group["count"] - len(hits))
         results.append(result)
     results.sort(key=lambda result: result["hits"][-1]["at"] or "", reverse=True)
+    # The agents of tasks here whose conversations were not looked in.
+    unsearched = sorted({task.get("agent") or "claude" for task in current.values()}
+                        & {name for name, adapter in AGENTS.items() if not hasattr(adapter, "conversations")})
     return dict(tasks=results[:SEARCH_TASK_LIMIT], moreTasks=max(0, len(results) - SEARCH_TASK_LIMIT),
-                incomplete=incomplete)
+                incomplete=incomplete, unsearched=unsearched)
 
 
 def version_of(text):
