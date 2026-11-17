@@ -16805,6 +16805,10 @@ report.py, and the third alone changes src/totals.py."
     (should (equal (car (arrange (make-list 4 '(800 . 600)) 1000 800)) '(2 2)))
     ;; Small ones keep their own size.
     (should (equal (arrange '((100 . 50) (100 . 50)) 800 1000) '((1 1) . 1.0)))
+    ;; A wide one over two narrow ones: the wide row has no gap to
+    ;; give up, and the row with one is narrow.
+    (should (equal (arrange '((800 . 100) (100 . 800) (100 . 800)) 400 800)
+                   (cons '(1 2) (/ 400.0 800))))
     ;; A large one beside a small one: both smaller by as much.
     (should (equal (arrange '((2000 . 1000) (200 . 100)) 1108 572) '((2) . 0.5)))))
 

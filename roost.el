@@ -11644,13 +11644,20 @@ are made smaller: GAP between two in a row and CAPTION under each row."
   "How images of SIZES go in WIDTH by HEIGHT pixels: (WAY . SCALE).
 WAY is the count of each row, the one that draws them largest, and
 SCALE what each is drawn at, the same for all and no more than 1:
-images of one size stay so, as a before and an after are."
+images of one size stay so, as a before and an after are.  GAP is
+between two in a row and CAPTION under each row, whatever the scale."
   (let (best)
     (dolist (way (roost--sheet-ways (length sizes)))
-      (pcase-let* ((`(,w ,h ,around-w . ,around-h) (roost--sheet-size sizes way gap caption))
-                   (scale (max 0.01 (min 1.0
-                                         (/ (float (- width around-w)) w)
-                                         (/ (float (- height around-h)) h)))))
+      (let ((left sizes) (scale 1.0) (tall 0))
+        ;; Each row by its own width and gaps: the widest need not be
+        ;; the one with the most of them.
+        (dolist (count way)
+          (let ((row (seq-take left count)))
+            (setq left (seq-drop left count)
+                  scale (min scale (/ (float (- width (* gap (1- count))))
+                                      (apply #'+ (mapcar #'car row))))
+                  tall (+ tall (apply #'max (mapcar #'cdr row))))))
+        (setq scale (max 0.01 (min scale (/ (float (- height (* caption (length way)))) tall))))
         (when (or (null best) (> scale (cdr best)))
           (setq best (cons way scale)))))
     best))
