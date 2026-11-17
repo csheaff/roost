@@ -54,6 +54,11 @@ Claude Code's:
   in Codex's: each first entry said where its session started, and they
   held 34 messages of yours and 37 of Pi's with words, 10 and 12 for
   Codex, with Codex's own notes among yours left out.
+- **`make qa`**, Emacs 32 with ghostel-tmux: the search journey, 7 steps
+  with no problem, and the whole run, 394 steps, 1 with a problem. That
+  one is "Merging asks first" in the merge journey, where the task's
+  terminal is a row shorter than its window while the question is open;
+  main at 03b3e38 has it too, run alone.
 - Not run: Pi live, as its model's server was off; a task retired on a
   real host and then searched; a forked task, whose conversation Codex and
   Pi copy, so a message from before the fork may show under both tasks; a
