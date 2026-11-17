@@ -35,6 +35,39 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## Roost's tools in Codex, OpenCode and Pi — 2026-11-16
+
+On a Mac, with `roost-agent-offers` as each task's `mayOffer`:
+
+- **`make contract`** with Claude Code 2.1.325, Codex 0.163.0 and Pi 1.5.2:
+  every check as expected, the new ones too (Codex takes an MCP server set
+  with `-c` and its approval mode, Pi's extensions can register one).
+- **`make contract-live CONTRACT_AGENTS=codex`**, Codex 0.163.0 with
+  `--sandbox read-only --ask-for-approval on-request`: every check as
+  expected. Told to, it called `propose_task` and `show_image`; the offer
+  and the image were in the task's record, and the task never showed as
+  asking. Its hooks name the tools `mcp__roost__propose_task` and
+  `mcp__roost__show_image`. `~/.codex/config.toml` was the same before and
+  after.
+- **`make contract-live CONTRACT_AGENTS=opencode`**, OpenCode 1.19.3 in a
+  scratch folder with XDG folders of its own, on LM Studio's
+  qwen3.6-35b-a3b with 48k of context: every check as expected, with
+  `"permission": {"roost_*": "ask"}` in its config, so the rule Roost's
+  plugin adds after yours is what let the tools run. A first run, whose
+  config also asked before shell commands, stopped earlier, at the step
+  that counts to 300: the model ran `seq`, which waited on that rule. That
+  is the config's doing, and the step is unchanged.
+- **`make contract-live CONTRACT_AGENTS=pi`**, Pi 1.5.2 on the same model:
+  every check as expected. Roost's extension registered the server, and
+  Pi called both tools, declared to the model as its own are.
+- All three captures kept: `codex-0.163.0`, `pi-1.5.2` and, new,
+  `opencode-1.19.3`.
+- Not run: these tools in a task started from Emacs with each agent, a
+  page (`show_widget`) from any of the three, a conversation with one of
+  them, and Codex older than 0.163.0 or Pi older than 1.5.2. Pi is given
+  the tools but not the server's sentences on when to offer, so whether it
+  offers unasked was not looked at.
+
 ## A task opened over a slow connection — 2026-11-16
 
 On a Mac, Emacs 30.2, ghostel-tmux 0.3.0 (359eeeb), the tasks behind the

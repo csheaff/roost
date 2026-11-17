@@ -152,7 +152,7 @@ These work in the dashboard, the sidebar and a task's panel, and on the menu.
 - A terminal draws the images an agent sends in the Kitty graphics
   protocol. [Pi sends them](docs/manual.md#images-in-a-terminal), as in the
   picture above; Claude Code and Codex send none.
-- A Claude task's agent has three tools of Roost's, to offer you tasks, to
+- A task's agent has three tools of Roost's, to offer you tasks, to
   name your projects and to show you an image beside its terminal; `(setq roost-agent-offers nil)` starts tasks without
   them. `(setq roost-remote-control t)` shows each Claude task in the Claude
   app, which notifies your phone when its agent needs a decision.

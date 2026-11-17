@@ -4,6 +4,18 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- **Codex, OpenCode and Pi tasks have Roost's tools too.** With
+  `roost-agent-offers` on, a task of any agent can offer tasks
+  (`propose_task`) and show you an image beside its terminal
+  (`show_image`), and with `roost-agent-pages` a page it writes; until now
+  only Claude Code tasks could. Each agent is given the helper's MCP server
+  for the one task, with nothing written to its own settings, and runs
+  those tools without asking: Codex by config overrides on its command
+  line, OpenCode in its inline config, and Pi through Roost's extension
+  (Pi 0.99.0 or newer; an older one goes without). When upgrading: tasks you start from now on have the
+  tools, which add a few sentences to each request the agent makes; set
+  `roost-agent-offers` to nil to give agents none. A Codex, OpenCode or Pi
+  task started before the upgrade stays without them.
 - Opening an agent's offer no longer takes it. Clicked to see what it was
   and left for another task, an offer had gone from the sidebar, with its
   draft in a buffer nothing showed. Now it waits under its task until you

@@ -3491,11 +3491,12 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(seen.read_text(), "none")
         self.create(name="other", terminalImages="kitty")
         # The one you set yourself stands.
+        none = dict(ROOST_PI_TOOLS="")
         self.assertEqual(roost.PiAgent().environment(store, dict(terminalImages="kitty"), dict()),
-                         dict(PI_IMAGE_PROTOCOL="kitty"))
+                         dict(none, PI_IMAGE_PROTOCOL="kitty"))
         self.assertEqual(roost.PiAgent().environment(
-            store, dict(terminalImages="kitty"), dict(PI_IMAGE_PROTOCOL="iterm2")), {})
-        self.assertEqual(roost.PiAgent().environment(store, dict(terminalImages="sixel"), dict()), {})
+            store, dict(terminalImages="kitty"), dict(PI_IMAGE_PROTOCOL="iterm2")), none)
+        self.assertEqual(roost.PiAgent().environment(store, dict(terminalImages="sixel"), dict()), none)
 
     def test_codex_pi_and_opencode_create_send_shell_resume_and_retire(self):
         for agent in ("codex", "pi", "opencode"):
@@ -10707,8 +10708,106 @@ print(json.dumps(dict(data=data)))
                             command=[sys.executable, str(FAKE_AGENT), "codex"])
         self.assertNotIn("remoteControl", store.read(other["id"]))
 
-    def test_only_an_agent_that_can_take_the_tool_may_offer(self):
-        # Claude Code, asked for: its record says so, and keeps it for a resume.
+    def test_codex_takes_the_helper_as_its_mcp_server_for_one_launch(self):
+        store = roost.Store(str(self.state))
+        task = dict(id="1234567890abcdef", command=["codex"], prompt="Look", runId="run")
+        # Without it, Codex has none of Roost's.
+        self.assertFalse([arg for arg in roost.CodexAgent().launch(store, task, False) if "mcp_servers" in arg])
+        argv = roost.CodexAgent().launch(store, dict(task, mayOffer=True), False)
+        # Config overrides on its command line, each after -c, so ~/.codex is as it was.
+        given = [arg for arg in argv if arg.startswith("mcp_servers.")]
+        self.assertTrue(all(argv[argv.index(arg) - 1] == "-c" for arg in given))
+        server = dict(arg[len("mcp_servers.roost."):].split("=", 1) for arg in given)
+        self.assertEqual(json.loads(server.pop("command")), sys.executable)
+        self.assertEqual(json.loads(server.pop("args")), [str(SOURCE.resolve()), "mcp", str(store.root), task["id"]])
+        # An offer only waits in Roost, so its tools run without asking.
+        self.assertEqual(server, dict(default_tools_approval_mode='"approve"'))
+        # The prompt still comes last, after --, and a resume after the options.
+        self.assertEqual(argv[-2:], ["--", "Look"])
+        argv = roost.CodexAgent().launch(store, dict(task, mayOffer=True, agentSession="s"), True)
+        self.assertEqual(argv[-2:], ["resume", "s"])
+        self.assertTrue([arg for arg in argv if arg.startswith("mcp_servers.roost.command=")])
+        # A folder with a character past the BMP is named by itself: TOML
+        # has no escaped pair, as JSON would write it.
+        odd = roost.Store(str(self.root / "\U0001f426 \"\u00e9tat\""))
+        argv = roost.CodexAgent().launch(odd, dict(task, mayOffer=True), False)
+        args = next(arg for arg in argv if arg.startswith("mcp_servers.roost.args="))
+        self.assertNotIn("\\ud83d", args)
+        self.assertIn(str(odd.root), json.loads(args.split("=", 1)[1]))
+
+    def test_opencode_takes_the_helper_as_its_mcp_server_in_its_inline_config(self):
+        store = roost.Store(str(self.state))
+        agent = roost.OpenCodeAgent()
+        task = dict(id="1234567890abcdef")
+        # Without it, OpenCode has none of Roost's, and its plugin allows none.
+        env = agent.environment(store, task, {})
+        self.assertNotIn("mcp", json.loads(env["OPENCODE_CONFIG_CONTENT"]))
+        self.assertEqual(env["ROOST_OPENCODE_TOOLS"], "")
+        # With it, beside the servers your own inline config names.
+        yours = json.dumps(dict(mcp=dict(mine=dict(type="remote", url="https://example.com/mcp"))))
+        env = agent.environment(store, dict(task, mayOffer=True), dict(OPENCODE_CONFIG_CONTENT=yours))
+        servers = json.loads(env["OPENCODE_CONFIG_CONTENT"])["mcp"]
+        self.assertEqual(servers["mine"], dict(type="remote", url="https://example.com/mcp"))
+        self.assertEqual(servers["roost"], dict(
+            type="local", enabled=True, timeout=30000,
+            command=[sys.executable, str(SOURCE.resolve()), "mcp", str(store.root), task["id"]]))
+        # Its tools, as OpenCode names them, for the plugin to allow; a
+        # page's only where the task may show one.
+        self.assertEqual(env["ROOST_OPENCODE_TOOLS"], "roost_list_projects,roost_propose_task,roost_show_image")
+        env = agent.environment(store, dict(task, mayOffer=True, mayShowPages=True), {})
+        self.assertEqual(env["ROOST_OPENCODE_TOOLS"],
+                         "roost_list_projects,roost_propose_task,roost_show_image,roost_show_widget")
+        # The launch itself names nothing of it.
+        argv = agent.launch(store, dict(task, command=["opencode"], prompt="Look", mayOffer=True), False)
+        self.assertEqual(argv, ["opencode", "--prompt=Look"])
+
+    def test_pi_is_told_how_to_run_the_helper_as_its_mcp_server(self):
+        store = roost.Store(str(self.state))
+        task = dict(id="1234567890abcdef", command=["pi"], prompt="Look")
+        # For Roost's extension to register; empty for a task that may not
+        # offer, whatever its runner's environment came with.
+        self.assertEqual(roost.PiAgent().environment(store, task, dict(ROOST_PI_TOOLS="[1]")), dict(ROOST_PI_TOOLS=""))
+        env = roost.PiAgent().environment(store, dict(task, mayOffer=True), {})
+        self.assertEqual(json.loads(env["ROOST_PI_TOOLS"]), [str(SOURCE.resolve()), "mcp", str(store.root), task["id"]])
+        # Its command line is as it was.
+        self.assertEqual(roost.PiAgent().launch(store, dict(task, mayOffer=True), False),
+                         roost.PiAgent().launch(store, task, False))
+
+    @unittest.skipUnless(shutil.which("node"), "needs Node")
+    def test_pis_extension_registers_the_helper_as_an_mcp_server(self):
+        store = roost.Store(str(self.state))
+        roost.PiAgent().launch(store, dict(id="0" * 16, command=["pi"], prompt=None), False)
+        extension = next(store.root.glob("pi-observer-*.mjs"))
+        driver = Path(self.temp.name) / "driver.mjs"
+        driver.write_text(
+            "const { default: observe } = await import(%s);\n"
+            "const made = [];\n"
+            "const pi = { on: () => {} };\n"
+            "if (process.env.PI_HAS_MCP === 'yes') pi.registerMcpServer = (name, config) => made.push([name, config]);\n"
+            "if (process.env.PI_HAS_MCP === 'off') pi.registerMcpServer = () => { throw new Error('no MCP'); };\n"
+            "observe(pi);\n"
+            "console.log(JSON.stringify(made));\n" % json.dumps(extension.as_uri()))
+        arguments = roost.mcp_arguments(store, dict(id="0" * 16))
+
+        def registered(has, tools=json.dumps(arguments)):
+            env = dict(os.environ, ROOST_PYTHON=sys.executable, ROOST_HELPER="/dev/null", PI_HAS_MCP=has,
+                       ROOST_PI_TOOLS=tools)
+            done = subprocess.run(["node", str(driver)], env=env, check=True, timeout=30, capture_output=True, text=True)
+            return json.loads(done.stdout.splitlines()[-1])
+
+        # Declared to the model as Pi's own tools are, for this session alone.
+        (name, config), = registered("yes")
+        self.assertEqual(name, "roost")
+        self.assertEqual((config["command"], config["args"], config["exposure"]), (sys.executable, arguments, "direct"))
+        # A task that may not offer, a Pi with no MCP client, one that
+        # refuses, and words that are no arguments: Pi starts all the same.
+        self.assertEqual(registered("yes", ""), [])
+        self.assertEqual(registered("no"), [])
+        self.assertEqual(registered("off"), [])
+        self.assertEqual(registered("yes", "{"), [])
+
+    def test_every_agent_may_offer_and_only_when_asked(self):
+        # Asked for: the task's record says so, and keeps it for a resume.
         task = self.create(name="parent", mayOffer=True)
         self.assertIs(roost.Store(str(self.state)).read(task["id"])["mayOffer"], True)
         self.assertTrue(self.request("stop", id=task["id"])["ok"])
@@ -10716,11 +10815,18 @@ print(json.dumps(dict(data=data)))
         argv = roost.ClaudeAgent().launch(roost.Store(str(self.state)),
                                           roost.Store(str(self.state)).read(task["id"]), True)
         self.assertTrue([arg for arg in argv if arg.startswith("--mcp-config=")])
-        # Not asked for, or another agent, which has no way to take it yet.
+        # Not asked for.
         self.assertNotIn("mayOffer", self.create(name="plain"))
-        other = self.create(name="codex", agent="codex", mayOffer=True,
-                            command=[sys.executable, str(FAKE_AGENT), "codex"])
-        self.assertNotIn("mayOffer", roost.Store(str(self.state)).read(other["id"]))
+        # Each of the other agents takes the tools its own way.
+        for agent in ("codex", "pi", "opencode"):
+            with self.subTest(agent=agent):
+                other = self.create(name=agent, agent=agent, mayOffer=True, mayShowPages=True,
+                                    command=[sys.executable, str(FAKE_AGENT), agent])
+                record = roost.Store(str(self.state)).read(other["id"])
+                self.assertIs(record["mayOffer"], True)
+                self.assertIs(record["mayShowPages"], True)
+                self.assertNotIn("mayOffer", self.create(name="plain " + agent, agent=agent,
+                                                         command=[sys.executable, str(FAKE_AGENT), agent]))
 
     def test_the_mcp_server_runs_as_the_agent_starts_it(self):
         # A process of its own, over its standard input and output, which
@@ -10901,6 +11007,14 @@ print(json.dumps(dict(data=data)))
         said = replies["hello"]["result"]["instructions"]
         self.assertIn("belongs to no project", said)
         self.assertIn("naming its project", said)
+        # Claude is told what it reads them with, without asking; another
+        # agent, which may ask, only to read them.
+        self.assertIn("projects' files with your Read, Grep and Glob tools, which need no permission there, before", said)
+        other = self.create(name="Conversation 09:16", directory="/nowhere", conversation=True, mayOffer=True,
+                            agent="codex", command=[sys.executable, str(FAKE_AGENT), "codex"])
+        said = self.serve(other)["hello"]["result"]["instructions"]
+        self.assertIn("Read those projects' files before you plan", said)
+        self.assertNotIn("Glob", said)
         # The projects this host has run tasks in, and not Roost's own.
         self.assertEqual(self.call(talk, "list_projects")["content"][0]["text"], str(self.repo.resolve()))
         # Which it reads without asking, to plan, and changes only by asking.
@@ -12775,6 +12889,43 @@ class ProgramStatus(unittest.TestCase):
             # The plugin gives the rule once your config is merged; the inline
             # config Roost writes leaves your permissions alone.
             self.assertEqual(set(json.loads(env["OPENCODE_CONFIG_CONTENT"])), {"plugin"})
+
+    @unittest.skipUnless(shutil.which("node"), "needs Node")
+    def test_opencode_plugin_allows_roosts_tools_after_your_rules(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            plugin = roost.OpenCodeAgent().plugin(roost.Store(str(root / "state")))
+            configs = [
+                {},
+                # Everything asks, and a rule of yours for one of Roost's tools.
+                dict(permission="ask", agent=dict(build=dict(permission="ask"),
+                                                  plan=dict(permission=dict(roost_propose_task="deny", bash="ask")))),
+            ]
+            driver = root / "driver.mjs"
+            driver.write_text(
+                "const { RoostObserver } = await import(%s);\n"
+                "const hooks = await RoostObserver({});\n"
+                "const configs = %s;\n"
+                "for (const config of configs) await hooks.config(config);\n"
+                "console.log(JSON.stringify(configs));\n"
+                % (json.dumps(plugin.as_uri()), json.dumps(configs)))
+            env = dict(os.environ, ROOST_PYTHON=sys.executable, ROOST_HELPER="/dev/null",
+                       ROOST_OPENCODE_TOOLS="roost_propose_task,roost_show_image")
+            for name in ("ROOST_OPENCODE_OBSERVER", "ROOST_OPENCODE_ATTACHMENTS"):
+                env.pop(name, None)
+            done = subprocess.run(["node", str(driver)], env=env, check=True, timeout=30,
+                                  capture_output=True, text=True)
+            empty, yours = json.loads(done.stdout.splitlines()[-1])
+            allowed = dict(roost_propose_task={"*": "allow"}, roost_show_image={"*": "allow"})
+            # Roost's tools alone, for each of OpenCode's agents: no folder, no rule for one.
+            self.assertEqual(empty["agent"], {name: dict(permission=allowed)
+                                              for name in ("build", "plan", "general", "explore")})
+            # The rest asks as you set it, and Roost's rule comes last.
+            self.assertEqual(yours["permission"], "ask")
+            self.assertEqual(list(yours["agent"]["build"]["permission"].items()),
+                             [("*", "ask")] + list(allowed.items()))
+            self.assertEqual(list(yours["agent"]["plan"]["permission"].items()),
+                             [("bash", "ask")] + list(allowed.items()))
 
     @unittest.skipUnless(shutil.which("node"), "needs Node")
     def test_opencode_plugin_allows_attachments_after_your_rules(self):

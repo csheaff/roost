@@ -253,7 +253,7 @@ Open: none.
 
 Kind: implicit, a field of the record and not a machine of its own. Lives in:
 `offers` (a list of `{id, title, brief, at}`), `offersAt`, and `parent` on a task
-started from one. With `roost-agent-offers` on, a Claude task's record has `mayOffer`,
+started from one. With `roost-agent-offers` on, a task's record has `mayOffer`,
 and its agent runs the helper as an MCP server (`McpServer`), whose one tool,
 `propose_task`, writes `offers`.
 
