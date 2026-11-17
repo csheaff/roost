@@ -182,7 +182,8 @@ def scan_codex():
     # In Plan mode a reply's plan is between these tags, and once the turn
     # ends a menu asks whether to implement it, of which no hook says.
     # Search reads its rollouts: a session's first entry, then its messages.
-    absent = [word.decode() for word in (b"session_meta", b"response_item", b"input_text", b"output_text")
+    absent = [word.decode() for word in (b"session_meta", b"response_item", b"input_text", b"output_text",
+                                         b"content_item_kinds", b"user.text")
               if word not in data]
     scan.report(not absent, "the rollout entries search reads"
                 + (": missing " + ", ".join(absent) + "; check CodexAgent.started_in and wrote" if absent else ""))

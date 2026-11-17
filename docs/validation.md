@@ -52,8 +52,11 @@ Claude Code's:
 - **Files these agents wrote here before.** The new readers went over the
   23 session files in Pi's own folder on this Mac and the three rollouts
   in Codex's: each first entry said where its session started, and they
-  held 34 messages of yours and 37 of Pi's with words, 10 and 12 for
-  Codex, with Codex's own notes among yours left out.
+  held 34 messages of yours and 37 of Pi's with words, 11 and 12 for
+  Codex, with Codex's two notes among yours left out. Codex 0.163.0 says
+  what each message holds (`user.text` for yours,
+  `environments.environment_context` for its note of the folder), which
+  is how they are told apart; the tags are for a Codex that doesn't say.
 - **`make qa`**, Emacs 32 with ghostel-tmux: the search journey, 7 steps
   with no problem, and the whole run, 394 steps, 1 with a problem. That
   one is "Merging asks first" in the merge journey, where the task's

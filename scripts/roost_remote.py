@@ -1309,10 +1309,11 @@ PLAN_REQUEST = "Asks whether to implement its plan"
 PLAN_EVENT = "Plan"
 
 
-# What Codex records as yours that it wrote itself, such as the folder and
-# shell it runs in: the whole of it is one block, in a tag of Codex's own,
-# which is a skill's or has an underscore in its name, as no tag of HTML has.
-CODEX_NOTE = re.compile(r"\s*<(skill|[a-z]+_[a-z_]*)>.*</\1>\s*\Z", re.S)
+# What a Codex that doesn't say what a message holds records as yours and
+# wrote itself, such as the folder and shell it runs in: the whole of it is
+# one block, in one of these tags. A block in any other tag is yours.
+CODEX_NOTE = re.compile(r"\s*<(environment_context|user_instructions|user_shell_command|turn_aborted"
+                        r"|subagent_notification|skill)>.*</\1>\s*\Z", re.S)
 
 
 def asks_about_plan(task):
@@ -1503,8 +1504,21 @@ class CodexAgent:
         for role in ("user", "assistant"):
             found = self.said(entry, role)
             if found:
-                return None if role == "user" and CODEX_NOTE.match(found) else (role, found)
+                return None if role == "user" and self.own_note(entry, found) else (role, found)
         return None
+
+    @staticmethod
+    def own_note(entry, words):
+        """Whether Codex itself wrote WORDS, the message rollout ENTRY records
+        as yours, such as the folder and shell it runs in. Codex 0.163.0
+        says what each part of a message holds, and what you sent is
+        `user.text'; of one that doesn't say, only the tags Codex wraps
+        its own notes in tell."""
+        passed = entry["payload"].get("internal_chat_message_metadata_passthrough")
+        kinds = passed.get("content_item_kinds") if isinstance(passed, dict) else None
+        if isinstance(kinds, list) and kinds:
+            return not any(isinstance(kind, str) and kind.startswith("user.") for kind in kinds)
+        return bool(CODEX_NOTE.match(words))
 
 
 PI_EXTENSION = r'''import { spawn } from "node:child_process";

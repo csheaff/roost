@@ -12259,8 +12259,12 @@ class Search(unittest.TestCase):
                         + "".join(json.dumps(entry) + "\n" for entry in entries))
         return path
 
-    def codex_said(self, role, words, minute, **fields):
+    def codex_said(self, role, words, minute, kinds=None, **fields):
+        """A message in a rollout. KINDS are what Codex 0.163.0 says its
+        parts hold; an older Codex says nothing of that."""
         part = "output_text" if role == "assistant" else "input_text"
+        if kinds:
+            fields["internal_chat_message_metadata_passthrough"] = dict(content_item_kinds=kinds, turn_id="t")
         return dict(type="response_item", timestamp=self.stamp(minute),
                     payload=dict(type="message", role=role, content=[dict(type=part, text=words)], **fields))
 
@@ -12271,8 +12275,9 @@ class Search(unittest.TestCase):
         self.rollout("s1", live, [
             # What Codex tells the model, and its own notes among your messages.
             self.codex_said("developer", "csv commas are in your instructions", 1),
-            self.codex_said("user", "<environment_context>\n  <cwd>/csv/commas</cwd>\n</environment_context>", 1),
-            self.codex_said("user", "Quote CSV fields that contain commas", 2),
+            self.codex_said("user", "<environment_context>\n  <cwd>/csv/commas</cwd>\n</environment_context>", 1,
+                            kinds=["environments.environment_context"]),
+            self.codex_said("user", "Quote CSV fields that contain commas", 2, kinds=["user.text"]),
             # It records what you sent, and each reply, a second time, as an event.
             dict(type="event_msg", timestamp=self.stamp(2),
                  payload=dict(type="item_completed", item=dict(
@@ -12284,11 +12289,23 @@ class Search(unittest.TestCase):
             dict(type="response_item", timestamp=self.stamp(4),
                  payload=dict(type="custom_tool_call_output", output="csv commas everywhere")),
             self.codex_said("assistant", "Done: the CSV writer now quotes commas.", 5, phase="final_answer"),
-            # A prompt of yours may hold a tag, or be all one element, and is still yours.
-            self.codex_said("user", "<td> cells lose their csv commas, fix that too", 6),
-            self.codex_said("user", "<td>csv commas</td>", 7),
-            # A skill Codex loads is a note of its own too.
-            self.codex_said("user", "<skill>\n<name>csv commas</name>\n</skill>", 8),
+            # A prompt of yours may hold a tag, or be all one block in a tag
+            # of your own, even one of Codex's, and is still yours: Codex
+            # says so.
+            self.codex_said("user", "<td> cells lose their csv commas, fix that too", 6, kinds=["user.text"]),
+            self.codex_said("user", "<test_case>csv commas</test_case>", 7, kinds=["user.text"]),
+            self.codex_said("user", "<skill>csv commas as a skill of mine</skill>", 8, kinds=["user.text"]),
+            # A note of Codex's is its own whatever it looks like.
+            self.codex_said("user", "csv commas, noted by Codex in plain words", 9, kinds=["skills.injection"]),
+        ])
+        # An older Codex says nothing of what a message holds: its notes are
+        # told by the tags it wraps them in, and a block in any other is yours.
+        older = self.state / "worktrees" / self.repo_hash / "older-codex-5e4d3c"
+        self.rollout("s0", older, [
+            self.codex_said("user", "<environment_context>\n  <cwd>/csv/commas</cwd>\n</environment_context>", 1),
+            self.codex_said("user", "<skill>\n<name>csv commas</name>\n</skill>", 2),
+            self.codex_said("user", "<test_case>csv commas</test_case>", 3),
+            self.codex_said("user", "<td>csv commas</td>", 4),
         ])
         # Retired: no record, but Codex keeps the rollout, which says where it started.
         retired = self.state / "worktrees" / self.repo_hash / "csv-import-9f8e7d"
@@ -12307,7 +12324,7 @@ class Search(unittest.TestCase):
         self.rollout("s6", live, [self.codex_said("user", "csv commas with no session", 203)],
                      first=json.dumps(self.codex_said("user", "csv commas first", 203)))
 
-        first, second = self.search("COMMAS csv")["tasks"]
+        first, second, third = self.search("COMMAS csv")["tasks"]
         self.assertEqual((first["name"], first["past"], first["repo"], first["branch"]),
                          ("csv import", True, self.repo, "roost/x"))
         self.assertEqual((second["id"], second["name"]), ("0a1b2c3d4e5f6a7b", "fix CSV quoting"))
@@ -12316,7 +12333,10 @@ class Search(unittest.TestCase):
                           ("assistant", "codex", "Looking at the CSV writer for commas."),
                           ("assistant", "codex", "Done: the CSV writer now quotes commas."),
                           ("user", "codex", "<td> cells lose their csv commas, fix that too"),
-                          ("user", "codex", "<td>csv commas</td>")])
+                          ("user", "codex", "<test_case>csv commas</test_case>"),
+                          ("user", "codex", "<skill>csv commas as a skill of mine</skill>")])
+        self.assertEqual((third["name"], [hit["text"] for hit in third["hits"]]),
+                         ("older codex", ["<test_case>csv commas</test_case>", "<td>csv commas</td>"]))
         self.assertEqual((second["hits"][0]["session"], second["hits"][0]["line"], second["hits"][0]["at"]),
                          ("rollout-2026-10-01T10-00-00-s1", 4, self.stamp(2)))
         self.assertEqual(second["more"], 0)
