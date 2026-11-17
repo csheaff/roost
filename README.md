@@ -80,9 +80,10 @@ one fills the frame.
 the signals its detectors record and the targets reconstructed from them.*
 
 **A page the agent writes.** With `(setq roost-agent-pages t)`, an agent
-can also write a small page of its own: a diagram you can click, a
-mock-up, controls to try. What moves in it works there, and a button in it
-that asks the agent something opens a draft for you to send.
+in a task you start from then on can also write a small page of its own: a
+diagram you can click, a mock-up, controls to try. What moves in it works
+there, and a button in it that asks the agent something opens a draft for
+you to send. A page needs a graphical Emacs built with xwidgets.
 
 ![A task's terminal, named local › replay-reconstruction, alone in the frame. Claude Code is asked to show the reconstruction building once more; it calls Roost, and a page opens beside the terminal and plays: bright rays sweep across a Shepp-Logan phantom, a sinogram fills in from the left as a heat map, and above them the filtered back projection sharpens from streaks into the phantom as the count of views climbs to 181, over a pause button, a slider and a control for the filter](docs/images/roost-show-page.gif)
 
@@ -92,7 +93,9 @@ phantom and the sinogram filling in, with a slider to scrub through them.*
 
 **As it is written.** A Pi task on this machine shows its page as the
 model writes it: the window opens when the model starts on the page, and
-the page fills in from there.
+the page fills in from there. That takes a model server that sends the
+page as it is written, as OpenAI's did here; LM Studio sends it whole, and
+the page then fills in at once.
 
 ![A task's terminal, named local › explain-back-projection, alone in the frame. Pi is asked to draw back-projection once more with each arc in its detector's colour; a window opens beside the terminal while Pi is still working, and a page fills in: a heading, then a half circle from each of eleven detectors, one after another and each in its own colour, all crossing at a bright target, then the detectors along the bottom and a line on what the arcs are](docs/images/roost-show-as-written.gif)
 
