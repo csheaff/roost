@@ -324,21 +324,23 @@ it does for one. Click one, or `RET` on it, and it fills the frame alone;
 and a click or `q` goes back to them all, beside the terminal.
 
 **See a page an agent writes.** With `roost-agent-pages` on, as well as
-`roost-agent-offers`, the agent can
-also show a small page of its own: a diagram of what it changed, a mock-up,
-or controls to try, such as a slider. Ask for one by what it is, as in "show
-me that as a diagram I can click". It opens where an image does and takes its
-place, and what moves in it works there. A button in it that asks the agent
-something opens a draft to the task with its words, for you to send: nothing
-a page does reaches the agent until you do. The agent doesn't see its page
-drawn, so tell it what looks wrong. It needs a graphical Emacs built with
-xwidgets. The tool is `show_widget`, for a page of at most 512 KB, in
-tasks started since you turned the option on. A Pi task on this machine
-shows its page as the model writes it: the page opens as the model starts
-on it and fills in from there, where the model's server sends a tool
-call's input as it is written (LM Studio sends it whole, and the page then
-fills in at once). Other agents' pages, and a Pi task's on another host,
-show once they are whole.
+`roost-agent-offers`, the agent can also show a small page of its own: a diagram of what it changed, a mock-up, or
+controls to try, such as a slider. Ask for one in your own words, as in "show
+me that as a page" or "a diagram I can click". It opens where an image does
+and takes its place, and what moves in it works there. A page you ask to share
+or publish is another matter: a Claude Code task makes that one with its own
+Artifact tool, at claude.ai. Now and then it starts one for a page you only
+asked to see; tell it to show the page here instead. A button in it that asks
+the agent something opens a draft to the task with its words, for you to send:
+nothing a page does reaches the agent until you do. The agent doesn't see its
+page drawn, so tell it what looks wrong. It needs a graphical Emacs built with
+xwidgets. The tool is `show_widget`, for a page of at most 512 KB, in tasks
+started since you turned the option on. A Pi task on this machine shows its
+page as the model writes it: the page opens as the model starts on it and
+fills in from there, where the model's server sends a tool call's input as it
+is written (LM Studio sends it whole, and the page then fills in at once).
+Other agents' pages, and a Pi task's on another host, show once they are
+whole.
 
 **Keep them in view.** `b` in the dashboard, or `M-x roost-sidebar-mode`, keeps a
 compact task list at the left of the frame, through `C-x 1`. With

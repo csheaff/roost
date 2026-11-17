@@ -29,6 +29,19 @@ To upgrade from 0.12:
 
 Changes since 0.12.0:
 
+- **A page you ask a Claude Code task for shows beside its terminal.** With
+  `roost-agent-pages` on, a task whose first prompt asked plainly for a
+  page, as in "make me a page that walks through it", mostly made it with
+  Claude Code's own Artifact tool, which publishes the page to claude.ai
+  and shows nothing in Emacs: 38 of 42 real tasks did, on Sonnet, Opus and
+  Haiku. Roost's tool now says, before anything else, that a page you ask
+  for is shown with it unless you ask to publish or share one, and 4 of 46
+  did, none of them Sonnet's. A page you ask to share or publish still
+  goes to Artifact; if a task starts one you wanted here, tell it to show
+  the page here instead. The sentence is in the tool every agent is given
+  and adds about thirty tokens to each request; `docs/validation.md` has
+  the counts. Nothing to do when upgrading: tasks started from now on
+  have it.
 - **A page a Pi task writes shows as it is written.** With
   `roost-agent-pages` on, a Pi task on this machine opens its page beside
   its terminal as the model starts on it, and the page fills in as the
