@@ -2945,8 +2945,9 @@ states: `keep_shown` keeps either, and Emacs draws a page in a web view
 |---|---|---|
 | None | The agent has shown nothing | no `shown` in the record |
 | Shown, not taken up | The record names one this Emacs hasn't fetched | `shown.at` newer than `roost--shown-at` |
-| Waiting | Fetched, the task's terminal off screen | its buffer in `roost--shown-waiting` |
+| Waiting | Fetched, the task's terminal off screen, or put away for another task's | its buffer in `roost--shown-waiting` |
 | On screen | In a window beside the terminal | its buffer has a window |
+| Filling the frame | In the only window but those at the frame's sides | its window's `roost-shown-back` names its buffer |
 | Closed | Fetched and shown, its window closed since | its buffer has none, and isn't waiting |
 
 Invariants:
@@ -2972,7 +2973,14 @@ Invariants:
   its name (`roost--shown-buffer`).
 - I5. A frame shows only the image of the task whose terminal it shows
   (`roost--put-away-shown`), and an image goes with its task (`Store.remove`,
-  `roost--forget-shown`).
+  `roost--forget-shown`). One put away for another task's terminal comes back
+  with its own; one you closed does not.
+- I7. Roost resizes an image's window only while it is as Roost left it, beside
+  its terminal: one you resized, and one that fills the frame, stay as they are
+  (`roost-shown-fit`, `roost--refit-shown`). The terminal keeps half its space.
+- I8. An image that fills the frame has a way back to the windows as they were,
+  by a click or `q`, and to where you were (the window's `roost-shown-back`,
+  `roost-enlarge-image`).
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
@@ -2981,8 +2989,12 @@ Invariants:
 | Shown, not taken up | a list or reply names it | task known to this Emacs, or its host listed before | On screen or Waiting | `shown` requested; beside the terminal if on screen | `roost--note-shown`, `roost--take-shown` |
 | Shown, not taken up | a list names it | task new to this Emacs, in its host's first list | Closed | noted, not fetched | `roost--note-shown` |
 | Waiting | you open the task | | On screen | beside its terminal | `roost--show-waiting` |
-| On screen | another task's terminal takes the frame | | Closed | its window deleted | `roost--put-away-shown` |
-| On screen | `q` | | Closed | | `quit-window` |
+| On screen | another task's terminal takes the frame | | Waiting | its window deleted | `roost--put-away-shown` |
+| On screen | the next image comes | its window as Roost left it | On screen | window resized for it, on the side it is on | `roost--refit-shown` |
+| On screen | a click on it, `z` | | Filling the frame | the windows as they were kept; other windows but the sides' deleted | `roost-enlarge-image` |
+| Filling the frame | another task's terminal takes its window | | Waiting | the way back dropped | `roost--put-away-shown` |
+| Filling the frame | a click on it, `z`, `q` | | On screen | the windows put back | `roost-enlarge-image`, `roost-quit-image` |
+| On screen | `q` | | Closed | | `roost-quit-image` |
 | Closed, Waiting | the panel's Image line, `roost-show-image` | you stayed | On screen | fetched again, beside the window you are in | `roost-show-image` |
 | any | task retired, discarded, forgotten or gone from a list | | None | copy, buffer and both tables' entries go | `Store.remove`, `roost--forget-shown` |
 

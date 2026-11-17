@@ -3508,8 +3508,11 @@ def fork(qa, repo):
 @journey("An image an agent shows")
 def show(qa, repo):
     """An agent shows an image, which opens beside its terminal while you
-    stay in it. Closed, the panel's line brings it back; another task's
-    terminal takes it off the screen."""
+    stay in it, in a window the size it needs. A click lets it fill the
+    frame, and `q` puts the windows back. One much taller than its window
+    is as wide as the window, to scroll. Closed, the panel's line brings
+    it back; another task's terminal takes it off the screen, and it comes
+    back with its own."""
     qa.emacs.eval("(setq roost-agent-offers t)")
     # Beside its worktree, so the panel names it once: not among its changes.
     task = new_task(qa, "show ../chart.png")
@@ -3517,16 +3520,51 @@ def show(qa, repo):
     open_task(qa, task)
     image = lambda s: next((w for w in s["windows"] if w["mode"] == "image-mode"), None)
     qa.wait("the image", image, timeout=30)
+
+    def snug(screen):
+        """Whether the image's window is the image's size, give or take a few
+        characters, in the direction the terminal was split."""
+        (width, height), (column, line) = image(screen)["pixels"], screen["frame"]["character"]
+        drawn = image(screen)["image"]
+        return 0 <= width - drawn[0] <= 4 * column or 0 <= height - drawn[1] <= 3 * line
+
     qa.step("The agent shows an image, which opens beside its terminal", expect=[
         ("the image has a window of its own", lambda s: image(s)["buffer"] == "*roost image: %s*" % task),
         ("you stay in the terminal", lambda s: selected_terminal(s) is not None),
         ("the agent says it showed it", lambda s: "SHOWED Shown." in selected_terminal(s)["text"]),
-        ("the panel names it", lambda s: "Image  chart.png" in qa.window(s, "roost-task-info-mode")["text"])])
+        ("the panel names it", lambda s: "Image  chart.png" in qa.window(s, "roost-task-info-mode")["text"]),
+        ("it is drawn whole, at its own size", lambda s: image(s)["image"] == [320, 200]),
+        ("its window is no larger than it needs", lambda s: snug(s))])
+
+    mains = lambda s: [w for w in s["windows"] if not w["side"] and not w["child"]]
+    before = image(qa.screen())["pixels"]
+    if qa.emacs.eval("(qa-click-image)") != "t":
+        raise Stuck("No image on screen to click")
+    qa.settle()
+    qa.wait("the image alone", lambda s: len(mains(s)) == 1)
+    qa.step("A click lets the image fill the frame", expect=[
+        ("it is the only window but those at the sides", lambda s: mains(s) == [image(s)]),
+        ("it is drawn larger, as large as the window lets it be", lambda s: image(s)["image"][0] > 320),
+        ("it says how to go back", lambda s: "to put the windows back" in (s["echo"] or ""))])
+    qa.keys("q")
+    qa.wait("the windows back", lambda s: len(mains(s)) > 1)
+    qa.step("q puts the windows back", expect=[
+        ("the image is beside the terminal, as large as before", lambda s: image(s)["pixels"] == before),
+        ("you are in the terminal", lambda s: selected_terminal(s) is not None)])
+
+    qa.keys("C-c r e")
+    qa.wait("the prompt", lambda s: s["prompt"])
+    qa.type("show ../long.png 400x6000\r")
+    qa.wait("the long image", lambda s: image(s) and image(s)["image"] == [400, 6000], timeout=30)
+    qa.step("An image much taller than its window is as wide as it, to scroll", expect=[
+        ("it is drawn at its own width", lambda s: image(s)["image"] == [400, 6000]),
+        ("its window, on the side it was, shows the top of it", lambda s: image(s)["pixels"][1] < 6000),
+        ("you stay in the terminal", lambda s: selected_terminal(s) is not None)])
 
     qa.emacs.eval("(quit-window nil (get-buffer-window %s))" % lisp("*roost image: %s*" % task))
     qa.wait("the image closed", lambda s: not image(s))
-    if qa.emacs.eval("(qa-click-text \"chart.png\" \"roost-task-info-mode\")") != "t":
-        raise Stuck("No chart.png in the panel to click")
+    if qa.emacs.eval("(qa-click-text \"long.png\" \"roost-task-info-mode\")") != "t":
+        raise Stuck("No long.png in the panel to click")
     qa.settle()
     qa.wait("the image again", image, timeout=30)
     qa.step("Closed, the panel's line brings it back", expect=[
@@ -3538,6 +3576,12 @@ def show(qa, repo):
     qa.step("Another task's terminal takes the image off the screen", expect=[
         ("no image shows", lambda s: not image(s)),
         ("the other task's terminal does", lambda s: (s.get("task") or {}).get("name") == other)])
+
+    open_task(qa, task)
+    qa.wait("the image back", image, timeout=30)
+    qa.step("It comes back with its own task", expect=[
+        ("the image shows again", lambda s: image(s)["buffer"] == "*roost image: %s*" % task),
+        ("its task's terminal does", lambda s: (s.get("task") or {}).get("name") == task)])
 
 
 @journey("A task an agent offers")
