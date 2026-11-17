@@ -10879,6 +10879,57 @@ print(json.dumps(dict(data=data)))
                              "or WebP file of at most 8 MB" % path)
         self.assertIn("Give the path", self.call(task, "show_image", path="")["content"][0]["text"])
         self.assertEqual(self.request("shown", id=task["id"])["result"]["name"], "chart.gif")
+        # Several together, in order: each has its copy, and its own name.
+        (worktree / "before.png").write_bytes(png + b"before")
+        (worktree / "after.png").write_bytes(png + b"after")
+        said = self.call(task, "show_image", paths=["before.png", "after.png"])
+        self.assertNotIn("isError", said, said)
+        self.assertIn("Roost shows before.png and after.png beside", said["content"][0]["text"])
+        listed = self.request("list")["result"][0]["shown"]
+        self.assertEqual((listed["name"], [part["name"] for part in listed["images"]]),
+                         ("before.png and after.png", ["before.png", "after.png"]))
+        fetched = self.request("shown", id=task["id"])["result"]
+        self.assertNotIn("data", fetched)
+        self.assertEqual([(part["name"], base64.b64decode(part["data"])) for part in fetched["images"]],
+                         [("before.png", png + b"before"), ("after.png", png + b"after")])
+        self.assertEqual(sorted(file.name for file in store.shown(task["id"]).iterdir()),
+                         sorted(part["id"] + ".png" for part in fetched["images"]))
+        # The first is what an Emacs that knows of one image reads.
+        self.assertEqual((listed["id"], listed["kind"]), (listed["images"][0]["id"], "png"))
+        # Three and more are named by the first.
+        said = self.call(task, "show_image", paths=["before.png", "after.png", str(outside)])
+        self.assertIn("Roost shows before.png and 2 more beside", said["content"][0]["text"])
+        self.assertEqual(len(list(store.shown(task["id"]).iterdir())), 3)
+        # One of them that is no image refuses them all, in the words for
+        # one, and what was shown stays.
+        refused = self.call(task, "show_image", paths=["before.png", "notes.png"])
+        self.assertEqual(refused["content"][0]["text"], "notes.png is not an image Roost can show: a PNG, JPEG, GIF "
+                         "or WebP file of at most 8 MB")
+        # So do too many, too much, none, both ways of naming them, and
+        # what is no list.
+        (worktree / "big.png").write_bytes(png + b"\0" * (roost.SHOWN_LIMIT - 100))
+        for arguments, why in ((dict(paths=["before.png"] * 7), "at most 6 images together"),
+                               (dict(paths=["big.png"] * 3), "at most 16 MB of images together"),
+                               (dict(paths=[]), "Give the path"),
+                               (dict(paths=["before.png", ""]), "Give the path"),
+                               (dict(path="before.png", paths=["after.png"]), "Give path, for one image, or paths"),
+                               (dict(paths="before.png"), "Give path, for one image, or paths")):
+            refused = self.call(task, "show_image", **arguments)
+            self.assertTrue(refused.get("isError"), refused)
+            self.assertIn(why, refused["content"][0]["text"])
+        self.assertEqual(self.request("shown", id=task["id"])["result"]["name"], "before.png and 2 more")
+        self.assertEqual(len(list(store.shown(task["id"]).iterdir())), 3)
+        # One alone, given as a list, is one image.
+        self.assertNotIn("isError", self.call(task, "show_image", paths=[str(outside)]))
+        fetched = self.request("shown", id=task["id"])["result"]
+        self.assertEqual((fetched["name"], "images" in fetched, base64.b64decode(fetched["data"])),
+                         ("chart.gif", False, b"GIF89a" + b"frames"))
+        # A record that names more than this helper keeps names nothing.
+        record = store.read(task["id"])
+        record["shown"]["images"] = [dict(id="0a1b2c3d", name="x", kind="html")] * 2
+        store.save(record)
+        self.assertNotIn("shown", self.request("list")["result"][0])
+        self.assertNotIn("isError", self.call(task, "show_image", path=str(outside)))
         # A record's own word for what was shown is not taken: only what
         # this helper wrote.
         record = store.read(task["id"])

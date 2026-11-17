@@ -2954,12 +2954,16 @@ Invariants:
 - I1. The record names an image only once its copy is there whole: under the
   registry lock, the copy is written, then the record saved, then older copies go
   if they can, so two images shown at once don't remove each other's
-  (`show_image`). `make crash` kills the helper at each step (`Show`).
+  (`show_image`). Several shown together are one showing: every copy is
+  written before the record names any, and the record's first is one image
+  alone to a reader that knows of one. `make crash` kills the helper at each
+  step (`Show`, `ShowSeveral`).
 - I0. The tool needs no permission, so it tells the agent nothing of a path but
   whether Roost showed it: every refusal reads the same (`show_image`).
 - I2. Emacs draws only what the helper wrote and checked: a PNG, JPEG, GIF or WebP by
   its first bytes, of at most 8 MB, under an ID the helper made (`image_kind`,
-  `shown_image`). A record edited by hand names nothing.
+  `shown_image`); of several together, at most six and 16 MB in all, each so
+  checked, and all or none. A record edited by hand names nothing.
 - I3. Showing is no event of the agent's: the task's status, `updatedAt` and whether
   you have seen it stay (`show_image` saves only `shown`).
 - I4. An image is brought up once, and never takes you from the window you are in:
@@ -2992,6 +2996,9 @@ Invariants:
 | On screen | another task's terminal takes the frame | | Waiting | its window deleted | `roost--put-away-shown` |
 | On screen | the next image comes | its window as Roost left it | On screen | window resized for it, on the side it is on | `roost--refit-shown` |
 | On screen | a click on it, `z` | | Filling the frame | the windows as they were kept; other windows but the sides' deleted | `roost-enlarge-image` |
+| On screen, several together | a click on one, `RET`, `z` | | Filling the frame, that one alone | the windows as they were kept | `roost-enlarge-image` |
+| Filling the frame, one of several | `n`, `p`, the arrows above it | | Filling the frame, the next or the one before | | `roost-next-image`, `roost-previous-image` |
+| Filling the frame, one of several | a click on it, `z`, `q` | | On screen, several together | the windows put back | `roost-enlarge-image`, `roost-quit-image` |
 | Filling the frame | another task's terminal takes its window | | Waiting | the way back dropped | `roost--put-away-shown` |
 | Filling the frame | a click on it, `z`, `q` | | On screen | the windows put back | `roost-enlarge-image`, `roost-quit-image` |
 | On screen | `q` | | Closed | | `roost-quit-image` |

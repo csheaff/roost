@@ -4,6 +4,13 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- An agent can show several images together, as a before and an after: up
+  to six, of 16 MB in all. Roost lays them out in the rows that draw them
+  largest in the window, all at one scale and each over its file's name.
+  Click one and it fills the frame alone; `n` and `p`, or the arrows above
+  it, show the others in its place, and a click or `q` goes back to them
+  all. Its tool, `show_image`, takes `paths` for this; tasks started or
+  resumed after upgrading have it. Nothing else to do when upgrading.
 - Opening an agent's offer no longer takes it. Clicked to see what it was
   and left for another task, an offer had gone from the sidebar, with its
   draft in a buffer nothing showed. Now it waits under its task until you

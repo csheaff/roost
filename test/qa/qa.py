@@ -3561,6 +3561,44 @@ def show(qa, repo):
         ("its window, on the side it was, shows the top of it", lambda s: image(s)["pixels"][1] < 6000),
         ("you stay in the terminal", lambda s: selected_terminal(s) is not None)])
 
+    sheet = lambda s: next((w for w in s["windows"] if w["mode"] == "roost-shown-sheet-mode"), None)
+    qa.keys("C-c r e")
+    qa.wait("the prompt", lambda s: s["prompt"])
+    qa.type("together ../before.png 640x400 ../after.png 640x400\r")
+    qa.wait("the two images", lambda s: sheet(s) and len(sheet(s)["images"]) == 2, timeout=30)
+    qa.step("Two images shown together are laid out in one window", expect=[
+        ("both are drawn, at one size", lambda s: sheet(s)["images"][0] == sheet(s)["images"][1]),
+        ("each fits in the window", lambda s: sheet(s)["images"][0][0] <= sheet(s)["pixels"][0]
+         and 2 * sheet(s)["images"][0][1] <= sheet(s)["pixels"][1] + 400),
+        ("each is over its file's name", lambda s: "before.png" in sheet(s)["text"] and "after.png" in sheet(s)["text"]),
+        ("the panel names both",
+         lambda s: "Image  before.png and after.png" in qa.window(s, "roost-task-info-mode")["text"]),
+        ("you stay in the terminal", lambda s: selected_terminal(s) is not None)])
+    if qa.emacs.eval("(qa-click-image)") != "t":
+        raise Stuck("No images on screen to click")
+    qa.settle()
+    qa.wait("one image alone", lambda s: image(s) and len(mains(s)) == 1)
+    qa.step("A click on one shows it alone, filling the frame", expect=[
+        ("it is the first, of two", lambda s: image(s)["header"].strip().startswith("‹ 1 of 2 ›")),
+        ("its name is beside the count", lambda s: "before.png" in image(s)["header"]),
+        ("it is drawn larger than it was", lambda s: image(s)["image"][0] > 0)])
+    qa.keys("n")
+    qa.wait("the next", lambda s: image(s) and "2 of 2" in image(s)["header"])
+    qa.step("n shows the next, in the same place", expect=[
+        ("it is the second", lambda s: "after.png" in image(s)["header"]),
+        ("alone still", lambda s: mains(s) == [image(s)])])
+    qa.keys("p")
+    qa.wait("the one before", lambda s: image(s) and "1 of 2" in image(s)["header"])
+    qa.keys("q")
+    qa.wait("both again", lambda s: sheet(s) and len(mains(s)) > 1)
+    qa.step("q goes back to both, beside the terminal", expect=[
+        ("both are drawn", lambda s: len(sheet(s)["images"]) == 2),
+        ("you are in the terminal", lambda s: selected_terminal(s) is not None)])
+
+    qa.keys("C-c r e")
+    qa.wait("the prompt", lambda s: s["prompt"])
+    qa.type("show ../long.png 400x6000\r")
+    qa.wait("the long image again", lambda s: image(s) and image(s)["image"] == [400, 6000], timeout=30)
     qa.emacs.eval("(quit-window nil (get-buffer-window %s))" % lisp("*roost image: %s*" % task))
     qa.wait("the image closed", lambda s: not image(s))
     if qa.emacs.eval("(qa-click-text \"long.png\" \"roost-task-info-mode\")") != "t":

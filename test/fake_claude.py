@@ -229,6 +229,21 @@ for line in lines():
         record("assistant", said)
         event("Stop", last_assistant_message=said)
         status("done")
+    elif line.startswith("together "):
+        # Make images, each of the size after its name, and show them
+        # together: "together before.png 640x400 after.png 640x400".
+        words = line[len("together "):].split()
+        names = words[0::2]
+        for name, size in zip(names, words[1::2]):
+            with open(name, "wb") as image:
+                image.write(png(*(int(side) for side in size.split("x"))))
+        event("PreToolUse", tool_name="mcp__roost__show_image")
+        said = call("show_image", paths=names)
+        event("PostToolUse", tool_name="mcp__roost__show_image")
+        print("SHOWED " + said, flush=True)
+        record("assistant", said)
+        event("Stop", last_assistant_message=said)
+        status("done")
     elif line.startswith("page "):
         # Show a page of its own writing in Roost. Its button asks you to
         # send its words. No test can press a button in the page's frame

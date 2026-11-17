@@ -16791,6 +16791,125 @@ report.py, and the third alone changes src/totals.py."
              (should-error (roost-enlarge-image) :type 'user-error)))
        (kill-buffer buffer)))))
 
+(ert-deftest roost-images-shown-together-go-in-the-rows-that-draw-them-largest ()
+  (should (equal (roost--sheet-ways 3) '((1 1 1) (1 2) (2 1) (3))))
+  ;; A gap of 8 pixels between two in a row, and a caption of 20 under each row.
+  (cl-flet ((arrange (sizes width height) (roost--sheet-arrange sizes width height 8 20)))
+    ;; Two wide ones in a tall window: one over the other.
+    (should (equal (car (arrange '((1600 . 1000) (1600 . 1000)) 800 1000)) '(1 1)))
+    ;; In a wide one: side by side, as large as fits, at one scale.
+    (should (equal (arrange '((1600 . 1000) (1600 . 1000)) 1608 520) '((2) . 0.5)))
+    ;; Two tall ones in a tall window: side by side too.
+    (should (equal (car (arrange '((400 . 900) (400 . 900)) 800 1000)) '(2)))
+    ;; Four in a square: two rows of two.
+    (should (equal (car (arrange (make-list 4 '(800 . 600)) 1000 800)) '(2 2)))
+    ;; Small ones keep their own size.
+    (should (equal (arrange '((100 . 50) (100 . 50)) 800 1000) '((1 1) . 1.0)))
+    ;; A wide one over two narrow ones: the wide row has no gap to
+    ;; give up, and the row with one is narrow.
+    (should (equal (arrange '((800 . 100) (100 . 800) (100 . 800)) 400 800)
+                   (cons '(1 2) (/ 400.0 800))))
+    ;; A large one beside a small one: both smaller by as much.
+    (should (equal (arrange '((2000 . 1000) (200 . 100)) 1108 572) '((2) . 0.5)))))
+
+(ert-deftest roost-shows-several-images-together-and-one-alone ()
+  (roost-test--isolated
+   (let* ((key '("dev" "1111111111111111"))
+          (terminal nil)
+          displayed)
+     (roost--cache-task "dev" (append '((name . "budget")) (roost-test--task "1111111111111111" "ready")))
+     (unwind-protect
+         (cl-letf (((symbol-function 'display-images-p) (lambda (&rest _) t))
+                   ((symbol-function 'image-type-available-p) (lambda (&rest _) t))
+                   ((symbol-function 'create-image) (lambda (data &rest _) (list 'image :data data)))
+                   ((symbol-function 'roost--measure-image) (lambda (_data) '(160 . 100)))
+                   ((symbol-function 'roost--task-terminal-window) (lambda (_task) terminal))
+                   ((symbol-function 'message) #'ignore))
+           (cl-letf (((symbol-function 'roost--display-shown)
+                      (lambda (buffer window) (push (list (buffer-name buffer) window) displayed))))
+             (roost--take-shown key '((name . "before.png and after.png") (kind . "png")
+                                      (at . "2026-11-17T10:00:00+00:00")
+                                      (images ((name . "before.png") (kind . "png") (data . "YmVmb3Jl"))
+                                              ((name . "after.png") (kind . "png") (data . "YWZ0ZXI="))))))
+           (let ((buffer (roost--shown-buffer key)))
+             (should (equal (buffer-local-value 'roost--shown-images buffer)
+                            '(("before.png" "before") ("after.png" "after"))))
+             (should-not (roost--shown-size buffer))
+             (should (equal (roost--shown-sizes buffer) '((160 . 100) (160 . 100))))
+             ;; Where they go beside a terminal of 1600 by 1000 pixels:
+             ;; one over the other, in a window as wide as one of them.
+             (should (equal (roost--shown-place-in buffer 1600 1000 8 20) '(right . 22)))
+             ;; Shown, each is drawn over its name, in order.
+             (delete-other-windows)
+             (setq terminal (selected-window))
+             (let ((window (roost--display-shown buffer terminal)))
+               (with-current-buffer buffer
+                 (should (derived-mode-p 'roost-shown-sheet-mode))
+                 (should (equal (mapcar (lambda (at) (plist-get (cdr (get-text-property at 'display)) :data))
+                                        (seq-filter (lambda (at) (eq (car-safe (get-text-property at 'display)) 'image))
+                                                    (number-sequence (point-min) (1- (point-max)))))
+                                '("before" "after")))
+                 (should (string-match-p "before\\.png" (buffer-string)))
+                 (should (string-match-p "after\\.png" (buffer-string))))
+               ;; Shown in a second, smaller window too, they are laid out
+               ;; for the smaller: both windows draw the one layout.
+               (let ((other (split-window terminal 6 'above)))
+                 (set-window-buffer other buffer)
+                 (with-current-buffer buffer
+                   (should (equal (roost--sheet-space window)
+                                  (cons (min (window-body-width window t) (window-body-width other t))
+                                        (min (window-body-height window t) (window-body-height other t)))))
+                   (should (< (cdr (roost--sheet-space window)) (window-body-height window t))))
+                 (delete-window other))
+               ;; The second, clicked, fills the frame alone; `image-mode'
+               ;; draws no image in a test, so the drawing is left out.
+               (cl-letf (((symbol-function 'roost--draw-shown) #'ignore))
+                 (let ((second (with-current-buffer buffer
+                                 (text-property-any (point-min) (point-max) 'roost-shown-index 1))))
+                   (roost-enlarge-image (list 'mouse-1 (list window second '(0 . 0) 0))))
+                 (should (one-window-p))
+                 (should (eql (buffer-local-value 'roost--shown-one buffer) 1))
+                 (with-current-buffer buffer
+                   ;; `n' and `p' go round the two.
+                   (roost-next-image)
+                   (should (eql roost--shown-one 0))
+                   (roost-previous-image)
+                   (should (eql roost--shown-one 1))
+                   ;; `q' goes back to them all, and the windows as they were.
+                   (roost-quit-image))
+                 (should-not (buffer-local-value 'roost--shown-one buffer))
+                 (should (= (length (window-list)) 2))))
+             ;; Several that come while one fills the frame take its place
+             ;; there, and `q' still puts the windows back.
+             (cl-letf (((symbol-function 'roost--draw-shown) #'ignore))
+               (let ((window (get-buffer-window buffer)))
+                 (roost-enlarge-image (list 'mouse-1 (list window 1 '(0 . 0) 0)))
+                 (should (one-window-p))
+                 (roost--take-shown key '((name . "c.png and d.png") (kind . "png")
+                                          (at . "2026-11-17T10:02:00+00:00")
+                                          (images ((name . "c.png") (kind . "png") (data . "Yw=="))
+                                                  ((name . "d.png") (kind . "png") (data . "ZA==")))))
+                 (should-not (buffer-local-value 'roost--shown-one buffer))
+                 (should (roost--shown-enlarged-p (selected-window)))
+                 (with-current-buffer buffer (roost-quit-image))
+                 (should (= (length (window-list)) 2))
+                 (should-not (buffer-local-value 'roost--shown-one buffer))))
+             ;; One image shown next is one again, with nothing to step to.
+             (cl-letf (((symbol-function 'roost--draw-shown) #'ignore))
+             (roost--take-shown key '((name . "shot.png") (kind . "png") (at . "2026-11-17T10:05:00+00:00")
+                                      (data . "c2hvdA==")))
+             (should-not (buffer-local-value 'roost--shown-images buffer))
+             (with-current-buffer buffer
+               (should (equal (buffer-string) "shot"))
+               (should-error (roost-next-image) :type 'user-error))
+             ;; One of several with no bytes: nothing is shown.
+             (roost--take-shown key '((name . "a.png and b.png") (kind . "png") (at . "2026-11-17T10:09:00+00:00")
+                                      (images ((name . "a.png") (kind . "png") (data . "YQ=="))
+                                              ((name . "b.png") (kind . "png")))))
+             (with-current-buffer buffer
+               (should (equal (buffer-string) "shot"))))))
+       (when (roost--shown-buffer key) (kill-buffer (roost--shown-buffer key)))))))
+
 (ert-deftest roost-an-image-put-away-comes-back-with-its-task ()
   ;; Another task's terminal takes an image off the screen; it shows
   ;; again when its own task is opened, as one you closed does not.
