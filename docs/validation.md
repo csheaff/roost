@@ -58,8 +58,11 @@ Claude Code's:
   real host and then searched; a forked task, whose conversation Codex and
   Pi copy, so a message from before the fork may show under both tasks; a
   remote host. No Codex subagent's rollout was seen: the rule that leaves
-  one out, a first entry whose `source` is an object rather than a word,
-  is from the names in Codex's binary.
+  one out, a first entry whose `source` is a table, or a word that begins
+  `subagent` or `internal`, is from the names in Codex's binary.
+- A search with 5,000 rollouts of sessions that were no task's, each
+  first entry 22 KB as Codex's are, took 0.26 seconds: only that entry of
+  each is read.
 
 ## Roost's tools in Codex, OpenCode and Pi — 2026-11-16
 

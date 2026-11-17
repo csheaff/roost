@@ -1310,8 +1310,9 @@ PLAN_EVENT = "Plan"
 
 
 # What Codex records as yours that it wrote itself, such as the folder and
-# shell it runs in: the whole of it is one tagged block.
-CODEX_NOTE = re.compile(r"\s*<([a-z_]+)>.*</\1>\s*\Z", re.S)
+# shell it runs in: the whole of it is one block, in a tag of Codex's own,
+# which is a skill's or has an underscore in its name, as no tag of HTML has.
+CODEX_NOTE = re.compile(r"\s*<(skill|[a-z]+_[a-z_]*)>.*</\1>\s*\Z", re.S)
 
 
 def asks_about_plan(task):
@@ -1483,9 +1484,14 @@ class CodexAgent:
     def started_in(self, first):
         """The directory and branch of the session whose rollout starts with
         entry FIRST, or None: for a rollout that doesn't say, and for a
-        subagent's, whose prompts are the agent's and not yours."""
+        subagent's or one of Codex's own, as its memory agent's, whose
+        prompts are Codex's and not yours. Codex names what started a
+        session: a word, as "cli", for one of yours, and for a subagent's a
+        table, or a word that begins so."""
         payload = first.get("payload") if isinstance(first, dict) and first.get("type") == "session_meta" else None
-        if not isinstance(payload, dict) or isinstance(payload.get("source"), dict):
+        source = payload.get("source") if isinstance(payload, dict) else None
+        if not isinstance(payload, dict) or isinstance(source, dict) or (
+                isinstance(source, str) and source.startswith(("subagent", "internal"))):
             return None
         repo = payload.get("git") if isinstance(payload.get("git"), dict) else {}
         return payload.get("cwd"), text(repo.get("branch"))

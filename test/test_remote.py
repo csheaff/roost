@@ -12284,17 +12284,25 @@ class Search(unittest.TestCase):
             dict(type="response_item", timestamp=self.stamp(4),
                  payload=dict(type="custom_tool_call_output", output="csv commas everywhere")),
             self.codex_said("assistant", "Done: the CSV writer now quotes commas.", 5, phase="final_answer"),
-            # A prompt of yours may hold a tag, and is still yours.
+            # A prompt of yours may hold a tag, or be all one element, and is still yours.
             self.codex_said("user", "<td> cells lose their csv commas, fix that too", 6),
+            self.codex_said("user", "<td>csv commas</td>", 7),
+            # A skill Codex loads is a note of its own too.
+            self.codex_said("user", "<skill>\n<name>csv commas</name>\n</skill>", 8),
         ])
         # Retired: no record, but Codex keeps the rollout, which says where it started.
         retired = self.state / "worktrees" / self.repo_hash / "csv-import-9f8e7d"
         self.rollout("s2", retired, [self.codex_said("user", "Import CSV with commas in quotes", 120)])
         # A session outside Roost, a subagent's in the task's worktree, and
         # rollouts whose first entry says nothing of where they started.
-        self.rollout("s3", "/elsewhere/project", [self.codex_said("user", "csv commas", 200)])
+        self.rollout("s3", "/elsewhere/project", [self.codex_said("user", "csv commas of a quokka", 200)])
         self.rollout("s4", live, [self.codex_said("user", "csv commas for a subagent", 201)],
                      source=dict(subagent=dict(thread_spawn=dict(depth=1))))
+        # Codex's own sessions, as it may name them by a word.
+        self.rollout("s7", live, [self.codex_said("user", "csv commas for a subagent named by a word", 201)],
+                     source="subagent:thread_spawn")
+        self.rollout("s8", live, [self.codex_said("user", "csv commas for its guardian", 201)],
+                     source="internal:guardian")
         self.rollout("s5", live, [self.codex_said("user", "csv commas after a damaged line", 202)], first="{")
         self.rollout("s6", live, [self.codex_said("user", "csv commas with no session", 203)],
                      first=json.dumps(self.codex_said("user", "csv commas first", 203)))
@@ -12307,10 +12315,25 @@ class Search(unittest.TestCase):
                          [("user", "codex", "Quote CSV fields that contain commas"),
                           ("assistant", "codex", "Looking at the CSV writer for commas."),
                           ("assistant", "codex", "Done: the CSV writer now quotes commas."),
-                          ("user", "codex", "<td> cells lose their csv commas, fix that too")])
+                          ("user", "codex", "<td> cells lose their csv commas, fix that too"),
+                          ("user", "codex", "<td>csv commas</td>")])
         self.assertEqual((second["hits"][0]["session"], second["hits"][0]["line"], second["hits"][0]["at"]),
                          ("rollout-2026-10-01T10-00-00-s1", 4, self.stamp(2)))
         self.assertEqual(second["more"], 0)
+        # Of a session started elsewhere, only the first entry is read:
+        # Codex keeps every session it ever ran, most of them no task's.
+        read = []
+        wrote = roost.CodexAgent.wrote
+
+        def reading(adapter, entry):
+            read.append(entry)
+            return wrote(adapter, entry)
+
+        with patch.object(roost.CodexAgent, "wrote", reading):
+            self.assertEqual(self.search("quokka")["tasks"], [])
+            self.assertEqual(read, [])
+            self.search("writer")
+        self.assertEqual(len(read), 2)
 
     def pi_session(self, task_id, name, cwd, entries, first=None):
         """Write a session Pi ran in CWD, in the folder Roost gives it for
