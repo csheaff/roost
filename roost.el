@@ -11858,11 +11858,12 @@ came."
 
 (defun roost--shown-header ()
   "Say which image of several this buffer shows alone, with buttons to step."
-  (setq header-line-format
-        (when (and roost--shown-images roost--shown-one)
-          (cl-flet ((button (label command help)
-                      (propertize label 'mouse-face 'highlight 'help-echo help
-                                  'local-map (define-keymap "<header-line> <mouse-1>" command))))
+  ;; One image alone keeps the header line you give your buffers.
+  (when (and roost--shown-images roost--shown-one)
+    (cl-flet ((button (label command help)
+                (propertize label 'mouse-face 'highlight 'help-echo help
+                            'local-map (define-keymap "<header-line> <mouse-1>" command))))
+      (setq header-line-format
             (list (button " ‹ " #'roost-previous-image "The image before")
                   (format "%d of %d" (1+ roost--shown-one) (length roost--shown-images))
                   (button " › " #'roost-next-image "The next image")
@@ -11917,8 +11918,7 @@ file's name."
     (goto-char (point-min))
     (set-buffer-modified-p nil)
     (setq roost--shown-loaded nil
-          roost--sheet-drawn (cons width height)
-          header-line-format nil)
+          roost--sheet-drawn (cons width height))
     (when live
       (set-window-start window (point-min)))
     (add-hook 'window-size-change-functions #'roost--sheet-resized nil t)))

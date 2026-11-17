@@ -3587,6 +3587,8 @@ def show(qa, repo):
     qa.step("n shows the next, in the same place", expect=[
         ("it is the second", lambda s: "after.png" in image(s)["header"]),
         ("alone still", lambda s: mains(s) == [image(s)])])
+    qa.keys("p")
+    qa.wait("the one before", lambda s: image(s) and "1 of 2" in image(s)["header"])
     qa.keys("q")
     qa.wait("both again", lambda s: sheet(s) and len(mains(s)) > 1)
     qa.step("q goes back to both, beside the terminal", expect=[
