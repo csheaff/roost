@@ -1165,7 +1165,13 @@ it draws again when Pi next reads the file.
 
 Claude Code's `CLAUDE_CODE_FORCE_TERMINAL_IMAGES` does not change this:
 with it set, Claude Code 2.1.325 wrote no image to its terminal for a file
-it read, or for one attached to a prompt.
+it read, or for one attached to a prompt. Nor does tmux's
+`allow-passthrough`. Going by its code, which was read and not run, that
+version draws only a plugin's own pictures and its mascot on a file
+transfer, and the variable is for those: in tmux it otherwise draws them
+only when tmux names kitty, Ghostty or iTerm2 as the terminal outside it,
+which tmux cannot do for Emacs. Drawing the files it reads is asked for in
+[claude-code#79706](https://github.com/anthropics/claude-code/issues/79706).
 
 ### Terminals through tmux-control
 

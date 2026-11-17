@@ -97,7 +97,21 @@ hero, review and dashboard were taken again.
   environment, checked in its process: it read a PNG with its Read tool,
   and took one attached to a prompt with `@`, and drew neither. The bytes
   it wrote to its pane for another read, 7,176 of them recorded with
-  `tmux pipe-pane`, held no Kitty, iTerm2 or Sixel image.
+  `tmux pipe-pane`, held no Kitty, iTerm2 or Sixel image. The same with
+  tmux's `allow-passthrough` on: 10,125 bytes for a read, with no image
+  and no passthrough wrapper.
+- **Why, from the code in Claude Code 2.1.325's binary, read and not run.**
+  Its Kitty and iTerm2 image code serves an image element in a plugin's
+  interface and the mascot shown while a file goes to or from a connector
+  (`clawdFileProgressEnabled`, off by default); the Read tool and
+  attachments do not use it. In tmux it asks tmux for
+  `#{client_termtype}`, `#{allow-passthrough}` and `#{focus-events}`, and
+  draws only with tmux 3.3 or later, passthrough on, focus events on, and
+  a client tmux names as kitty 0.28 or later, Ghostty, or iTerm2 3.5 or
+  later. A control-mode client has no such name, so in Roost only the
+  variable turns that code on. With `--debug` it logs a line starting
+  `tmux images:` that says which of these failed. No plugin picture was
+  tried.
 - **The host dropped off the network twice** for some seconds during the
   session. Roost showed its tasks as offline, and as they were again once
   it answered.
