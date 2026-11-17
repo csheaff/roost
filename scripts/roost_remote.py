@@ -4847,6 +4847,11 @@ MCP_CONVERSATION_INSTRUCTIONS = (
     "work into tasks that can go on at the same time without changing the same files, and say in each "
     "brief what the others cover. Say in your reply what you offered."
     + MCP_SHOWS)
+# Images shown together: how many, and their bytes in all, which Emacs
+# takes in one reply.
+SHOWN_MOST = 6
+SHOWN_TOGETHER = 16 * 1024 * 1024
+
 MCP_TOOLS = {
     "list_projects": dict(
         description=(
@@ -4876,10 +4881,15 @@ MCP_TOOLS = {
         description=(
             "Show the user an image file beside this terminal, in Roost: a PNG, JPEG, GIF or WebP on "
             "this machine, such as a screenshot or a chart you made. The terminal itself draws no "
-            "images. It returns at once; the image takes the place of the one you showed before, and "
-            "Roost keeps a copy, so the file can change or go afterwards."),
-        inputSchema=dict(type="object", required=["path"], properties=dict(
-            path=dict(type="string", description="The image file, by its whole path or relative to the task's worktree"))),
+            "images. It returns at once; the image takes the place of what you showed before, and "
+            "Roost keeps a copy, so the file can change or go afterwards. To show several together, "
+            "as a before and an after, give paths in place of path: Roost lays them out to fit, each "
+            "under its file's name."),
+        inputSchema=dict(type="object", properties=dict(
+            path=dict(type="string", description="The image file, by its whole path or relative to the task's worktree"),
+            paths=dict(type="array", items=dict(type="string"), minItems=1, maxItems=SHOWN_MOST,
+                       description="Image files to show together, in order, in place of path: at most %d, "
+                       "and %d MB in all" % (SHOWN_MOST, SHOWN_TOGETHER // (1024 * 1024))))),
         annotations=dict(readOnlyHint=False, destructiveHint=False, openWorldHint=False)),
     "show_widget": dict(
         description=(
@@ -5021,7 +5031,7 @@ class McpServer:
                 if params.get("name") == "list_projects":
                     said = "\n".join(known_projects(self.store)) or "Roost has run no task in a project here yet."
                 elif params.get("name") == "show_image":
-                    said = show_image(self.store, self.task_id, arguments.get("path"))
+                    said = show_image(self.store, self.task_id, arguments.get("path"), arguments.get("paths"))
                 elif params.get("name") == "show_widget":
                     said = show_widget(self.store, self.task_id, arguments.get("title"),
                                        arguments.get("widget_code"))
@@ -5353,48 +5363,70 @@ def image_kind(data):
     return next((kind for start, kind in IMAGE_STARTS if data.startswith(start)), None)
 
 
-def show_image(store, task_id, path):
-    """Show you the image at PATH, as TASK_ID's agent asks: a copy of it is
-    kept as the one image the task shows, in place of the one before, and
-    the task's record says which, for Emacs to fetch (`fetch_shown`). By what the
-    file holds, not its name: Emacs draws only an image. The agent's status
-    and `updatedAt` stay as they were, as showing is no event of its own."""
+def show_image(store, task_id, path, paths=None):
+    """Show you the image at PATH, or the images at PATHS together, as
+    TASK_ID's agent asks: copies are kept as what the task shows, in place
+    of what it showed before, and the task's record says which, for Emacs
+    to fetch (`fetch_shown`). By what each file holds, not its name: Emacs
+    draws only an image. The agent's status and `updatedAt` stay as they
+    were, as showing is no event of its own."""
+    if paths is None:
+        paths = [path]
+    elif not isinstance(paths, list) or path is not None:
+        raise RoostError("Give path, for one image, or paths, a list of them")
     # As given: a file's name can end in a space.
-    path = text(path) or ""
-    if not path.strip() or "\0" in path:
+    paths = [text(each) or "" for each in paths]
+    if not paths or not all(each.strip() and "\0" not in each for each in paths):
         raise RoostError("Give the path of an image file")
+    if len(paths) > SHOWN_MOST:
+        raise RoostError("Roost shows at most %d images together" % SHOWN_MOST)
     task = store.read(task_id)
-    # One answer whatever is wrong with it: the tool needs no permission, and
-    # must not say of a path the agent may not read whether a file is
-    # there, or how large.
-    refused = RoostError("%s is not an image Roost can show: a PNG, JPEG, GIF or WebP file of at most %d MB"
-                         % (path, SHOWN_LIMIT // (1024 * 1024)))
-    try:
-        # An unknown ~user is a RuntimeError.
-        file = Path(path).expanduser()
-        if not file.is_absolute():
-            file = Path(task.get("worktree") or os.getcwd()) / file
-        if not file.is_file():
+    images = []
+    for path in paths:
+        # One answer whatever is wrong with it: the tool needs no permission,
+        # and must not say of a path the agent may not read whether a file
+        # is there, or how large.
+        refused = RoostError("%s is not an image Roost can show: a PNG, JPEG, GIF or WebP file of at most %d MB"
+                             % (path, SHOWN_LIMIT // (1024 * 1024)))
+        try:
+            # An unknown ~user is a RuntimeError.
+            file = Path(path).expanduser()
+            if not file.is_absolute():
+                file = Path(task.get("worktree") or os.getcwd()) / file
+            if not file.is_file():
+                raise refused
+            with open(file, "rb") as source:
+                data = source.read(SHOWN_LIMIT + 1)
+        except (OSError, RuntimeError):
             raise refused
-        with open(file, "rb") as source:
-            data = source.read(SHOWN_LIMIT + 1)
-    except (OSError, RuntimeError):
-        raise refused
-    kind = image_kind(data)
-    if not kind or len(data) > SHOWN_LIMIT:
-        raise refused
-    # Its name is read in Emacs, where what doesn't show would mislead.
-    name = "".join("?" if hidden_character(c) or c in "\n\t" else c for c in file.name)[:200]
-    keep_shown(store, task_id, data, kind, name)
+        kind = image_kind(data)
+        if not kind or len(data) > SHOWN_LIMIT:
+            raise refused
+        # Its name is read in Emacs, where what doesn't show would mislead.
+        name = "".join("?" if hidden_character(c) or c in "\n\t" else c for c in file.name)[:200]
+        images.append((data, kind, name))
+    # Of files that each passed, so it says nothing of one that didn't.
+    if sum(len(data) for data, _, _ in images) > SHOWN_TOGETHER:
+        raise RoostError("Roost shows at most %d MB of images together" % (SHOWN_TOGETHER // (1024 * 1024)))
+    name = keep_shown(store, task_id, images)
     return "Shown. Roost shows %s beside this terminal, or when the user next opens this task." % name
 
 
-def keep_shown(store, task_id, data, kind, name):
-    """Keep DATA, of KIND and called NAME, as the one thing TASK_ID shows,
-    in place of what it showed before, and say so in its record."""
-    ident = uuid.uuid4().hex[:8]
+def shown_name(names):
+    """What to call images with NAMES, shown together, in a line."""
+    if len(names) < 3:
+        return " and ".join(names)
+    return "%s and %d more" % (names[0], len(names) - 1)
+
+
+def keep_shown(store, task_id, images):
+    """Keep IMAGES, each (DATA, KIND, NAME), as what TASK_ID shows, in
+    place of what it showed before, and say so in its record. Return what
+    the record calls them."""
     folder = store.shown(task_id)
-    kept = folder / ("%s.%s" % (ident, kind))
+    parts = [dict(id=uuid.uuid4().hex[:8], name=name, kind=kind) for _, kind, name in images]
+    kept = [folder / ("%s.%s" % (part["id"], part["kind"])) for part in parts]
+    name = shown_name([part["name"] for part in parts])
     # All under the lock: two images shown at once would each take the
     # other's copy for an older one, and remove it. A copy is at most a
     # few megabytes, read already, so hooks wait a moment.
@@ -5405,21 +5437,28 @@ def keep_shown(store, task_id, data, kind, name):
             raise RoostError("This task is %s, so it shows nothing" % task["status"])
         folder.mkdir(mode=0o700, parents=True, exist_ok=True)
         try:
-            with os.fdopen(os.open(kept, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as output:
-                output.write(data)
-            task["shown"] = dict(id=ident, name=name, kind=kind, at=now())
+            for file, (data, _, _) in zip(kept, images):
+                with os.fdopen(os.open(file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as output:
+                    output.write(data)
+            # The first as one image alone is, which is all an older
+            # Emacs reads; `images` has each, the first too.
+            task["shown"] = dict(parts[0], name=name, at=now())
+            if len(parts) > 1:
+                task["shown"]["images"] = parts
             store.save(task)
         except BaseException:
-            # Not once the record names it.
-            with contextlib.suppress(OSError):
-                kept.unlink()
+            # Not once the record names them.
+            for file in kept:
+                with contextlib.suppress(OSError):
+                    file.unlink()
             raise
-        # The record names the new copy: the older ones go if they can.
+        # The record names the new copies: the older ones go if they can.
         with contextlib.suppress(OSError):
             for other in folder.iterdir():
-                if other != kept:
+                if other not in kept:
                     with contextlib.suppress(OSError):
                         other.unlink()
+    return name
 
 
 def show_widget(store, task_id, title, code):
@@ -5437,32 +5476,44 @@ def show_widget(store, task_id, title, code):
         raise RoostError("That is more than Roost shows: at most %d KB" % (PAGE_LIMIT // 1024))
     name = "".join("?" if hidden_character(c) or c in "\n\t" else c
                    for c in (text(title) or "").strip())[:200] or "a page"
-    keep_shown(store, task_id, data, "html", name)
+    keep_shown(store, task_id, [(data, "html", name)])
     return "Shown. Roost shows %s beside this terminal, or when the user next opens this task." % name
 
 
 def shown_image(task):
     """What TASK's agent last showed, as its record says and only if this
-    helper wrote it: {"id", "name", "kind", "at"}, or None."""
+    helper wrote it: {"id", "name", "kind", "at"}, with "images", each
+    {"id", "name", "kind"}, when it showed several together. Or None."""
+    def written(part, kinds):
+        return (isinstance(part, dict) and all(text(part.get(key)) for key in ("id", "name", "kind"))
+                and re.fullmatch(r"[a-f0-9]{8}", part["id"]) and part["kind"] in kinds)
     shown = task.get("shown")
-    if (isinstance(shown, dict) and all(text(shown.get(key)) for key in ("id", "name", "kind", "at"))
-            and re.fullmatch(r"[a-f0-9]{8}", shown["id"])
-            and shown["kind"] in ("png", "jpeg", "gif", "webp", "html")):
-        return shown
-    return None
+    if not (written(shown, ("png", "jpeg", "gif", "webp", "html")) and text(shown.get("at"))):
+        return None
+    images = shown.get("images")
+    if images is not None and not (isinstance(images, list) and 1 < len(images) <= SHOWN_MOST
+                                   and all(written(part, ("png", "jpeg", "gif", "webp")) for part in images)):
+        return None
+    return shown
 
 
 def fetch_shown(store, task):
-    """The image TASK's agent last showed, for Emacs to draw: what its
-    record says of it, and its bytes in base64."""
+    """What TASK's agent last showed, for Emacs to draw: what its record
+    says of it, and its bytes in base64, as `data`, or as each of its
+    `images`' when it showed several together."""
     image = shown_image(task)
     if not image:
         raise RoostError("This task's agent has shown nothing")
-    try:
-        data = (store.shown(task["id"]) / ("%s.%s" % (image["id"], image["kind"]))).read_bytes()
-    except OSError:
-        raise RoostError("The image this task's agent showed is gone")
-    return dict(image, data=base64.b64encode(data).decode("ascii"))
+
+    def data(part):
+        try:
+            return base64.b64encode((store.shown(task["id"]) / ("%s.%s" % (part["id"], part["kind"]))).read_bytes()
+                                    ).decode("ascii")
+        except OSError:
+            raise RoostError("The image this task's agent showed is gone")
+    if image.get("images"):
+        return dict(image, images=[dict(part, data=data(part)) for part in image["images"]])
+    return dict(image, data=data(image))
 
 
 def attach(store, task, files):

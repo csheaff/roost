@@ -327,6 +327,14 @@ goes with the task. The tool for this, `show_image`, comes with
 `roost-agent-offers`, for tasks of any agent started since. It
 shows a PNG, JPEG, GIF or WebP of at most 8 MB.
 
+Ask for several at once, as a before and an after, and the agent shows them
+together: up to six, of 16 MB in all. Roost lays them out in the rows that
+draw them largest in the window, one over another or side by side, all at
+one scale and each over its file's name, and sizes the window for them as
+it does for one. Click one, or `RET` on it, and it fills the frame alone;
+`n` and `p` there, or the arrows above it, show the others in its place,
+and a click or `q` goes back to them all, beside the terminal.
+
 **See a page an agent writes.** With `roost-agent-pages` on, the agent can
 also show a small page of its own: a diagram of what it changed, a mock-up,
 or controls to try, such as a slider. Ask for one by what it is, as in "show
@@ -1446,7 +1454,8 @@ What runs where:
   `~/.pi`. Its tool `show_image` copies an image file the
   agent names into Roost's state directory, if its first bytes say it is a
   PNG, JPEG, GIF or WebP and it is at most 8 MB, and notes it in the task's
-  record; Emacs draws that copy and nothing else. With `roost-agent-pages`
+  record; Emacs draws that copy and nothing else. It copies up to six
+  together, of 16 MB in all, each checked the same way. With `roost-agent-pages`
   on, its tool `show_widget` keeps a page the agent writes the same way.
   None of the agent's code is in the page Emacs loads: it is the text of a
   frame with no origin of its own, allowed to run scripts and nothing
