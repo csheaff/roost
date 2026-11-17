@@ -2992,6 +2992,7 @@ Invariants:
 | On screen | another task's terminal takes the frame | | Waiting | its window deleted | `roost--put-away-shown` |
 | On screen | the next image comes | its window as Roost left it | On screen | window resized for it, on the side it is on | `roost--refit-shown` |
 | On screen | a click on it, `z` | | Filling the frame | the windows as they were kept; other windows but the sides' deleted | `roost-enlarge-image` |
+| Filling the frame | another task's terminal takes its window | | Waiting | the way back dropped | `roost--put-away-shown` |
 | Filling the frame | a click on it, `z`, `q` | | On screen | the windows put back | `roost-enlarge-image`, `roost-quit-image` |
 | On screen | `q` | | Closed | | `roost-quit-image` |
 | Closed, Waiting | the panel's Image line, `roost-show-image` | you stayed | On screen | fetched again, beside the window you are in | `roost-show-image` |

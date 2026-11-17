@@ -16806,6 +16806,17 @@ report.py, and the third alone changes src/totals.py."
              (roost--put-away-shown other)
              (should-not (get-buffer-window buffer))
              (should (eq (gethash key roost--shown-waiting) buffer)))
+           ;; One that filled the frame, whose window the other task's
+           ;; terminal took: it waits as well, with no way back kept.
+           (remhash key roost--shown-waiting)
+           (delete-other-windows)
+           (roost--display-shown buffer (selected-window))
+           (roost-enlarge-image (list 'mouse-1 (list (get-buffer-window buffer) 1 '(0 . 0) 0)))
+           (should (roost--shown-enlarged-p (selected-window)))
+           (switch-to-buffer "*scratch*")
+           (roost--put-away-shown other)
+           (should (eq (gethash key roost--shown-waiting) buffer))
+           (should-not (buffer-local-value 'roost--shown-back buffer))
            (cl-letf (((symbol-function 'roost--display-shown)
                       (lambda (buffer _window) (push buffer displayed))))
              (roost--show-waiting mine)

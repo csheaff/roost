@@ -11979,7 +11979,16 @@ again when its own task is opened."
         (puthash key (window-buffer window) roost--shown-waiting)
         (with-current-buffer (window-buffer window)
           (setq roost--shown-back nil))
-        (delete-window window)))))
+        (delete-window window))))
+  ;; One that filled the frame, whose window TASK's terminal took, went
+  ;; with no window to close: it waits too, and its way back is no more.
+  (dolist (buffer (buffer-list))
+    (when-let* ((back (buffer-local-value 'roost--shown-back buffer))
+                ((not (and (window-live-p (car back)) (eq (window-buffer (car back)) buffer)))))
+      (with-current-buffer buffer
+        (setq roost--shown-back nil)
+        (unless (equal roost--shown-task (roost--key task))
+          (puthash roost--shown-task buffer roost--shown-waiting))))))
 
 (defun roost--insert-wrong (task next)
   "Insert what is wrong with TASK and wants you to act, under its title.
