@@ -13430,6 +13430,47 @@ nil), it is discarded."
          (kill-buffer controller)
          (roost-test--kill-stand-ins))))))
 
+(ert-deftest roost-ghostel-tmux-a-perspective-killed-after-a-question-leaves-a-stand-in-a-tab-shows ()
+  ;; As above, but perspective.el asks first about a modified buffer of
+  ;; the perspective, and timers run while you answer.
+  (skip-unless (require 'perspective nil t))
+  (roost-test--isolated
+   (roost-test--ghostel-backend)
+   (let ((roost-workspace 'tab-bar)
+         (original-tab-bar-mode tab-bar-mode)
+         (controller (generate-new-buffer " controller"))
+         stand-in)
+     (save-window-excursion
+       (persp-mode 1)
+       (unwind-protect
+           (cl-letf (((symbol-function 'ghostel-tmux-controller) #'ignore)
+                     ((symbol-function 'ghostel-tmux-controllers) (lambda () (list controller)))
+                     ((symbol-function 'ghostel-tmux-active-pane) #'ignore)
+                     ((symbol-function 'ghostel-tmux-panes) #'ignore)
+                     ((symbol-function 'ghostel-tmux-session-name) #'ignore)
+                     ((symbol-function 'ghostel-tmux-window-split) #'ignore)
+                     ((symbol-function 'ghostel-tmux-attach) (lambda (&rest _) controller)))
+             (persp-switch "work")
+             (roost-ghostel-tmux-connect-or-switch nil "main" "roost-notes-123456")
+             (setq stand-in (window-buffer))
+             ;; A buffer whose kill asks first, as a modified one does:
+             ;; timers run while you answer.  The perspective's newest,
+             ;; it goes before the stand-in.
+             (with-current-buffer (get-buffer-create "asks")
+               (add-hook 'kill-buffer-query-functions (lambda () (sleep-for 0.05) t) nil t)
+               (switch-to-buffer (current-buffer)))
+             (switch-to-buffer stand-in t)
+             (tab-bar-new-tab)
+             (switch-to-buffer "*scratch*")
+             (persp-kill "work")
+             (sleep-for 0.05)
+             (should (buffer-live-p stand-in)))
+         (while (cdr (roost--tabs)) (tab-bar-close-tab))
+         (tab-bar-mode (if original-tab-bar-mode 1 -1))
+         (persp-mode -1)
+         (kill-buffer controller)
+         (roost-test--kill-stand-ins))))))
+
 (ert-deftest roost-ghostel-tmux-goes-with-roost ()
   ;; Unloading Roost unloads its terminal backend first, whose hooks call
   ;; Roost; and the backend's own unloading leaves no hook or sweep.
@@ -13447,7 +13488,8 @@ nil), it is discarded."
          (progn
            (roost-ghostel-tmux-unload-function)
            (should-not (memq #'roost-ghostel-tmux--workspace-closed tab-bar-tab-pre-close-functions))
-           (should-not (memq #'roost-ghostel-tmux--perspective-killed (bound-and-true-p persp-killed-hook)))
+           (should-not (memq #'roost-ghostel-tmux--workspace-closed (bound-and-true-p persp-killed-hook)))
+           (should-not (advice-member-p #'roost-ghostel-tmux--perspective-killed 'persp-kill))
            (should-not (memq #'roost-ghostel-tmux--attached ghostel-tmux-attach-hook))
            (should-not (memq timer timer-list))
            (should-not roost-ghostel-tmux--sweep-timer))
@@ -13455,7 +13497,8 @@ nil), it is discarded."
        (add-hook 'ghostel-tmux-detach-hook #'roost-ghostel-tmux--detached)
        (add-hook 'ghostel-tmux-pane-mode-hook #'roost-ghostel-tmux--pane-made)
        (add-hook 'tab-bar-tab-pre-close-functions #'roost-ghostel-tmux--workspace-closed)
-       (add-hook 'persp-killed-hook #'roost-ghostel-tmux--perspective-killed)
+       (add-hook 'persp-killed-hook #'roost-ghostel-tmux--workspace-closed)
+       (advice-add 'persp-kill :around #'roost-ghostel-tmux--perspective-killed)
        (cancel-timer timer)))))
 
 (ert-deftest roost-ghostel-tmux-a-tab-closed-during-a-question-sweeps-once-it-ends ()

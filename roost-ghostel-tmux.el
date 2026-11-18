@@ -497,22 +497,21 @@ covered while a question was open.  Nothing is asked with no stand-in."
                        (buffer-list)))
     (setq roost-ghostel-tmux--sweep-timer
           (run-at-time 0 nil (lambda ()
-                               (setq roost-ghostel-tmux--sweep-timer nil
-                                     roost-ghostel-tmux--perspective-going nil)
+                               (setq roost-ghostel-tmux--sweep-timer nil)
                                (roost--when-out-of-minibuffer
                                 #'roost-ghostel-tmux--sweep-stand-ins))))))
 
-(defun roost-ghostel-tmux--perspective-killed ()
-  "Keep the stand-ins a tab shows as perspective.el kills a perspective.
-On `persp-killed-hook', which runs before it kills the buffers only that
-perspective has; the sweep that follows lets go of the rest."
-  (setq roost-ghostel-tmux--perspective-going t)
-  (roost-ghostel-tmux--workspace-closed)
-  (unless (timerp roost-ghostel-tmux--sweep-timer)
-    (setq roost-ghostel-tmux--perspective-going nil)))
+(defun roost-ghostel-tmux--perspective-killed (kill &rest args)
+  "Call KILL with ARGS, keeping the stand-ins a tab shows.
+Around `persp-kill', which kills the buffers only the perspective has,
+and can stop to ask about one modified; the sweep that follows, from
+`persp-killed-hook', lets go of the rest."
+  (let ((roost-ghostel-tmux--perspective-going t))
+    (apply kill args)))
 
 (add-hook 'tab-bar-tab-pre-close-functions #'roost-ghostel-tmux--workspace-closed)
-(add-hook 'persp-killed-hook #'roost-ghostel-tmux--perspective-killed)
+(add-hook 'persp-killed-hook #'roost-ghostel-tmux--workspace-closed)
+(advice-add 'persp-kill :around #'roost-ghostel-tmux--perspective-killed)
 
 (defun roost-ghostel-tmux-connect-or-switch (host socket-name session)
   "Show tmux SESSION from HOST and SOCKET-NAME in the selected window.
@@ -841,7 +840,8 @@ is no task's has its own name for the task's."
   (remove-hook 'ghostel-tmux-detach-hook #'roost-ghostel-tmux--detached)
   (remove-hook 'ghostel-tmux-pane-mode-hook #'roost-ghostel-tmux--pane-made)
   (remove-hook 'tab-bar-tab-pre-close-functions #'roost-ghostel-tmux--workspace-closed)
-  (remove-hook 'persp-killed-hook #'roost-ghostel-tmux--perspective-killed)
+  (remove-hook 'persp-killed-hook #'roost-ghostel-tmux--workspace-closed)
+  (advice-remove 'persp-kill #'roost-ghostel-tmux--perspective-killed)
   (when (timerp roost-ghostel-tmux--sweep-timer)
     (cancel-timer roost-ghostel-tmux--sweep-timer)
     (setq roost-ghostel-tmux--sweep-timer nil))
