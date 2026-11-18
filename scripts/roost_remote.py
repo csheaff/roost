@@ -4495,10 +4495,219 @@ def add_git_stats(tasks):
                              else [] if task["landed"] else merge_conflicts(task, tip, integration))
 
 
+def pane_sessions(task, inventory):
+    """The process sessions whose processes are TASK's to end, by the rule
+    `left_running` keeps, as INVENTORY has the panes, read before they close,
+    as once they have, nothing leads to a command's session: the agent's
+    and the shell's panes' own sessions, tmux starting each pane's process
+    in one of its own, whose ID is that process's PID; and the sessions of
+    the commands the agent runs, as Claude Code starts each in one of its
+    own, begun by a process of the agent's pane's session, or of the one a
+    relayed agent leads, begun by that pane's process. Not one such a
+    command begins, as a build tool's daemon other tasks share does, nor
+    one begun from the shell: what you run there is yours. A dead pane's
+    PID, or the record's for one that names none, counts only while no
+    process has it: once its session has ended, another may."""
+    pane = owned_pane(task, inventory)
+    shell = inventory.get(task.get("shellPaneId"))
+    panes = [(pane, pane and (pane["pid"] or task.get("panePid")))]
+    if shell and shell["task"] == task["id"]:
+        panes.append((shell, shell["pid"]))
+    sessions = []
+    for found, pid in panes:
+        if not found or not isinstance(pid, int) or pid <= 1:
+            sessions.append(None)
+            continue
+        if found["dead"]:
+            try:
+                os.kill(pid, 0)
+                sessions.append(None)
+                continue
+            except ProcessLookupError:
+                pass
+            except OSError:
+                sessions.append(None)
+                continue
+        sessions.append(pid)
+    agent = sessions[0]
+    found = {pid for pid in sessions if pid}
+    table = processes()
+    if agent not in table:
+        return found
+    children = collections.defaultdict(list)
+    for child, (parent, _) in table.items():
+        children[parent].append(child)
+    # The agent's own: its pane's session, and a relayed agent's.
+    agents = {agent}
+    for child in children.get(agent, ()):
+        with contextlib.suppress(OSError):
+            if os.getsid(child) == child:
+                agents.add(child)
+    found |= agents
+    # Each session one of those begins: the commands the agent runs.
+    pending = [agent]
+    while pending:
+        parent = pending.pop()
+        for child in children.pop(parent, ()):
+            with contextlib.suppress(OSError):
+                if os.getsid(child) == child and os.getsid(parent) in agents:
+                    found.add(child)
+            pending.append(child)
+    return found
+
+
+def own_line():
+    """This process and those it runs under: never ended as a task's."""
+    pids, pid = {os.getpid()}, os.getppid()
+    table = processes()
+    while pid > 1 and pid not in pids:
+        pids.add(pid)
+        pid = table.get(pid, (1, ""))[0]
+    return pids
+
+
+def macos_environment(pid):
+    """The environment process PID started with, as entries, bytes, on
+    macOS, apart from its arguments, as the kernel keeps them, or None when
+    the system won't say, as for another user's process. Empty for one of
+    Apple's own programs, whose environment it hides."""
+    import ctypes
+    import ctypes.util
+    libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+
+    def sysctl(*mib, size):
+        name = (ctypes.c_int * len(mib))(*mib)
+        buffer = ctypes.create_string_buffer(size)
+        length = ctypes.c_size_t(size)
+        if libc.sysctl(name, len(mib), buffer, ctypes.byref(length), None, 0):
+            return None
+        return buffer.raw[:length.value]
+    # CTL_KERN, KERN_ARGMAX; then KERN_PROCARGS2: the count of arguments,
+    # the program's path padded with NULs, the arguments, the environment.
+    most = sysctl(1, 8, size=ctypes.sizeof(ctypes.c_int))
+    raw = most and sysctl(1, 49, pid, size=int.from_bytes(most, sys.byteorder))
+    if not raw or len(raw) < 4:
+        return None
+    count = int.from_bytes(raw[:4], sys.byteorder)
+    path_end = raw.find(b"\0", 4)
+    if path_end < 0:
+        return None
+    fields = raw[path_end:].lstrip(b"\0").split(b"\0")
+    return [field for field in fields[count:] if field]
+
+
+def task_environment(pid):
+    """The environment PID started with, as entries, bytes, or None."""
+    if os.path.isfile("/proc/self/environ"):
+        with contextlib.suppress(OSError):
+            return Path("/proc/%d/environ" % pid).read_bytes().split(b"\0")
+        return None
+    return macos_environment(pid) if sys.platform == "darwin" else None
+
+
+def left_running(task_id, sessions, own):
+    """The PIDs of what TASK_ID's stop ends, by this rule, the one place
+    it is said:
+    - every process in SESSIONS (`pane_sessions`): the agent's and the
+      shell's panes' own sessions, and those of the commands the agent, or
+      its relay, runs, each begun directly by one of the agent's;
+    - a process with `ROOST_TASK_ID` or `ROOST_TASK_SHELL` TASK_ID in its
+      environment, never its arguments, in a session whose leader has
+      gone, as a server started with nohup from a command's session once
+      that command ended; but for one whose environment the system hides,
+      as macOS does Apple's own programs';
+    - never a session leader still running that isn't one of SESSIONS, as
+      a build tool's daemon or an ssh connection other tasks share, nor
+      any process of its session, nor one in OWN."""
+    markers = {("ROOST_TASK_ID=" + task_id).encode(), ("ROOST_TASK_SHELL=" + task_id).encode()}
+    result = execute(["ps", "-A", "-o", "pid=,stat="], check=False)
+    # PID -> session, of each process but zombies, which write nothing.
+    running = {}
+    for line in result.stdout.splitlines() if result.returncode == 0 else []:
+        fields = line.split()
+        if len(fields) == 2 and fields[0].isdigit() and not fields[1].startswith("Z"):
+            with contextlib.suppress(OSError):
+                running[int(fields[0])] = os.getsid(int(fields[0]))
+    found = set()
+    for pid, sid in running.items():
+        if sid in sessions:
+            found.add(pid)
+        elif sid not in running and markers & set(task_environment(pid) or ()):
+            found.add(pid)
+    return found - own
+
+
+def process_starts(pids):
+    """When each of PIDS started, as ps says, PID -> text, for those running
+    but zombies, which write nothing."""
+    if not pids:
+        return {}
+    result = execute(["ps", "-o", "pid=,stat=,lstart=", "-p", ",".join(map(str, sorted(pids)))], check=False)
+    return {int(fields[0]): fields[2].strip() for fields in
+            (line.strip().split(None, 2) for line in result.stdout.splitlines())
+            if len(fields) == 3 and fields[0].isdigit() and not fields[1].startswith("Z")}
+
+
+# How long what a task left running has to end, once asked to.
+LEFT_RUNNING_SECONDS = 1
+
+
+def end_left_running(task_id, sessions, known=()):
+    """End what TASK_ID's agent or shell left running (`left_running`), as
+    a server started with nohup, which outlives its pane and would go on
+    writing into its worktree as Roost removes it: asked to, then killed.
+    The agent's hooks, waiting on the registry lock, end with it. KNOWN is
+    what an earlier stop could not end, as [PID, start] pairs, which count
+    while each runs with the same start. Return what still runs, as such
+    pairs: with any, nothing can be removed."""
+    own = own_line()
+    known = {pair[0]: pair[1] for pair in known if isinstance(pair, list) and len(pair) == 2
+             and isinstance(pair[0], int) and pair[0] > 1 and isinstance(pair[1], str)}
+
+    def members():
+        now = process_starts(set(known))
+        return left_running(task_id, sessions, own) | ({pid for pid, start in known.items()
+                                                        if now.get(pid) == start} - own)
+    left = members()
+    for number in (signal.SIGTERM, signal.SIGKILL):
+        for pid in left:
+            with contextlib.suppress(OSError):
+                os.kill(pid, number)
+                # One stopped would not hear it.
+                os.kill(pid, signal.SIGCONT)
+        deadline = time.monotonic() + LEFT_RUNNING_SECONDS
+        while left and time.monotonic() < deadline:
+            time.sleep(0.05)
+            left = members()
+        if not left:
+            return []
+    return sorted([pid, start] for pid, start in process_starts(left).items())
+
+
 def stop(store, task, inventory=None):
-    """Close the agent's pane and shell, as `close_panes` does. Work is kept."""
-    inventory = inventory if inventory is not None else inventory_for(task)
-    close_panes(task, inventory)
+    """Close the agent's pane and shell, as `close_panes` does, and end what
+    they left running (`end_left_running`). Work is kept."""
+    # As they are now: INVENTORY may be from before a slow step.
+    current = pane_inventory(task["socket"])
+    if current is None:
+        current = inventory if inventory is not None else inventory_for(task)
+    sessions = pane_sessions(task, current)
+    # Noted before the panes close, with what an earlier stop noted: once
+    # they have, nothing leads to a command still running in a session of
+    # its own, and a helper killed from here on would lose it.
+    known = {(pair[0], pair[1]) for pair in task.get("leftRunning") or ()
+             if isinstance(pair, list) and len(pair) == 2 and isinstance(pair[0], int) and isinstance(pair[1], str)}
+    found = process_starts(left_running(task["id"], sessions, own_line()))
+    checkpoint = sorted(known | set(found.items()))
+    checkpoint = [list(pair) for pair in checkpoint]
+    if checkpoint != task.get("leftRunning", []):
+        task["leftRunning"] = checkpoint
+        store.save(task)
+    # Read again, as the scans and the save above take a while: a pane
+    # joined to the agent's window meanwhile stays, and one respawned is
+    # no longer the agent's.
+    close_panes(task, current)
+    left = end_left_running(task["id"], sessions, checkpoint)
     # Stopping says nothing new: an agent you had seen stays seen.
     was_seen = seen_since_last_event(task)
     # A pane ID owned by something else means ours is gone (for example after a
@@ -4508,8 +4717,19 @@ def stop(store, task, inventory=None):
         task["seen"] = task["updatedAt"]
     task.pop("shellPaneId", None)
     task.pop("panePid", None)
+    # Kept until they end, so that a request after this one, as retire after
+    # x's stop, still knows them once nothing else leads to them.
+    if left:
+        task["leftRunning"] = left
+    else:
+        task.pop("leftRunning", None)
     store.save(task)
     task["live"] = False
+    if left:
+        raise RoostError("Stopped the agent, but what it left running would not end: process%s %s. End %s, "
+                         "then try again" % ("" if len(left) == 1 else "es",
+                                             ", ".join(str(pid) for pid, _ in left),
+                                             "it" if len(left) == 1 else "them"))
     return task
 
 
@@ -5834,7 +6054,10 @@ def shell(store, task):
         if pane and pane["dead"]:
             tmux(task["socket"], "kill-pane", "-t", task["shellPaneId"])
         # tmux reads the directory as a format, where # starts one.
+        # Marked, as the agent is by ROOST_TASK_ID, so that stopping the
+        # task ends what you leave running from it (`left_running`).
         pane_id = tmux(task["socket"], "split-window", "-h", "-d", "-P", "-F", "#{pane_id}",
+                       "-e", "ROOST_TASK_SHELL=" + task["id"],
                        "-t", task["paneId"], "-c", task["worktree"].replace("#", "##")).stdout.strip()
         tmux(task["socket"], "set-option", "-p", "-t", pane_id, "@roost_task_id", task["id"])
         task["shellPaneId"] = pane_id
@@ -6970,7 +7193,9 @@ def discard(store, task, expect=None, dry_run=False, teardown=None, told=None, o
     counts it. Otherwise EXPECT is the branch's commit when you were told,
     and a branch that has moved since is not deleted. TOLD is what the dry
     run counted, and a task that would lose more now is not deleted either,
-    nor its agent stopped: an agent goes on working while you read. Nor one
+    nor its agent stopped: an agent goes on working while you read. It is
+    counted once more after `stop`, which ends what the agent left running,
+    and refused then with the agent stopped. Nor one
     whose agent has offered a task since, which OFFERS, the IDs of the
     offers the question named, lacks (`require_offers_named`).
     TEARDOWN, the project's teardown command, runs in the worktree before it
@@ -6995,14 +7220,21 @@ def discard(store, task, expect=None, dry_run=False, teardown=None, told=None, o
                                        commit=commit))
     if commit != (expect or None):
         raise RoostError("The task's branch has moved since you were asked; look at it again before discarding")
-    if isinstance(told, dict):
+    def more_than_told(stopped):
+        if not isinstance(told, dict):
+            return
         losses = discard_losses(task, branch_exists, worktree, worktree_exists, work, going)
         if any(count > (told.get(name) or 0) for name, count in losses.items()):
             # Asking again would only find more.
             raise RoostError("The task holds more than you were told; %slook at it again before discarding"
-                             % ("its agent is at work, so stop it (K), then " if task["status"] in ACTIVE else ""))
+                             % ("its agent is stopped, so " if stopped else
+                                "its agent is at work, so stop it (K), then " if task["status"] in ACTIVE else ""))
+    more_than_told(False)
     require_offers_named(task, offers, "discarding")
     stop(store, task)
+    # Again, now that nothing the agent left running writes there: what it
+    # wrote as you were asked, or since the count above, is counted too.
+    more_than_told(True)
     remove_worktrees(store, task, worktree if worktree_exists else None, work, force=True, teardown=teardown)
     shutil.rmtree(copy_staging(task["worktree"]), ignore_errors=True)
     if branch_exists:
@@ -7966,18 +8198,28 @@ def remove_worktrees(store, task, worktree, agents, force=False, teardown=None):
                     # Twice: also a worktree its agent locked.
                     git(task["repo"], "worktree", "remove", "--force", "--force", str(worktree))
                 elif worktree:
-                    try:
-                        require_clean(str(worktree))
-                    except RoostError:
-                        # Said apart from your own files, which x offers to discard.
-                        if teardown:
-                            raise RoostError("After the teardown command ran, the worktree has uncommitted "
-                                             "or untracked files, which it may have left; look at them in "
-                                             "Magit, then retire or discard the task")
-                        raise
+                    def clean():
+                        try:
+                            require_clean(str(worktree))
+                        except RoostError:
+                            # Said apart from your own files, which x offers to discard.
+                            if teardown:
+                                raise RoostError("After the teardown command ran, the worktree has uncommitted "
+                                                 "or untracked files, which it may have left; look at them in "
+                                                 "Magit, then retire or discard the task")
+                            raise
+                    # First, as what the submodules' check reads as theirs may be your changes.
+                    clean()
                     # Git won't remove submodules without --force, which
                     # skips its own checks; once, so a lock still holds.
                     force = ["--force"] if require_submodules_kept(worktree) else []
+                    if force:
+                        # Again, last before Git, which then checks nothing:
+                        # what the agent left running has ended, but
+                        # something else may have written there since, as
+                        # what the teardown command left running.
+                        clean()
+                        require_submodules_kept(worktree)
                     git(task["repo"], "worktree", "remove", *force, str(worktree))
         finally:
             # The record may have changed meanwhile: clear only this mark.

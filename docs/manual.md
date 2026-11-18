@@ -740,7 +740,7 @@ redraws the panel and `q` closes it:
 | `m` | `roost-merge-retire` | Merge committed work as one commit, then retire the task (a merge commit with `roost-merge-style` set to `merge`) |
 | `x` | `roost-retire` | Finish with a task: retire it when its work is merged or it has none, otherwise offer to discard it (`roost-discard`), first saying what would be lost; to lose commits or files you type its name. An agent with work left in the background is stopped first, once you say so; one in the middle of a turn is refused, and `K` stops it |
 | `X` | `roost-forget` | Drop the task from Roost, leaving its worktree and branch as they are |
-| `K` | `roost-stop` | Stop the agent's window; keep all work |
+| `K` | `roost-stop` | Stop the agent's window, and what it left running; keep all work |
 | `s` | `roost-resume` | Restart a stopped, exited or crashed task in its recorded conversation; when other agents crashed on its host too, as after it restarted, ask whether to resume those as well. Refuses while the agent runs in the task's shell or another window of its tmux session, which Roost didn't start |
 | `w` | `roost-workload` | How long agents worked and waited on you, each day of the past week ([below](#how-many-agents-you-keep-up-with)) |
 | `=` | `roost-compare-attempts` | For a task a draft made with others from one prompt (`C-c C-x` there): list every file any of those attempts changed, with a column for each attempt saying what it did to the file |
@@ -1261,6 +1261,11 @@ earlier run cannot overwrite a resumed one. The tag goes with the pane, so a
 pane you move in tmux is still the agent's, wherever it is; what you start in
 it with `respawn-pane` is not. Stopping a task closes the agent's pane and its
 shell, and their window if nothing else is in it: a pane of your own stays.
+What the agent or that shell left running, as a server started with `nohup`,
+stops too, so that nothing writes into the worktree as retiring removes it,
+but for a daemon, such as a build tool's server, which other tasks may share.
+What won't stop, as another user's process, is named, and keeps the task from
+being retired or discarded until you end it.
 Merging needs the task's worktree
 clean. With the primary checkout on the task's integration branch, the merge
 happens there and needs nothing uncommitted (untracked files stay); with it on
