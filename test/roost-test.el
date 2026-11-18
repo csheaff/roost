@@ -12763,22 +12763,29 @@ nil), it is discarded."
   ;; any frame, does not, as no window of it shows the stand-in.
   (roost-test--isolated
    (roost-test--ghostel-backend)
-   (let ((roost-workspace 'perspective)
-         (stand-in (generate-new-buffer "stand-in"))
+   (let ((stand-in (generate-new-buffer "stand-in"))
          (perspectives (make-hash-table :test #'equal))
-         (buffers '((current) (other))))
-     (puthash "current" 'current perspectives)
-     (puthash "other" 'other perspectives)
-     (unwind-protect
-         (cl-letf (((symbol-function 'roost--workspace-backend) (lambda () 'perspective))
-                   ((symbol-function 'perspectives-hash) (lambda (&optional _) perspectives))
-                   ((symbol-function 'persp-curr) (lambda (&optional _) 'current))
-                   ((symbol-function 'persp-buffers) (lambda (perspective) (alist-get perspective buffers))))
-           (setf (alist-get 'current buffers) (list stand-in))
-           (should-not (roost-ghostel-tmux--kept-p stand-in))
-           (setf (alist-get 'other buffers) (list stand-in))
-           (should (roost-ghostel-tmux--kept-p stand-in)))
-       (kill-buffer stand-in)))))
+         (real (fboundp 'make-persp-internal)))
+     (cl-flet ((perspective (name buffers)
+                 ;; Real ones where perspective.el is loaded: its accessors
+                 ;; are inlined, and a stub of them is not called.
+                 (puthash name (if real
+                                   (funcall 'make-persp-internal :name name :buffers buffers)
+                                 (cons name buffers))
+                          perspectives)))
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--workspace-backend) (lambda () 'perspective))
+                     ((symbol-function 'perspectives-hash) (lambda (&optional _) perspectives))
+                     ((symbol-function 'persp-curr) (lambda (&optional _) (gethash "current" perspectives))))
+             (unless real
+               (fset 'persp-buffers #'cdr))
+             (perspective "current" (list stand-in))
+             (perspective "other" nil)
+             (should-not (roost-ghostel-tmux--kept-p stand-in))
+             (perspective "other" (list stand-in))
+             (should (roost-ghostel-tmux--kept-p stand-in)))
+         (unless real (fmakunbound 'persp-buffers))
+         (kill-buffer stand-in))))))
 
 (ert-deftest roost-ghostel-tmux-a-stand-in-you-cover-while-a-question-holds-its-pane-goes ()
   ;; Back in the workspace that kept a stand-in for its pane while a
