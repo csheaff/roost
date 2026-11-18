@@ -125,7 +125,7 @@ class RetireResetAway(Scenario):
     def holds(self, box, problems):
         super().holds(box, problems)
         there = Path(self.task["worktree"]) / ".env.local"
-        kept = box.state / "kept" / self.task["id"] / ".env.local"
+        kept = box.state / "kept" / self.task["id"] / "worktree" / ".env.local"
         if not there.exists() and not kept.exists():
             problems.append("the ignored file is neither in the worktree nor kept")
 

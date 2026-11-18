@@ -57,8 +57,8 @@ class Kept(unittest.TestCase):
         kept = result["kept"]
         self.assertEqual((kept["files"], kept["commits"]), (1, 0))
         folder = Path(kept["folder"])
-        self.assertEqual((folder / ".env.local").read_text(), "TOKEN=secret\n")
-        self.assertFalse((folder / "node_modules").exists(), "kept a folder Git ignores whole")
+        self.assertEqual((folder / "worktree" / ".env.local").read_text(), "TOKEN=secret\n")
+        self.assertFalse((folder / "worktree" / "node_modules").exists(), "kept a folder Git ignores whole")
         self.assertEqual(self.kept_refs(), [], "put an ignored file in Git")
         self.assertEqual(os.stat(folder.parent).st_mode & 0o077, 0, "the kept folder is open to others")
 
@@ -77,7 +77,7 @@ class Kept(unittest.TestCase):
         with open(Path(task["worktree"]) / "local.db", "wb") as out:
             out.truncate(roost.KEPT_FILE_LIMIT + 1)
         result = self.retire(task)
-        self.assertEqual(result["kept"]["large"], ["local.db"])
+        self.assertEqual(result["kept"]["large"], ["worktree/local.db"])
         self.assertEqual(result["kept"]["files"], 0)
 
     def test_a_task_with_nothing_to_keep_keeps_nothing(self):
@@ -167,13 +167,101 @@ class Kept(unittest.TestCase):
         reply = box.helper("retire", id=task["id"], teardown="touch left-behind")
         self.assertFalse(reply["ok"], reply)
         folder = box.state / "kept" / task["id"]
-        self.assertTrue((folder / ".env.local").exists(), "the retire kept nothing before it was refused")
+        self.assertTrue((folder / "worktree" / ".env.local").exists(), "the retire kept nothing before it was refused")
         (worktree / "left-behind").unlink()
         told = box.helper("discard", id=task["id"], dryRun=True)["result"]["discard"]
         reply = box.helper("discard", id=task["id"], told=told, expect=told["commit"])
         self.assertTrue(reply["ok"], reply)
         self.assertFalse(folder.exists(), "a discard left the secret a retire had kept")
         self.assertFalse(folder.with_suffix(".json").exists())
+
+    def test_a_merge_a_reset_left_behind_is_kept(self):
+        box = self.box
+        task = box.create()
+        worktree = Path(task["worktree"])
+        start = box.commit(task, "draft")
+        (box.repo / "elsewhere").write_text("main moved\n")
+        box.git("add", "elsewhere")
+        box.git("commit", "-qm", "Move main")
+        box.git("merge", "-q", "--no-edit", "main", cwd=worktree)
+        merge = box.git("rev-parse", "HEAD", cwd=worktree)
+        # Its patches are all on the rebased branch; the merge is not.
+        box.git("reset", "-q", "--hard", start, cwd=worktree)
+        box.git("rebase", "-q", "main", cwd=worktree)
+        box.git("merge", "-q", "--ff-only", task["branch"])
+        result = self.retire(task)
+        self.assertEqual(result["kept"]["commits"], 1)
+        self.assertTrue(box.reachable(merge), "retiring lost a merge only the reflog held")
+
+    def test_a_kept_ref_is_no_proof_a_commit_survives(self):
+        box = self.box
+        box.git("switch", "-q", "-c", "side")
+        (box.repo / "side").write_text("side\n")
+        box.git("add", "side")
+        box.git("commit", "-qm", "Side")
+        commit = box.git("rev-parse", "HEAD")
+        box.git("switch", "-q", "main")
+        box.git("update-ref", "refs/roost/kept/0000000000000000/" + commit, commit)
+        task = box.create(base=commit)
+        box.git("branch", "-q", "-D", "side")
+        reply = box.helper("retire", id=task["id"])
+        self.assertFalse(reply["ok"], "retired on the word of a copy that goes in 30 days")
+        self.assertTrue(box.reachable(commit))
+
+    def test_a_missing_worktrees_head_reflog_is_read_before_git_forgets_it(self):
+        box = self.box
+        task = box.create()
+        worktree = Path(task["worktree"])
+        box.git("switch", "-q", "--detach", cwd=worktree)
+        (worktree / "detached").write_text("tried\n")
+        box.git("add", "detached", cwd=worktree)
+        box.git("commit", "-qm", "Try detached", cwd=worktree)
+        detached = box.git("rev-parse", "HEAD", cwd=worktree)
+        box.git("switch", "-q", task["branch"], cwd=worktree)
+        worktree.rename(worktree.with_name(worktree.name + ".away"))
+        result = self.retire(task)
+        self.assertEqual(result["kept"]["commits"], 1)
+        self.assertTrue(box.reachable(detached), "retiring lost a commit only a missing worktree's reflog held")
+
+    def test_an_agent_worktrees_ignored_files_are_kept_apart(self):
+        box = self.box
+        task = box.create()
+        path = box.repo / ".claude" / "worktrees" / "agent"
+        box.git("worktree", "add", "-q", "-b", "worktree-agent", str(path), task["branch"])
+        record = box.record(task["id"])
+        record["agentWorktrees"] = record["agentMade"] = [str(path)]
+        record["agentMadeAt"] = {str(path): (box.repo / ".git/worktrees/agent/commondir").stat().st_mtime_ns}
+        (box.state / "tasks" / (task["id"] + ".json")).write_text(json.dumps(record))
+        (path / ".env.local").write_text("agent's\n")
+        (Path(task["worktree"]) / ".env.local").write_text("task's\n")
+        result = self.retire(task)
+        self.assertFalse(path.exists(), "the agent's worktree stayed")
+        folder = Path(result["kept"]["folder"])
+        self.assertEqual((folder / "worktree" / ".env.local").read_text(), "task's\n")
+        self.assertEqual((folder / "agents" / "agent" / ".env.local").read_text(), "agent's\n")
+
+    def test_a_copy_never_goes_through_a_link_kept_before(self):
+        box = self.box
+        outside = box.root / "outside"
+        outside.mkdir()
+        folder = box.state / "kept" / "0123456789abcdef"
+        (folder / "worktree").mkdir(parents=True)
+        (folder / "worktree" / "cache").symlink_to(outside)
+        with self.assertRaises(roost.RoostError):
+            roost.kept_target(folder, "worktree/cache/secret.db")
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_a_name_not_in_utf8_is_kept(self):
+        box = self.box
+        task = box.create()
+        name = os.fsdecode(b".env.caf\xe9")
+        try:
+            (Path(task["worktree"]) / name).write_text("bytes\n")
+        except OSError:
+            self.skipTest("this file system takes only UTF-8 names, as APFS does")
+        result = self.retire(task)
+        self.assertEqual(result["kept"]["files"], 1)
+        self.assertEqual((Path(result["kept"]["folder"]) / "worktree" / name).read_text(), "bytes\n")
 
 
 if __name__ == "__main__":

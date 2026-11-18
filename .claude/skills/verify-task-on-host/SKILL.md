@@ -87,7 +87,7 @@ or `discard` calls them, needs the model checked against it.
 | `GitMerge`, `AfterMerge`, `MergeFailed` | `integrating`, `merge_task`, `retire` after the merge, `require_offers_named` again among its checks |
 | `Checkpoint` | `safe_to_delete`, `branches_going`, `retiringCommit` in `retire` |
 | `Stop` | `stop`, the list of agent worktrees `retire` passes to `remove_worktrees`, with `seen` |
-| none: `test/formal/git_work` | `keep_before_removing`, `reflog_only`, `ignored_to_keep`, `prune_kept`, `drop_kept` (also in `discard`), called in `retire` after `stop` for a missing worktree, else by `remove_worktrees` after the teardown command, without the registry lock |
+| none: `test/formal/git_work` | `keep_before_removing`, `reflog_only`, `ignored_to_keep`, `prune_kept`, `drop_kept` (also in `discard`), `gone_head_log`, `kept_target`, and `safe_to_delete` passing over `refs/roost/`, called in `retire` after `stop` for a missing worktree, else by `remove_worktrees` after the teardown command, without the registry lock |
 | `RemoveBegin` … `RemoveEnd` | `remove_worktrees`, `holding_worktree`, `remove_agent_worktrees`, `agent_worktree_seen`, `run_teardown` |
 | `DeleteBranch`, `RemoveRecord` | `delete_branch`, `Store.remove` |
 | `AsMade`, `Ahead`, `Losses`, `Going` | `is_as_made`, `made_since`, `agent_work`, `discard_losses`, `branches_going` |
