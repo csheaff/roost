@@ -10779,7 +10779,10 @@ print(json.dumps(dict(data=data)))
         # Config overrides on its command line, each after -c, so ~/.codex is as it was.
         given = [arg for arg in argv if arg.startswith("mcp_servers.")]
         self.assertTrue(all(argv[argv.index(arg) - 1] == "-c" for arg in given))
-        server = dict(arg[len("mcp_servers.roost."):].split("=", 1) for arg in given)
+        # Under a name of its own: Codex merges these into a server of
+        # yours by the same name, as one named roost.
+        self.assertTrue(all(arg.startswith("mcp_servers.roost_task.") for arg in given))
+        server = dict(arg[len("mcp_servers.roost_task."):].split("=", 1) for arg in given)
         self.assertEqual(json.loads(server.pop("command")), sys.executable)
         self.assertEqual(json.loads(server.pop("args")), [str(SOURCE.resolve()), "mcp", str(store.root), task["id"]])
         # An offer only waits in Roost, so its tools run without asking.
@@ -10788,16 +10791,24 @@ print(json.dumps(dict(data=data)))
         self.assertEqual(argv[-2:], ["--", "Look"])
         argv = roost.CodexAgent().launch(store, dict(task, mayOffer=True, agentSession="s"), True)
         self.assertEqual(argv[-2:], ["resume", "s"])
-        self.assertTrue([arg for arg in argv if arg.startswith("mcp_servers.roost.command=")])
+        self.assertTrue([arg for arg in argv if arg.startswith("mcp_servers.roost_task.command=")])
         # A folder with a character past the BMP is named by itself: TOML
         # has no escaped pair, as JSON would write it.
         odd = roost.Store(str(self.root / "\U0001f426 \"\u00e9tat\""))
         argv = roost.CodexAgent().launch(odd, dict(task, mayOffer=True), False)
-        args = next(arg for arg in argv if arg.startswith("mcp_servers.roost.args="))
+        args = next(arg for arg in argv if arg.startswith("mcp_servers.roost_task.args="))
         self.assertIn(str(odd.root), json.loads(args.split("=", 1)[1]))
         # In its hooks' commands too.
         self.assertFalse([arg for arg in argv if "\\ud83d" in arg])
         self.assertTrue([arg for arg in argv if arg.startswith("hooks.Stop=") and "\U0001f426" in arg])
+        # A control character JSON leaves as it is, DEL, TOML takes only
+        # escaped (`make contract' has Codex read these).
+        odd = roost.Store(str(self.root / "st\x7fate"))
+        argv = roost.CodexAgent().launch(odd, dict(task, mayOffer=True), False)
+        self.assertFalse([arg for arg in argv if "\x7f" in arg])
+        args = next(arg for arg in argv if arg.startswith("mcp_servers.roost_task.args="))
+        self.assertIn(str(odd.root), json.loads(args.split("=", 1)[1]))
+        self.assertTrue([arg for arg in argv if arg.startswith("hooks.Stop=") and "st\\u007fate" in arg])
 
     def test_opencode_takes_the_helper_as_its_mcp_server_in_its_inline_config(self):
         store = roost.Store(str(self.state))
@@ -10924,11 +10935,11 @@ seen.push(read());
 update("toolcall_end", "mcp__roost__show_image", { path: "x.png" });
 update("toolcall_end", "write", { path: "x", content: "y" });
 handlers.message_update({ assistantMessageEvent: { type: "text_delta", delta: "hi" } });
-update("toolcall_end", "mcp__roost__show_widget", { title: "Big", widget_code: "x".repeat(500001) });
+update("toolcall_end", "mcp__roost__show_widget", { title: "Big", widget_code: "x".repeat(%d) });
 await wait(250);
 seen.push(read());
 console.log(JSON.stringify(seen));
-""" % json.dumps(extension.as_uri()))
+""" % (json.dumps(extension.as_uri()), roost.PAGE_LIMIT))
 
         def kept(path):
             env = dict(os.environ, ROOST_PYTHON=sys.executable, ROOST_HELPER="/dev/null", ROOST_PI_TOOLS="",
@@ -10945,6 +10956,93 @@ console.log(JSON.stringify(seen));
         # meanwhile; all of it at once; and nothing of the rest.
         self.assertEqual(kept(str(live)), [None, start, more, whole, whole])
         self.assertFalse(Path(str(live) + ".part").exists())
+
+    def pi_live(self, steps):
+        """What Roost's Pi extension keeps of a page after each read in
+        STEPS: [type, id, arguments] for Pi's update of a show_widget call,
+        ["wait", ms], ["read"], or ["end", role] for a message's end."""
+        store = roost.Store(str(self.state))
+        roost.PiAgent().launch(store, dict(id="0" * 16, command=["pi"], prompt=None), False)
+        extension = next(store.root.glob("pi-observer-*.mjs"))
+        live = Path(self.temp.name) / "live.json"
+        with contextlib.suppress(FileNotFoundError):
+            live.unlink()
+        driver = Path(self.temp.name) / "live-steps.mjs"
+        driver.write_text("""
+import { existsSync, readFileSync } from "node:fs";
+const { default: observe } = await import(%s);
+const handlers = {};
+observe({ on: (event, handler) => { handlers[event] = handler; } });
+const read = () => existsSync(process.env.ROOST_PI_LIVE) ? JSON.parse(readFileSync(process.env.ROOST_PI_LIVE, "utf8")) : null;
+const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+const call = (id, args) => ({ type: "toolCall", id, name: "mcp__roost__show_widget", arguments: args });
+const seen = [];
+for (const [type, id, args] of JSON.parse(readFileSync(process.env.STEPS, "utf8"))) {
+  if (type === "wait") await wait(id);
+  else if (type === "read") { const page = read(); seen.push(page && page.code.length > 1000 ? { ...page, code: "" } : page); }
+  else if (type === "end") handlers.message_end({ message: { role: id, stopReason: "aborted", content: [] } });
+  else handlers.message_update({ assistantMessageEvent: type === "toolcall_end"
+    ? { type, contentIndex: 1, toolCall: call(id, args) }
+    : { type, contentIndex: 1, partial: { content: [{ type: "text" }, call(id, args)] } } });
+}
+console.log(JSON.stringify(seen));
+""" % json.dumps(extension.as_uri()))
+        env = dict(os.environ, ROOST_PYTHON=sys.executable, ROOST_HELPER="/dev/null", ROOST_PI_TOOLS="",
+                   ROOST_PI_LIVE=str(live), STEPS=str(Path(self.temp.name) / "steps.json"))
+        Path(env["STEPS"]).write_text(json.dumps(steps))
+        done = subprocess.run(["node", str(driver)], env=env, check=True, timeout=60, capture_output=True, text=True)
+        return json.loads(done.stdout.splitlines()[-1])
+
+    @unittest.skipUnless(shutil.which("node"), "needs Node")
+    def test_pis_extension_keeps_a_page_whole_only_when_the_helper_would_show_it(self):
+        # The helper counts a page's bytes in UTF-8, escaped into its frame;
+        # the extension counts as it does: a page just within and one just
+        # past, in each kind of character, is whole there as the helper
+        # shows it.
+        room = roost.PAGE_LIMIT - len(roost.widget_page("").encode())
+        cases = []
+        for unit, cost in (("a", 1), ("é", 2), ("中", 3), ("\U0001f600", 4), ("<", 4), ("&", 5),
+                           ("'", 6), ('"', 6), ("\ud800", 1)):
+            for extra in (0, 1):
+                cases.append(unit * (room // cost) + "a" * (room % cost + extra))
+        steps = []
+        for number, code in enumerate(cases):
+            steps += [["toolcall_end", "call_%d" % number, dict(title="T", widget_code=code)], ["read"]]
+        seen = self.pi_live(steps)
+        for number, code in enumerate(cases):
+            with self.subTest(case=number):
+                whole = seen[number] is not None and seen[number]["id"] == "call_%d" % number
+                with unittest.mock.patch.object(roost, "keep_shown"):
+                    try:
+                        roost.show_widget(roost.Store(str(self.state)), "0" * 16, "T", code)
+                        shown = True
+                    except roost.RoostError:
+                        shown = False
+                self.assertEqual((whole, shown), (number % 2 == 0, number % 2 == 0))
+
+    @unittest.skipUnless(shutil.which("node"), "needs Node")
+    def test_pis_extension_leaves_no_half_page(self):
+        start = ["toolcall_start", "c1", {}]
+        half = ["toolcall_delta", "c1", dict(title="Clock", widget_code="<svg><circle")]
+        # Stopped with Esc, its message ends: the half it wrote goes, and
+        # what Pi sent meanwhile is not written after.
+        seen = self.pi_live([start, half, ["wait", 250], ["read"], ["toolcall_delta", "c1", dict(widget_code="<svg>")],
+                             ["end", "assistant"], ["wait", 250], ["read"]])
+        self.assertEqual(seen, [dict(id="c1", title="Clock", code="<svg><circle", whole=False), None])
+        # Not when your message ends, nor once the page is whole.
+        whole = ["toolcall_end", "c1", dict(title="Clock", widget_code="<svg/>")]
+        seen = self.pi_live([start, half, ["wait", 250], ["end", "user"], ["read"],
+                             whole, ["end", "assistant"], ["read"]])
+        self.assertEqual([page["whole"] for page in seen], [False, True])
+        # Past what Roost shows, the half it wrote goes too, as the call
+        # will be refused; a whole page before it stays.
+        big = "x" * roost.PAGE_LIMIT
+        seen = self.pi_live([start, half, ["wait", 250], ["toolcall_end", "c1", dict(title="Big", widget_code=big)],
+                             ["read"], ["toolcall_delta", "c1", dict(widget_code="<p>")], ["wait", 250], ["read"],
+                             ["toolcall_end", "c2", dict(title="Clock", widget_code="<svg/>")], ["read"],
+                             ["toolcall_end", "c3", dict(title="Big", widget_code=big)], ["read"]])
+        # Nor is more of the call it refused written after.
+        self.assertEqual([page and (page["id"], page["whole"]) for page in seen], [None, None, ("c2", True), ("c2", True)])
 
     @unittest.skipUnless(shutil.which("node"), "needs Node")
     def test_pis_extension_registers_the_helper_as_an_mcp_server(self):
@@ -12978,6 +13076,24 @@ class LastMessage(unittest.TestCase):
         self.write(rollout, [message("user", "Plan"), message("assistant", plan),
                              message("user", "And now?"), message("assistant", "Nothing more.")])
         self.assertEqual(stop(last_assistant_message="Nothing more.")["status"], "ready")
+        # A note of Codex's own after it, recorded as yours, is not yours:
+        # as a subagent's that ended, said by its kind or by its tags.
+        for note, kinds in (("<subagent_notification>{\"agent\":\"a\"}</subagent_notification>",
+                             ["subagent_notification"]),
+                            ("<subagent_notification>{}</subagent_notification>", None),
+                            ("<environment_context>\n<cwd>/w</cwd>\n</environment_context>",
+                             ["environments.environment_context"])):
+            said = message("user", note)
+            if kinds:
+                said["payload"]["internal_chat_message_metadata_passthrough"] = dict(content_item_kinds=kinds)
+            self.write(rollout, [message("user", "Plan"), message("assistant", plan), said,
+                                 message("assistant", "Done.")])
+            self.assertEqual(stop(last_assistant_message="Done.")["status"], "permission", note)
+        # Words of yours that say what they hold are yours.
+        said = message("user", "<subagent_notification>{}</subagent_notification>")
+        said["payload"]["internal_chat_message_metadata_passthrough"] = dict(content_item_kinds=["user.text"])
+        self.write(rollout, [message("user", "Plan"), message("assistant", plan), said, message("assistant", "Done.")])
+        self.assertEqual(stop(last_assistant_message="Done.")["status"], "ready")
         # Tags within a line are words, not a plan.
         self.write(rollout, [message("user", "Why?"), message("assistant", "It writes <proposed_plan> lines.")])
         self.assertEqual(stop(last_assistant_message="It writes lines.")["status"], "ready")

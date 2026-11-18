@@ -4,6 +4,24 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Codex tasks start with a server of your own named `roost` in
+  `~/.codex/config.toml`. Codex merged Roost's tools into yours: a task
+  failed to start beside an HTTP server, and took your server's environment
+  and switches. Roost's server is now `roost_task` for Codex, and its hooks
+  name the tools `mcp__roost_task__…`. When upgrading, tasks started before
+  keep the old name until they start again; a rule or hook of yours that
+  names `mcp__roost__` tools in Codex needs the new name.
+- A Codex task whose state directory's name holds a DEL character starts:
+  Codex refused the hook and server settings Roost gave it.
+- A Codex task that ends a Plan-mode turn with a note of its own after the
+  plan, as a subagent's that ended, shows as asking about its plan, not
+  ready.
+- A Pi task's page drawn as the model writes it is shown whole only when
+  Roost can keep it: a page of non-Latin text, or mostly tags and quotes,
+  showed whole and was then refused as more than 512 KB. One that grows
+  past that, or that you stop with Esc while it is written, closes rather
+  than staying half drawn, and Roost says it stopped.
+
 - A terminal that cannot attach its task's tmux session says so. When the
   session went as you opened the task, or the connection dropped as it
   attached, the window said "Connecting to" the session for good. It now

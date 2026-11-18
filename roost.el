@@ -12470,8 +12470,21 @@ While one is being written, look again shortly, whether or not its
 file's changes are each reported."
   (setq roost--live-timer nil)
   (let ((now (float-time))
+        (files (roost--live-files))
         again)
-    (pcase-dolist (`(,file . ,time) (roost--live-files))
+    ;; A page whose file went while it was being written ends there, as
+    ;; when you stop its agent or the page is more than Roost shows.
+    (let (gone)
+      ;; Not when the folder can't be read: then nothing says which went.
+      (when (file-accessible-directory-p (roost--live-directory))
+        (maphash (lambda (file seen)
+                   (when (and (eq (nth 1 seen) 'writing) (not (assoc file files)))
+                     (push file gone)))
+                 roost--live-seen))
+      (dolist (file gone)
+        (remhash file roost--live-seen)
+        (with-demoted-errors "Roost: %S" (roost--live-stopped file))))
+    (pcase-dolist (`(,file . ,time) files)
       (let ((seen (gethash file roost--live-seen)))
         (unless (equal time (car seen))
           (let ((state (with-demoted-errors "Roost: %S" (roost--take-live file))))
@@ -12546,6 +12559,27 @@ nil if FILE is no page of a task this Emacs knows."
          (format-message "%s is drawing a page" (roost--field task 'name))
          (format-message "%s is drawing a page: open it to see" (roost--field task 'name)))))
       (if whole 'whole 'writing))))
+
+(defun roost--live-stopped (file)
+  "Close the page that was being written in FILE, which went before it was whole.
+Its agent's extension removes the file when the agent stops writing the
+page, as when you stop it, or when the page is more than Roost shows: its
+host never has it.  What the task showed before, which this buffer held,
+is fetched again by the next poll."
+  (when-let* ((task (gethash (list nil (file-name-base file)) roost--tasks))
+              (key (roost--key task))
+              (buffer (roost--shown-buffer key))
+              (live (buffer-local-value 'roost--shown-live buffer))
+              ((not (nth 2 live))))
+    (when (eq (gethash key roost--shown-waiting) buffer)
+      (remhash key roost--shown-waiting))
+    (remhash key roost--shown-at)
+    (roost--when-out-of-minibuffer
+     (lambda ()
+       ;; Unless another page or image has taken the buffer meanwhile.
+       (when (and (buffer-live-p buffer) (eq (buffer-local-value 'roost--shown-live buffer) live))
+         (roost--close-buffer buffer))))
+    (message "%s stopped drawing a page" (roost--field task 'name))))
 
 (defun roost--hand-live ()
   "Hand this buffer's view what its agent has written of its page so far.

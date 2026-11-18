@@ -290,9 +290,10 @@ rests on the model. This is an experiment: it may change or go.
   to. With Pi's MCP support turned off in its settings, Pi reports Roost's
   server as an extension's error when a task starts; `--no-mcp` in the
   task's command leaves it out.
-- Roost's server is named `roost`: one of your own by that name in Pi's
-  `mcp.json` stands in place of it, and in Codex's or OpenCode's config is
-  replaced by it for the task, so give yours another name.
+- Roost's server is named `roost`, and for Codex `roost_task`: one of your
+  own by that name in Pi's `mcp.json` stands in place of it, in OpenCode's
+  config is replaced by it for the task, and in Codex's is mixed with it,
+  so give yours another name.
 - A Codex older than 0.163.0 that does not know a server's
   `default_tools_approval_mode` asks before each of the tools.
 
@@ -1416,7 +1417,7 @@ What runs where:
 - With `roost-agent-offers` on, the task's agent starts the helper as an
   MCP server of its own, over its standard input and output, and ends it
   with itself. Each is told of it for that one launch: Claude Code by
-  `--mcp-config`, Codex by `-c mcp_servers.roost…` overrides, OpenCode in
+  `--mcp-config`, Codex by `-c mcp_servers.roost_task…` overrides, OpenCode in
   the inline config Roost already sets, and Pi by Roost's extension, which
   registers it for the session. Each runs its tools without asking: Claude
   Code by an allow rule in the task's settings file, Codex by the server's

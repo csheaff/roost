@@ -27,7 +27,9 @@ import os
 from pathlib import Path
 import re
 import shutil
+import subprocess
 import sys
+import tempfile
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -50,7 +52,7 @@ PI_IGNORED_EVENTS = dict(
     {event: "a step inside a run, which agent_start and agent_end bound" for event in (
         "after_provider_response", "agent_before_settle", "before_agent_start", "before_provider_headers",
         "before_provider_request", "cache_warming_decision", "context", "context_with_system",
-        "message_end", "message_start", "provider_stream_event", "tool_call",
+        "message_start", "provider_stream_event", "tool_call",
         "tool_execution_end", "tool_execution_start", "tool_execution_update", "tool_result",
         "turn_end", "turn_start")},
     **{event: "the session changes, not whether it works or waits" for event in (
@@ -65,6 +67,7 @@ PI_IGNORED_EVENTS = dict(
 PI_API = (r"isIdle\(\): boolean", r"hasPendingMessages\(\): boolean", r"sessionManager: ",
           r"interface AgentSettledEvent \{[^}]*\baborted: boolean",
           r"interface AgentEndEvent \{[^}]*\bmessages: AgentMessage\[\]",
+          r"interface MessageEndEvent \{[^}]*\bmessage: AgentMessage;",
           r"interface UIPromptStartEvent \{[^}]*\btitle\?: string",
           r"interface InputEvent \{[^}]*\btext: string[^}]*\bsource: InputSource",
           r"type InputSource = [^;]*\"extension\"",
@@ -181,6 +184,9 @@ def scan_codex():
     absent = [word.decode() for word in (b"mcp_servers", b"default_tools_approval_mode") if word not in data]
     scan.report(not absent, "an MCP server set with -c, its tools approved"
                 + (": missing " + ", ".join(absent) + "; check CodexAgent.launch" if absent else ""))
+    said = codex_reads_roosts_server(path)
+    scan.report(not said, "Roost's MCP server as Codex reads it, beside one of yours named roost"
+                + (": " + said + "; check CodexAgent.launch" if said else ""))
     # In Plan mode a reply's plan is between these tags, and once the turn
     # ends a menu asks whether to implement it, of which no hook says.
     # Search reads its rollouts: a session's first entry, then its messages.
@@ -195,6 +201,37 @@ def scan_codex():
     scan.report(not gone, "Plan mode's plan and the menu after it"
                 + (": no longer finds " + " or ".join(gone) + "; check CodexAgent.plan_asked_about" if gone else ""))
     return scan.problems
+
+
+def codex_reads_roosts_server(codex):
+    """What is wrong with Roost's MCP server as CODEX reads the overrides
+    CodexAgent.launch gives it, or None. In a scratch HOME whose
+    ~/.codex/config.toml has a server of yours named roost, and a state
+    directory whose name has a control character: `codex mcp get' reads
+    the config as a session would, and starts nothing."""
+    with tempfile.TemporaryDirectory() as temp:
+        home = Path(temp) / "home"
+        (home / ".codex").mkdir(parents=True)
+        (home / ".codex" / "config.toml").write_text(
+            '[mcp_servers.roost]\ncommand = "yours"\nenabled = false\nenv = { TOKEN = "t" }\n')
+        store = roost.Store(str(Path(temp) / "st\x7fate"))
+        task = dict(id="0123456789abcdef", command=["codex"], mayOffer=True, prompt=None)
+        overrides = roost.CodexAgent().launch(store, task, False)[1:]
+        env = dict(os.environ, HOME=str(home), CODEX_HOME=str(home / ".codex"),
+                   XDG_CONFIG_HOME=str(home / ".config"))
+        try:
+            done = subprocess.run([str(codex), "mcp", "get", roost.CODEX_SERVER, "--json"] + overrides, env=env,
+                                  capture_output=True, text=True, timeout=60)
+            server = json.loads(done.stdout) if done.returncode == 0 else None
+        except (OSError, subprocess.SubprocessError, ValueError) as error:
+            return str(error)
+        if server is None:
+            return "codex mcp get failed: " + done.stderr.strip()[-300:]
+        transport = server.get("transport") or {}
+        if (server.get("enabled"), transport.get("env"), transport.get("args")) != (
+                True, None, roost.mcp_arguments(store, task)):
+            return "read as " + json.dumps(server)[:300]
+    return None
 
 
 def scan_pi():
