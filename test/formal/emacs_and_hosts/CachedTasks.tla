@@ -23,7 +23,7 @@ CONSTANTS
   MaxVer,   \* how far a task's updatedAt can move, counted
   MaxOver,  \* how far its offersAt can move, counted: 0 leaves offers out
   MaxBase,  \* how far its retargetedAt can move, counted: 0 leaves B out
-  MaxShown, \* how far its shown.at can move, counted: 0 leaves what an agent shows out
+  MaxShown, \* how far its shown.at can move, counted: 0 leaves what an agent shows out (CachedTasksShown has it)
   FromOffer,\* the tasks you create from t1's offer, of News: the draft of an offer
   ActOn,    \* the tasks you stop, retire or inspect
   News      \* the tasks you create: none, one, or several, as a draft's attempts at one prompt
@@ -100,10 +100,9 @@ CreateWaiting(t) == \E i \in DOMAIN reqs : reqs[i].kind = "create" /\ reqs[i].ta
 (* roost--newer-events: a record with an older updatedAt keeps Emacs's,   *)
 (* its offers, its branch and what it shows too.  Only what its host      *)
 (* measured is taken from the reply, and none of that is here.  Otherwise *)
-(* the reply stands, and with it what it says the task shows: nothing in  *)
-(* roost--cache-task goes by shown.at, as roost--newer-offers goes by     *)
-(* offersAt.  (What a pull request left to its agent has of the same,     *)
-(* roost--newer-left by prLeftAt, is in pull_request_left.)               *)
+(* the reply stands, but for what has a clock of its own, below.  (What a *)
+(* pull request left to its agent has of the same, roost--newer-left by   *)
+(* prLeftAt, is in pull_request_left.)                                    *)
 NewerEvents(old, rec) ==
   IF old.present /\ rec.ver < old.ver /\ Break # "NoNewerEvents" THEN old ELSE rec
 
@@ -117,9 +116,16 @@ NewerOffers(old, rec) ==
 NewerBranch(old, rec) ==
   IF old.present /\ rec.base < old.base /\ Break # "NoNewerBranch" THEN [rec EXCEPT !.base = old.base] ELSE rec
 
+(* roost--newer-shown: a record with an older shown.at, or with nothing   *)
+(* shown, keeps what Emacs has the task show, as showing an image or a    *)
+(* page moves no updatedAt either.  Nothing on the host takes `shown' out *)
+(* of a record but the next thing shown, so one with none is the older.   *)
+NewerShown(old, rec) ==
+  IF old.present /\ rec.shown < old.shown /\ Break # "NoNewerShown" THEN [rec EXCEPT !.shown = old.shown] ELSE rec
+
 (* roost--cache-task: a record saying the task went takes it out. *)
 CacheTask(c, t, rec) ==
-  LET m == NewerBranch(c[t], NewerOffers(c[t], NewerEvents(c[t], rec)))
+  LET m == NewerShown(c[t], NewerBranch(c[t], NewerOffers(c[t], NewerEvents(c[t], rec))))
   IN [c EXCEPT ![t] =
         IF m.present THEN m
         ELSE [present |-> FALSE,

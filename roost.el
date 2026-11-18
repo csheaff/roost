@@ -1448,6 +1448,21 @@ merged it into the other."
         (when-let* ((cell (assq field old)))
           (setq task (cons cell task)))))))
 
+(defun roost--newer-shown (task old)
+  "TASK, with what OLD shows when its agent showed that since TASK was read.
+Showing an image or a page is no event of the agent's, which
+`roost--newer-events' goes by: this keeps a reply read before the agent
+showed it, such as one to opening the task, from bringing back what the
+task showed before, or nothing, for the panel to name and
+`roost-show-image' to ask for.  Only the next thing shown takes the
+place of one, so a reply that names none was read before any."
+  (let ((shown (alist-get 'at (roost--field old 'shown)))
+        (new (alist-get 'at (roost--field task 'shown))))
+    (if (not (and (stringp shown)
+                  (string< (if (stringp new) new "") shown)))
+        task
+      (cons (assq 'shown old) (assq-delete-all 'shown task)))))
+
 (defun roost--newer-left (task old)
   "TASK, with what OLD says of its pull request left to its agent, if newer.
 Leaving it, taking it back and telling the agent of it are no events of
@@ -1511,9 +1526,11 @@ A reply to create read before then can come after.")
     (let ((looked (roost--newer-look old task)))
       (setq task (roost--kept-reviews
                   (roost--newer-look (roost--newer-left
-                                      (roost--newer-branch
-                                       (roost--newer-offers (roost--newer-name (roost--newer-events task old) old)
-                                                            old)
+                                      (roost--newer-shown
+                                       (roost--newer-branch
+                                        (roost--newer-offers (roost--newer-name (roost--newer-events task old) old)
+                                                             old)
+                                        old)
                                        old)
                                       old)
                                      looked)

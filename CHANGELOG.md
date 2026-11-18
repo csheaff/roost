@@ -34,6 +34,11 @@ What each release changes, and what to do when upgrading. Newest first.
   keeps to its time within one long line too. When upgrading: a search
   passes over a conversation file that is a symbolic link, so keep the
   files themselves where the agent writes them.
+- A task keeps the image or page it shows when a reply read before its
+  agent showed it, as one to opening the task, comes after the list that
+  read it since. The panel dropped its Image or Page line, or named the one
+  before, and `roost-show-image` said the task had shown no image, until
+  the next list. Nothing to do when upgrading.
 - An offer's draft that has asked for its task stays yours until the task is
   made. Before, one that got no reply, asked again and quit at the question
   about the project's setup command read as an offer you had only looked at:
