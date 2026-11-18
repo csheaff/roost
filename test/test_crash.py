@@ -482,11 +482,19 @@ class Crashes(unittest.TestCase):
                 # Written meanwhile, which keeps it from going once it is back.
                 (folder / "written").write_text("x\n")
                 box.git("config", "core.fsmonitor", str(program))
+                # Nor a hook, which Git runs on writing an index.
+                hooks = away / "hooks"
+                hooks.mkdir(exist_ok=True)
+                (hooks / "post-index-change").write_text("#!/bin/sh\ntouch '%s'\n" % (away / "hooked"))
+                (hooks / "post-index-change").chmod(0o755)
+                box.git("config", "core.hooksPath", str(hooks))
                 reply = box.helper("retire", id=other["id"])
+                box.git("config", "--unset", "core.hooksPath")
                 self.assertFalse(reply["ok"], reply)
                 self.assertIn("Uncommitted or untracked", reply["error"])
                 self.assertTrue((folder / "hello").exists())
                 self.assertFalse(ran.exists())
+                self.assertFalse((away / "hooked").exists())
 
     def test_a_window_nothing_knows_of_closes(self):
         box = self.box()

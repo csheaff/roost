@@ -74,9 +74,13 @@ class CutShort(unittest.TestCase):
         stuck = self.worktree / "d025"
         stuck.chmod(0o555)
         self.addCleanup(lambda: stuck.exists() and stuck.chmod(0o755))
+        box.arm("before", 10 ** 9)
         reply = box.helper("retire", id=self.task["id"])
+        box.disarm()
         self.assertFalse(reply["ok"], reply)
         self.assertIn("Git stopped partway", reply["error"])
+        # Nothing newer than Roost's oldest Git: worktree repair is 2.29.
+        self.assertNotIn("worktree repair", (box.inject / "log").read_text())
         self.assertIsNone(BUG_WORDS.search(reply["error"]), reply["error"])
         stuck.chmod(0o755)
         self.assert_back()
@@ -99,7 +103,7 @@ class CutShort(unittest.TestCase):
     def test_a_relink_cut_short_is_done_again(self):
         """The helper killed as it makes the worktree one again, at each
         step that leaves something of Git's behind."""
-        steps = ("symbolic-ref HEAD refs/heads/", "reset -q", "worktree repair")
+        steps = ("symbolic-ref HEAD refs/heads/", "reset -q", "ls-files --deleted")
         for step in steps:
             with self.subTest(step=step):
                 if step != steps[0]:
@@ -114,7 +118,11 @@ class CutShort(unittest.TestCase):
                 stuck.chmod(0o755)
                 # Killed relinking, which comes only once Git stopped.
                 self.assertTrue(box.record(self.task["id"]).get("removing"))
-                self.assertTrue(list(self.worktree.parent.glob(".relink-*")), "killed before relinking")
+                if step == steps[-1]:
+                    # Linked again, its files not yet put back.
+                    self.assertIn(str(self.worktree), box.worktrees())
+                else:
+                    self.assertTrue(list(self.worktree.parent.glob(".relink-*")), "killed before relinking")
                 self.assert_finishes()
                 self.assertEqual([path for path in box.worktrees() if ".relink-" in path], [])
                 self.assertEqual(list(self.worktree.parent.glob(".relink-*")), [])

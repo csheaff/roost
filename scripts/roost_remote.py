@@ -6510,13 +6510,20 @@ def relink_removed(task, worktree):
     spare = worktree.parent / (RELINK_PREFIX + worktree.name + "-" + uuid.uuid4().hex[:12]) / worktree.name
     spare.parent.mkdir()
     try:
-        # Measured, as each reads an index: no program the config names runs.
-        git(repo, *measuring(repo), "worktree", "add", "-q", "--no-checkout", "--detach", str(spare),
+        # Measured, as each reads an index, and with none of your hooks,
+        # which Git runs on writing one: no program the config names runs.
+        quiet = ("-c", "core.hooksPath=/dev/null")
+        git(repo, *measuring(repo), *quiet, "worktree", "add", "-q", "--no-checkout", "--detach", str(spare),
             "refs/heads/" + task["branch"])
-        git(spare, "symbolic-ref", "HEAD", "refs/heads/" + task["branch"])
-        git(spare, *measuring(spare), "reset", "-q")
-        os.replace(spare / ".git", worktree / ".git")
-        git(repo, *measuring(repo), "worktree", "repair", str(worktree))
+        git(spare, *quiet, "symbolic-ref", "HEAD", "refs/heads/" + task["branch"])
+        git(spare, *measuring(spare), *quiet, "reset", "-q")
+        # The links both ways, by whole paths, as `git worktree repair`
+        # writes them, which needs Git 2.29: the folder's first, so that
+        # until the other is written, the spare is all Git has.
+        gitdir = Path(git(spare, "rev-parse", "--absolute-git-dir").stdout.strip())
+        atomic_text(worktree / ".git", "gitdir: %s\n" % gitdir)
+        atomic_text(gitdir / "gitdir", "%s\n" % (worktree / ".git"))
+        (spare / ".git").unlink()
     except OSError as exc:
         raise RoostError("Could not make the task's worktree a worktree again (%s)" % exc) from None
     finally:
