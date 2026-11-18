@@ -8364,17 +8364,20 @@ def apply_program_status(task, fields, run_id):
         return False
     before = dict(task)
     state, status = fields["state"], task["status"]
-    task["programStatusRun"] = run_id
     # For an agent whose hooks say when its turns start and end, its work
     # is news only as the answer to a request, and what it said before the
     # hook that last set its status is older news than that hook's: it runs
     # its hooks before it goes on, but its reports wait for the registry.
     # So too for what an agent said before a hook whose status counts over
     # its reports, as for a new conversation, or a turn's end on an API
-    # error or with work in the background.
+    # error or with work in the background. Such a report counts for
+    # nothing: nor does it make its run a relayed one, whose hooks' status
+    # would count no more with no report to say it instead, so the hooks
+    # count until a report newer than them all is recorded.
     turns = agent_for(task).reports_turns
     if fields.get("receivedAt", float("inf")) < (task.get("hookAt") or 0):
-        return task != before
+        return False
+    task["programStatusRun"] = run_id
     changes = None
     if state == "working" and status != "running" and (turns or status == "permission"):
         changes = dict(status="running", lastEvent="Approved" if status == "permission" else "Working")

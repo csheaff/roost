@@ -13438,6 +13438,27 @@ class ProgramStatus(unittest.TestCase):
             finish()
             self.assertEqual(store.read("0" * 16)["status"], "running")
 
+    def test_a_claude_that_reports_its_work_before_its_session_start_hook_reads_running(self):
+        # Claude Code 2.1.303, relayed, started on a task's prompt, reports
+        # idle, then working, and only then runs its SessionStart and
+        # UserPromptSubmit hooks (test/captures/claude-relayed-2.1.303.jsonl).
+        # The recorder waits for the registry, as behind a listing, so the
+        # first hook lands before either report is recorded.
+        with tempfile.TemporaryDirectory() as root:
+            store = roost.Store(root)
+            store.save(dict(id="0" * 16, agent="claude", worktree="/w", status="starting", runId="run",
+                            programStatus=True))
+            said = time.time() - 0.1
+            roost.update_hook(store, "0" * 16, dict(hook_event_name="SessionStart", source="startup"), "run")
+            with store.locked():
+                task = store.read("0" * 16)
+                for state in ("idle", "working"):
+                    roost.apply_program_status(task, dict(state=state, receivedAt=said), "run")
+                store.save(task)
+            roost.update_hook(store, "0" * 16, dict(hook_event_name="UserPromptSubmit", prompt="go"), "run")
+            # It works on the prompt, and says nothing more until its turn ends.
+            self.assertEqual(store.read("0" * 16)["status"], "running")
+
     def test_codex_sessions_outside_the_worktree_are_not_the_tasks(self):
         # With memories on, Codex runs its memory agent as a session of its
         # own in the same process, and Roost's hooks report it too.

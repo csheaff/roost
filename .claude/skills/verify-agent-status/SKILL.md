@@ -64,7 +64,9 @@ tool of Claude's that fails, or that you stop (`PostToolUseFailure`, its
 `is_interrupt`), in `Observe`; an agent started on a task's prompt that
 reports its work before its `SessionStart` hook (`EarlyWork`); Codex's
 `working` as you decline a request; and a `SubagentStop` of nobody's, in
-`SubagentAsks`. To see what has changed since:
+`SubagentAsks`. And the change to `apply_program_status` that came with this
+line, STATUS-13's fix: a report read before `hookAt` makes no run a relayed
+one. To see what has changed since:
 `git diff 047486f -- scripts/roost_remote.py`. Move this commit forward only
 after you have read the diff of the functions above against the model and it
 still describes them.
@@ -88,9 +90,9 @@ About a minute; `make formal` runs every model. Each line is one config:
   waiting for the lock as Claude's turn ends.
 - `AgentStatus.No*.cfg` each break the code on purpose (the `Break`
   constant) and must fail on the rule they name, so each rule can still fail.
-- `LatePermissionPrompt`, `LateIdlePrompt`, `PlanMenuClosed` and
-  `WorkBeforeStart` are findings: the code as it is, under timings, moves of
-  yours or an agent's order of events that `AgentStatus.cfg` leaves out.
+- `LatePermissionPrompt`, `LateIdlePrompt` and `PlanMenuClosed` are
+  findings: the code as it is, under timings or moves of yours that
+  `AgentStatus.cfg` leaves out.
   They must fail as they say until the code is fixed.
 - `SubagentAsks.cfg` must pass, in a second or two: every order of twelve
   asks, answers, tools and ends, with a Claude that says what its turn
@@ -153,16 +155,17 @@ that landed after the crash.
 
 ## Findings open at `047486f`
 
-- **WorkBeforeStart** (`WorkNotWaiting`), STATUS-13, since #245: a relayed
-  Claude started on a task's prompt reports `idle`, then `working`, and only
-  then runs its `SessionStart` hook, as 2.1.303 does in its captures (2.1.310
-  runs the hook first). If that hook has the registry lock before the
-  recorder, as behind a listing, it counts, as `ready`, and its `hookAt`
-  makes both reports older news. Recording them makes the run relayed, so
-  the `UserPromptSubmit` that follows counts for nothing: the task reads
-  `ready` while Claude works, until its next report. Codex does the same and
-  is right, as its hooks count. `EarlyWork` in `AgentStatus.cfg` has only
-  Codex until it is fixed.
+Fixed: **WorkBeforeStart** (`WorkNotWaiting`), STATUS-13, since #245. A
+relayed Claude started on a task's prompt reports `idle`, then `working`,
+and only then runs its `SessionStart` hook, as 2.1.303 does in its captures
+(2.1.310 runs the hook first). If that hook had the registry lock before the
+recorder, as behind a listing, it counted, as `ready`, and its `hookAt` made
+both reports older news; recording them still made the run relayed, so the
+`UserPromptSubmit` that followed counted for nothing, and the task read
+`ready` while Claude worked. A report older than `hookAt` now leaves
+`programStatusRun` as it was, so the hooks count until a report newer than
+them all is recorded. `EarlyWork` in `AgentStatus.cfg` has both agents, and
+`AgentStatus.NoStaleUnrelayed.cfg` undoes the fix.
 
 Fixed: **StaleReport**. A relayed Claude's `working`, read before its
 `StopFailure` or `Stop` with background work and recorded after, made the
