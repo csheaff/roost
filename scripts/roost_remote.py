@@ -78,18 +78,17 @@ def parse_time(value):
     return parsed if parsed.tzinfo else None
 
 
-def expand_home(path):
-    """PATH, a string, with ~ or ~user at its start made that home folder,
-    as a Path. A user this host has none of is refused plainly."""
-    try:
-        return Path(path).expanduser()
-    except RuntimeError:
-        user = str(path)[1:].split("/", 1)[0]
+def require_known_home(path):
+    """Refuse PATH, text from a request, when it starts with ~ or ~user for
+    a home this host can't name, as a user it has none of: expanding it
+    would fail with an internal error."""
+    if isinstance(path, str) and path.startswith("~") and os.path.expanduser(path).startswith("~"):
+        user = path[1:].split("/", 1)[0]
         if not user:
             raise RoostError("This host can't say where your home folder is, for %s; give the folder by its "
-                             "whole path" % path) from None
+                             "whole path" % path)
         raise RoostError("This host has no user %s, so no folder %s; give the folder by its whole path"
-                         % (user, path)) from None
+                         % (user, path))
 
 
 def text(value):
@@ -421,7 +420,8 @@ def own_record(record, task_id):
 
 class Store:
     def __init__(self, root):
-        self.root = expand_home(root).absolute()
+        require_known_home(root)
+        self.root = Path(root).expanduser().absolute()
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.tasks_dir = self.root / "tasks"
         self.tasks_dir.mkdir(mode=0o700, exist_ok=True)
@@ -2615,7 +2615,8 @@ def make_task(store, request, create_id):
             return dict(other, alreadyMade=True)
     if conversation:
         request = dict(request, directory=str(conversation_repository(store)), base=None)
-    directory = str(expand_home(request["directory"]).resolve())
+    require_known_home(request["directory"])
+    directory = str(Path(request["directory"]).expanduser().resolve())
     # A folder's name may end in a space, or hold a newline.
     checkout = git(directory, "rev-parse", "--show-toplevel").stdout.removesuffix("\n")
     # Git lists the main worktree first. Creating from an existing task must
@@ -2856,7 +2857,8 @@ ISSUE_BODY_LIMIT = 6000
 def issues(request):
     """Open issues of the repository holding DIRECTORY, newest first, on
     the forge its origin is on, as gh or glab on this host sees them."""
-    directory = str(expand_home(text(request.get("directory")) or "."))
+    require_known_home(text(request.get("directory")))
+    directory = str(Path(text(request.get("directory")) or ".").expanduser())
     checkout = git(directory, "rev-parse", "--show-toplevel").stdout.removesuffix("\n")
     forge = forge_for(checkout)
     result = []
