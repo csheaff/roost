@@ -237,6 +237,65 @@ class LeftRunning(unittest.TestCase):
         self.assertFalse(reply["ok"], reply)
         self.assertIn("After the teardown command ran", reply["error"])
 
+    def run_command(self, task, argv):
+        """Have TASK's agent run ARGV, in a session of its own, as Claude
+        Code runs a command, and keep at it: its turn goes on."""
+        box = self.box
+        pane = box.record(task["id"])["paneId"]
+        box.tmux("send-keys", "-t", pane, "-l",
+                 "ask " + shlex.join([sys.executable, "-c", OWN_SESSION, *map(str, argv)]))
+        box.tmux("send-keys", "-t", pane, "Enter")
+        box.wait_for(task, "permission")
+        box.tmux("send-keys", "-t", pane, "-l", "yes")
+        box.tmux("send-keys", "-t", pane, "Enter")
+
+    def test_stop_leaves_a_daemon_a_command_starts_as_it_goes_on(self):
+        """A build tool's daemon, other tasks share, started by the agent's
+        command, which is still running, in a session of its own."""
+        box = self.box
+        task = box.create()
+        daemon = box.root / "daemon.py"
+        daemon.write_text(FOREVER)
+        launcher = box.root / "launcher.py"
+        launcher.write_text("import subprocess, sys, time\n"
+                            "subprocess.Popen([sys.executable, '-c', %r, sys.executable, %r])\n"
+                            "while True: time.sleep(1)\n" % (OWN_SESSION, str(daemon)))
+        self.run_command(task, [sys.executable, launcher])
+        deadline = time.monotonic() + 10
+        while not self.running(daemon, last=True) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertTrue(self.running(daemon, last=True), "no daemon started")
+        self.assertTrue(box.helper("stop", id=task["id"])["ok"])
+        self.assertFalse(self.running(launcher, last=True), "the command still runs after stop")
+        self.assertTrue(self.running(daemon, last=True), "a daemon was ended")
+
+    def test_a_pane_joined_to_the_agents_window_as_it_stops_stays(self):
+        box = self.box
+        task = box.create()
+        window = box.record(task["id"])["windowId"]
+        # Once stop has read the panes, a pane of yours joins the window.
+        joiner = subprocess.Popen([sys.executable, "-c", """
+import subprocess, sys, time
+log, tmux, socket, window = sys.argv[1:]
+deadline = time.time() + 30
+while time.time() < deadline:
+    try:
+        if "list-panes" in open(log).read():
+            break
+    except OSError:
+        pass
+    time.sleep(0.0005)
+subprocess.run([tmux, "-L", socket, "split-window", "-d", "-t", window, "sleep 600"])
+""", str(box.inject / "log"), roost.shutil.which("tmux"), box.socket, window], env=box.env)
+        self.addCleanup(joiner.kill)
+        box.arm("before", 10 ** 9)
+        reply = box.helper("stop", id=task["id"])
+        box.disarm()
+        joiner.wait(timeout=30)
+        self.assertTrue(reply["ok"], reply)
+        self.assertIn("sleep 600", box.tmux("list-panes", "-a", "-F", "#{pane_start_command}"),
+                      "the pane you joined was closed with the agent's")
+
     def test_stop_leaves_a_daemon_the_agent_started(self):
         """A server of a build tool's, or an ssh connection, that the agent
         started and other tasks share, leads a session of its own."""
