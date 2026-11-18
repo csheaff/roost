@@ -4527,8 +4527,15 @@ def pane_sessions(task, inventory):
         children[parent].append(child)
     # Only a session begun by a process of the panes' own sessions, as each
     # command Claude Code runs: not one a command of its starts, as a build
-    # tool's daemon other tasks share does, which leads its own.
+    # tool's daemon other tasks share does, which leads its own. A relayed
+    # agent leads one of its own, begun by its pane's process: its commands'
+    # sessions count too.
     panes_own = set(sessions)
+    for pid in list(panes_own):
+        for child in children.get(pid, ()):
+            with contextlib.suppress(OSError):
+                if os.getsid(child) == child:
+                    panes_own.add(child)
     pending = [pid for pid in sessions if pid in table]
     while pending:
         parent = pending.pop()
