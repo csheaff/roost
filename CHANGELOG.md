@@ -21,6 +21,10 @@ What each release changes, and what to do when upgrading. Newest first.
   `RET` on the offer opened it anew, and Create then made a second task
   beside the first; `C-c C-k` and Dismiss offer closed it without asking.
   Nothing to do when upgrading.
+- With `roost-program-status` on, a Claude Code task started on a prompt
+  could read `ready` through its whole first turn, so a prompt sent to it
+  went through unasked. It reads `running` now. Nothing to do when
+  upgrading.
 
 ## 0.13.0
 
