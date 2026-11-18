@@ -117,13 +117,33 @@ Three configs, as the whole is too large for one:
   time and killed at any step: two pushes, `L` twice, three tellings.
 
 Checked once and in no config, for its three minutes: `LeftPullRequest.cfg`
-with `PollSplit` passes (40 million states).
+with `PollSplit` passes (40 million states). So do two more, at one push,
+no prompt of your own and no `LateTake`: this Emacs beside another that
+tells and leaves (`OtherEmacs`, 11 million states), and this Emacs with a
+helper killed mid-telling (`Kills`, 333 thousand).
 
 Assumed: the forge's clock and the host's agree. A comment's time is the
 forge's and `updatedAt` the host's, and `roost--tell-due-p` compares them:
 on a host whose clock is behind by more than the rest of the agent's turn,
 its own answer reads as newer than its last event, and it is told of it.
 The model has one clock.
+
+Assumed too: an agent that takes a prompt has its record say so in the
+same step (`AgentTakes`), under the lock `tell` holds (`Busy`). In the
+code the hook that says so is a process that waits for that lock, and Pi
+and OpenCode go on without waiting for theirs; an agent whose status
+reports are relayed has its turn recorded by the relay's recorder, once
+that has the lock. A turn that starts in the moment between `tell` reading
+the record and its paste, as on a prompt from another terminal or a
+wake-up of the agent's own, has the line land in it. Not modelled, and not
+tried on the code.
+
+And the two minutes are by one clock. An Emacs that heard the telling
+counts them by its own (`roost--told-here`); another, or this one started
+again, counts from the entry's time, the host's, by its own clock
+(`roost--seconds-since`): with the host's clock ahead, what the agent left
+standing waits on you that much later. `GraceEnds` may come at any time, so
+no rule here depends on it.
 
 Left out: conflicts, which are told as a failed check is, by the head;
 `to merge`, which is never the agent's; you at the task's terminal, a draft
@@ -178,6 +198,9 @@ and keep it. To fix a finding, follow `.claude/skills/fix-a-finding`.
 Once the model describes the code at a new commit and every line is `ok`,
 move `SYNC` in `covered.py` to that commit. Only then.
 
-Last confirmed at `4e0a586`, with the `asOf` and `stale` of `tell`,
-`roost--tell-agent`, `roost--act` and `roost--cache-task` that came with
-this line.
+Last confirmed at `047486f`. Since `4e0a586`, and the `asOf` and `stale`
+of `tell`, `roost--tell-agent`, `roost--act` and `roost--cache-task` that
+came with it, nothing the model reads has changed: `roost--cache-task`
+notes what an agent shows after it has the agent told, and
+`roost--watched-task`, which keeps Emacs from asking while you are at the
+task's terminal, asks whichever package shows it (`roost--tmux-active-pane`).

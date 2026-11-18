@@ -12,10 +12,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-# The commit at which the models were last confirmed to describe the code,
-# with the `asOf` and `stale` of `tell`, `roost--tell-agent`, `roost--act`
-# and `roost--cache-task` that came with this line.
-SYNC = "4e0a586"
+# The commit at which the models were last confirmed to describe the code.
+SYNC = "047486f"
 
 ROOT = Path(__file__).resolve().parents[3]
 COVERED = {

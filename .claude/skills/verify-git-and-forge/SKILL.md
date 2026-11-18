@@ -217,11 +217,27 @@ would, a `Name.VARIANT.cfg` with `\* expect: Rule`, and keep it.
 Once the models describe the code at a new commit and every line is `ok`,
 move `SYNC` in `covered.py` to that commit. Only then.
 
-Last confirmed at `4508d8f`, with the changes that came with this line, to
-`landed`, `safe_to_delete`, `retarget` and `roost--task-states`, and the new
-`started_at`. Since `e910487`: `retarget` and `B` (the record's branch, and where its commits
-count from, can change, in both models, and `x` has its steps),
-`startCommit` (where its branch was made, which nothing changes),
+Last confirmed at `047486f`. Since `4508d8f`, and the changes that came
+with it to `landed`, `safe_to_delete`, `retarget` and `roost--task-states`
+and the new `started_at`, nothing the models read has changed: every
+covered function of the helper is as it was. In `roost.el`,
+`roost--cache-task` keeps what a newer reply said of a pull request left to
+its agent (`roost--newer-left`), has its agent told (`roost--tell-agent`)
+and notes what an agent shows; `roost--apply-snapshot` forgets what one
+showed; and `roost--act` hands `stale` to its callback. None reads or
+writes `landed`, `dirty`, the Git stamp or the branch a task merges into.
+The replies to `leave` and `tell`, the helper's new actions, are a task's
+record with nothing measured, as the reply to `send` is: each counts a
+revision in `roost--act`, so a list that is out is dropped untried, which
+is `Bad(TRUE)`, within `MaxLost`. They write `prLeft`, `prTold`,
+`prLeftGen` and `prLeftAt` in a record read under the lock, and leave `pr`
+as it was. `x` on a task with work left in the background asks `stop`
+first and `retire` of the reply (`roost-retire`): the same `retire`, after
+steps of the world the models take anyway.
+
+Before that, since `e910487`: `retarget` and `B` (the record's branch, and
+where its commits count from, can change, in both models, and `x` has its
+steps), `startCommit` (where its branch was made, which nothing changes),
 conversations, attempts and forks (no new steps: see above), and
 `roost--cache-task` and `roost--apply-snapshot` noting tasks that went,
 which the models don't read. From the other sections: `safe_to_delete`

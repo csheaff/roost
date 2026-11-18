@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 # The commit at which the models were last confirmed to describe the code.
-SYNC = "4508d8f"
+SYNC = "047486f"
 
 ROOT = Path(__file__).resolve().parents[3]
 COVERED = {
@@ -34,7 +34,7 @@ COVERED = {
         "roost--newer-events", "roost--apply-snapshot", "roost--measured-fields", "roost--landed",
         "roost--merged-p", "roost--display-status", "roost-refresh",
         # B: its reply, and the measurement it asks for.
-        "roost--act", "roost-retarget",
+        "roost--act", "roost--cache-reply", "roost-retarget",
     ],
 }
 
