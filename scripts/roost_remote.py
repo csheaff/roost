@@ -4665,8 +4665,19 @@ def stop(store, task, inventory=None):
     if current is None:
         current = inventory if inventory is not None else inventory_for(task)
     sessions = pane_sessions(task, current)
+    # Noted before the panes close, with what an earlier stop noted: once
+    # they have, nothing leads to a command still running in a session of
+    # its own, and a helper killed from here on would lose it.
+    known = {(pair[0], pair[1]) for pair in task.get("leftRunning") or ()
+             if isinstance(pair, list) and len(pair) == 2 and isinstance(pair[0], int) and isinstance(pair[1], str)}
+    found = process_starts(left_running(task["id"], sessions, own_line()))
+    checkpoint = sorted(known | set(found.items()))
+    checkpoint = [list(pair) for pair in checkpoint]
+    if checkpoint != task.get("leftRunning", []):
+        task["leftRunning"] = checkpoint
+        store.save(task)
     close_panes(task, current, fresh=True)
-    left = end_left_running(task["id"], sessions, task.get("leftRunning") or ())
+    left = end_left_running(task["id"], sessions, checkpoint)
     # Stopping says nothing new: an agent you had seen stays seen.
     was_seen = seen_since_last_event(task)
     # A pane ID owned by something else means ours is gone (for example after a
@@ -8175,8 +8186,9 @@ def remove_worktrees(store, task, worktree, agents, force=False, teardown=None):
                     if force:
                         # Again, last before Git, which then checks nothing:
                         # what the agent left running has ended, but
-                        # something else may have written there since.
-                        require_clean(str(worktree))
+                        # something else may have written there since, as
+                        # what the teardown command left running.
+                        clean()
                         require_submodules_kept(worktree)
                     git(task["repo"], "worktree", "remove", *force, str(worktree))
         finally:
