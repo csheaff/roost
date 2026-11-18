@@ -4,6 +4,20 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A page that fills its frame no longer deletes the frame when its task
+  goes while you have another frame open. Your windows come back, as for
+  an image.
+- With Evil, `q` goes back from several images or a page an agent shows,
+  and from a terminal still connecting, rather than recording a macro;
+  over one image, `q`, `z`, `n` and `p` are Roost's in normal state too.
+  These views start in `roost-evil-state`, as the panels do, or in motion
+  state where it is nil.
+- Magit's status of a task opens beside an image its agent shows, or in
+  place of another window, rather than in the image's window.
+- The sidebar shows the task you work on when your windows come back:
+  after `q` from an image that filled the frame, or going back to a
+  task's tab or perspective. It came back at its top, the task's row out
+  of view.
 - A terminal that cannot attach its task's tmux session says so. When the
   session went as you opened the task, or the connection dropped as it
   attached, the window said "Connecting to" the session for good. It now

@@ -3754,6 +3754,96 @@ terminal's, on a pty.  Skips the test where it can't be made."
                  (should (equal (roost--conversation-name) "Conversation 09:15 (2)")))))
          (kill-buffer "*sidebar test*"))))))
 
+;; Keep in step with `roost-sidebar-shows-the-task-you-work-on'.
+(defun roost-test--sidebar-of-sixty (body)
+  "Call BODY with a sidebar window listing sixty tasks, the last current.
+BODY gets the window and the last task's key."
+  (save-window-excursion
+    (delete-other-windows)
+    (let ((roost--current-task nil)
+          (ids (mapcar (lambda (n) (format "%016d" n)) (number-sequence 1 60))))
+      (dolist (id ids)
+        (roost--cache-task "dev" (append `((name . ,(concat "task-" id)) (repo . "/srv/ledger")
+                                           (startedAt . ,(concat "2026-10-03T20:00:00+00:00 " id)))
+                                         (roost-test--task id "ready"))))
+      (let* ((buffer (get-buffer-create roost--sidebar-buffer))
+             ;; At the frame's side, as the sidebar is.
+             (sidebar (display-buffer-in-side-window buffer '((side . left) (window-width . 30))))
+             (key (list "dev" (car (last ids)))))
+        (unwind-protect
+            (with-current-buffer buffer
+              (roost-sidebar-list-mode)
+              (setq roost--current-task key)
+              (roost--render-sidebar)
+              (funcall body sidebar key))
+          (delete-window sidebar)
+          (kill-buffer buffer))))))
+
+(defun roost-test--row-in-view-p (window key)
+  "Whether WINDOW shows the row of the task with KEY."
+  (with-current-buffer (window-buffer window)
+    (let ((row (roost--task-row key))
+          (top (line-number-at-pos (window-start window))))
+      (and row (<= top (line-number-at-pos row) (+ top (window-body-height window) -1))))))
+
+(ert-deftest roost-sidebar-shows-the-task-you-work-on-when-your-windows-come-back ()
+  ;; An image that filled the frame put your windows back as they were
+  ;; before it did, the sidebar among them; but the sidebar was drawn
+  ;; again meanwhile, and came back at its top, the task you work on
+  ;; below what it shows.  As going back to a task's tab does.
+  (roost-test--isolated
+   (roost-test--sidebar-of-sixty
+    (lambda (sidebar key)
+      (should (roost-test--row-in-view-p sidebar key))
+      (let* ((start (window-start sidebar))
+             ;; The sidebar as it comes back: at its top, as when a
+             ;; redraw has moved what it kept of where it was.
+             (before (progn (set-window-start sidebar (point-min))
+                            (prog1 (current-window-configuration)
+                              (set-window-start sidebar start))))
+             (image (generate-new-buffer "*roost image: budget*")))
+        (unwind-protect
+            (progn
+              (with-current-buffer image (setq roost--shown-task key))
+              (switch-to-buffer image)
+              (set-window-parameter (selected-window) 'roost-shown-back (cons image before))
+              ;; The windows at the frame's sides stay.
+              (delete-other-windows)
+              ;; A poll draws the sidebar again.
+              (roost--render-sidebar)
+              (roost--shown-go-back (selected-window))
+              (let ((sidebars (get-buffer-window-list roost--sidebar-buffer)))
+                (should (= (length sidebars) 1))
+                (should (roost-test--row-in-view-p (car sidebars) key))))
+          (kill-buffer image)))))))
+
+(ert-deftest roost-sidebar-shows-the-task-you-work-on-back-in-its-tab ()
+  ;; A tab keeps its windows as you left them, the sidebar's too, drawn
+  ;; again since.
+  (roost-test--isolated
+   (let ((tab-bar-mode-was tab-bar-mode)
+         ;; The task you work on, rather than the tab's.
+         (roost-workspace nil))
+     (unwind-protect
+         (progn
+           (tab-bar-mode 1)
+           (roost--watch-layout)
+           (roost-test--sidebar-of-sixty
+            (lambda (sidebar key)
+              (should (roost-test--row-in-view-p sidebar key))
+              (tab-bar-new-tab)
+              (roost--render-sidebar)
+              (tab-bar-switch-to-prev-tab)
+              (let ((sidebar (get-buffer-window roost--sidebar-buffer)))
+                (should sidebar)
+                (should (roost-test--row-in-view-p sidebar key)))
+              (tab-bar-close-other-tabs))))
+       (remove-hook 'window-configuration-change-hook #'roost--layout-changed)
+       (remove-hook 'after-delete-frame-functions #'roost--frame-deleted)
+       (remove-hook 'tab-bar-tab-post-select-functions #'roost--sidebar-show-current)
+       (remove-hook 'persp-switch-hook #'roost--sidebar-show-current)
+       (unless tab-bar-mode-was (tab-bar-mode -1))))))
+
 (ert-deftest roost-sidebar-shows-the-task-you-work-on ()
   ;; With more tasks than the sidebar has lines, the one you opened was
   ;; below them, and its band, status and ± with it.
@@ -12930,14 +13020,39 @@ A test stubs the functions of ghostel-tmux it reaches."
                (lambda (mode state) (push (cons mode state) states))))
       (with-temp-buffer (roost-dashboard-mode))
       (with-temp-buffer (roost-compose-mode))
+      ;; What an agent showed, as the panels: `q' goes back.
+      (with-temp-buffer (roost-shown-sheet-mode))
+      (with-temp-buffer (roost-shown-page-mode))
       (let ((roost-evil-state nil)) (with-temp-buffer (roost-task-info-mode))))
     (should (eq (alist-get 'roost-dashboard-mode states) 'emacs))
+    (should (eq (alist-get 'roost-shown-sheet-mode states) 'emacs))
+    (should (eq (alist-get 'roost-shown-page-mode states) 'emacs))
     (should (eq (alist-get 'roost-compose-mode states) 'insert))
     ;; nil reaches Evil, which clears any earlier registration.
     (should (equal (assq 'roost-task-info-mode states) '(roost-task-info-mode))))
   (should (eq (lookup-key roost-dashboard-mode-map "j") 'roost-dashboard-next-task))
   (should (eq (lookup-key roost-dashboard-mode-map "k") 'roost-dashboard-previous-task))
   (should (eq (lookup-key roost-dashboard-mode-map "K") 'roost-stop)))
+
+(ert-deftest roost-evil-users-keep-an-image-s-keys ()
+  ;; An image is in `image-mode', which Evil starts in normal state: there
+  ;; `q' recorded a macro and evil-collection's quit the window.
+  (roost-test--isolated
+   (let ((roost--shown-evil-keys nil) bound normalized)
+     (cl-letf (((symbol-function 'evil-define-minor-mode-key)
+                (lambda (states mode &rest bindings) (push (list states mode bindings) bound)))
+               ((symbol-function 'evil-normalize-keymaps)
+                (lambda (&rest _) (setq normalized t))))
+       (with-temp-buffer (roost-shown-mode))
+       (with-temp-buffer (roost-shown-mode)))
+     ;; Once, for every such buffer.
+     (should (= (length bound) 1))
+     (pcase-let ((`(,states ,mode ,bindings) (car bound)))
+       (should (memq 'normal states))
+       (should (eq mode 'roost-shown-mode))
+       (dolist (key '("q" "z" "n" "p"))
+         (should (eq (plist-get bindings key #'equal) (lookup-key roost-shown-mode-map key)))))
+     (should normalized))))
 
 (ert-deftest roost-every-roost-buffer-reaches-the-other-tasks ()
   ;; `n' in a task's panel beeped, though the menu lists it everywhere.
@@ -17832,3 +17947,234 @@ report.py, and the third alone changes src/totals.py."
          (let ((next '((id . "4e5f6a7b") (name . "a page") (kind . "html") (at . "2026-11-17T10:00:02+00:00"))))
            (roost--cache-reply "dev" (append `((shown . ,next)) (roost-test--task "a" "ready")) listed)
            (should (equal (roost--field (gethash '("dev" "a") roost--tasks) 'shown) next))))))))
+
+(defmacro roost-test--with-evil (&rest body)
+  "Run BODY with `evil-mode' on, and evil-collection's image keys if present."
+  `(progn
+     (skip-unless (or (featurep 'evil)
+                      ;; As evil-collection asks.
+                      (progn (setq evil-want-keybinding nil) (require 'evil nil t))))
+     (let ((was (bound-and-true-p evil-mode)))
+       (unwind-protect
+           (progn (evil-mode 1) ,@body)
+         (unless was (evil-mode -1))))))
+
+(ert-deftest roost-evil-an-image-an-agent-shows-keeps-its-keys ()
+  ;; An agent shows an image; you go to its window, in Evil's normal state
+  ;; as `image-mode' starts, and type `q' as the echo area says, or `z',
+  ;; `n', `p'.
+  (roost-test--with-evil
+   (roost-test--isolated
+    (let ((buffer (generate-new-buffer "*roost image: budget*")))
+      (unwind-protect
+          (progn
+            (require 'image-mode)
+            ;; evil-collection gives `image-mode' its normal-state keys.
+            (when (require 'evil-collection nil t)
+              (evil-collection-init '(image)))
+            (with-current-buffer buffer
+              (setq roost--shown-task '("dev" "1111111111111111"))
+              (insert "not an image")
+              (cl-letf (((symbol-function 'image-mode)
+                         (lambda () (kill-all-local-variables) (setq major-mode 'image-mode)
+                           (use-local-map image-mode-map) (run-mode-hooks))))
+                (roost--draw-shown buffer nil)))
+            (with-current-buffer buffer
+              (evil-local-mode 1)
+              (evil-normal-state)
+              (should roost-shown-mode)
+              (should (eq (key-binding "q") #'roost-quit-image))
+              (should (eq (key-binding "z") #'roost-enlarge-image))
+              (should (eq (key-binding "n") #'roost-next-image))
+              (should (eq (key-binding "p") #'roost-previous-image))))
+        (kill-buffer buffer))))))
+
+(ert-deftest roost-evil-images-shown-together-keep-their-keys ()
+  (roost-test--with-evil
+   (roost-test--isolated
+    (with-temp-buffer
+      (roost-shown-sheet-mode)
+      (evil-local-mode 1)
+      (evil-initialize-state)
+      (should (eq (key-binding "q") #'roost-quit-image))
+      (should (eq (key-binding "z") #'roost-enlarge-image))
+      (should (eq (key-binding (kbd "RET")) #'roost-enlarge-image))))))
+
+(ert-deftest roost-evil-a-page-an-agent-shows-keeps-its-keys ()
+  (roost-test--with-evil
+   (roost-test--isolated
+    (with-temp-buffer
+      (roost-shown-page-mode)
+      (evil-local-mode 1)
+      (evil-initialize-state)
+      (should (eq (key-binding "q") #'roost-quit-image))))))
+
+(ert-deftest roost-evil-a-stand-in-s-q-goes-back ()
+  ;; A stand-in whose session could not attach says "press q to go back".
+  ;; In Evil's normal state, which `special-mode' buffers start in without
+  ;; evil-collection, `q' records a macro.
+  (roost-test--with-evil
+   (roost-test--isolated
+    (roost-test--ghostel-backend)
+    (with-temp-buffer
+      (roost-ghostel-tmux-connecting-mode)
+      (evil-local-mode 1)
+      (evil-initialize-state)
+      (should (eq (key-binding "q") #'quit-window))))))
+
+(ert-deftest roost-magit-opened-beside-the-image-its-task-shows ()
+  ;; A task's agent shows an image beside its terminal; you review the
+  ;; task in Magit from the terminal.  Magit, by default, shows its status
+  ;; in another window: in a frame too narrow to split, the image's, sized
+  ;; for the image, and the image is gone from view.
+  (roost-test--with-magit-task
+    (let* ((key (roost--key task))
+           (buffer (generate-new-buffer "*roost image: budget*"))
+           terminal)
+      (unwind-protect
+          (cl-letf (((symbol-function 'roost--shown-size) (lambda (_buffer) '(30 . 4)))
+                    ((symbol-function 'roost--draw-shown) #'ignore)
+                    ((symbol-function 'roost--task-terminal-window)
+                     (lambda (shown) (and (equal (roost--key shown) key) (window-live-p terminal) terminal)))
+                    ((symbol-function 'message) #'ignore))
+            (with-current-buffer buffer (setq roost--shown-task key))
+            (delete-other-windows)
+            (setq terminal (selected-window))
+            (let ((window (roost--display-shown buffer terminal)))
+              (roost--in-task-frame task (lambda () (roost--magit-status-here task)))
+              (should (get-buffer-window (magit-get-mode-buffer 'magit-status-mode)))
+              (should (eq (window-buffer window) buffer))))
+        (kill-buffer buffer)))))
+
+(ert-deftest roost-perspective-a-pane-that-came-while-you-were-away-shows-in-its-perspective ()
+  ;; As `roost-ghostel-tmux-a-pane-that-came-while-you-were-away-shows-in-its-workspace',
+  ;; with perspective.el: you open a task, go to another task's perspective
+  ;; before the pane comes, and come back by perspective.el's own switch.
+  (roost-test--with-perspectives
+   (roost-test--ghostel-backend)
+   (let* ((roost-terminal-backend 'ghostel-tmux)
+          (mine (roost--cache-task nil (append '((session . "roost-notes-123456"))
+                                               (roost-test--task "1111111111111111"))))
+          (other (roost--cache-task nil (append '((session . "roost-b")) (roost-test--task "2222222222222222"))))
+          (before (generate-new-buffer "before"))
+          (pane (generate-new-buffer "pane"))
+          (controller (generate-new-buffer " controller"))
+          arrived)
+     (unwind-protect
+         (cl-letf (((symbol-function 'ghostel-tmux-controller)
+                    (lambda (&optional buffer) (and (eq (or buffer (current-buffer)) pane) controller)))
+                   ((symbol-function 'ghostel-tmux-controllers) (lambda () (list controller)))
+                   ((symbol-function 'ghostel-tmux-active-pane) (lambda (&rest _) (and arrived pane)))
+                   ((symbol-function 'ghostel-tmux-panes) (lambda (&rest _) (and arrived (list pane))))
+                   ((symbol-function 'ghostel-tmux-window-id) #'ignore)
+                   ((symbol-function 'ghostel-tmux-session-name) #'ignore)
+                   ((symbol-function 'ghostel-tmux-window-split) #'ignore)
+                   ((symbol-function 'ghostel-tmux-attach) (lambda (&rest _) controller)))
+           ;; As `roost--display-task' sets up.
+           (add-hook 'roost-ghostel-tmux-window-buffer-functions #'roost--gather-task-terminals)
+           (add-hook 'persp-switch-hook #'roost--gather-task-terminals)
+           (with-current-buffer controller
+             (setq roost-ghostel-tmux--place '(nil "main" "roost-notes-123456")))
+           (roost--activate-workspace mine)
+           (delete-other-windows)
+           (roost-ghostel-tmux-connect-or-switch nil "main" "roost-notes-123456")
+           (let ((stand-in (window-buffer)))
+             (should (string-match-p "Connecting to" (with-current-buffer stand-in (buffer-string))))
+             (roost--activate-workspace other)
+             (switch-to-buffer before)
+             (setq arrived t)
+             ;; ghostel-tmux makes the pane, in the background.
+             (with-current-buffer pane
+               (setq-local ghostel-tmux-pane-mode t)
+               (roost-ghostel-tmux--pane-made))
+             (with-current-buffer controller (run-hooks 'ghostel-tmux-attach-hook))
+             ;; It waits in the perspective you left.
+             (should (buffer-live-p stand-in))
+             (persp-switch (roost--perspective-name mine))
+             (should (eq (window-buffer) stand-in))
+             ;; As redisplay does once the perspective's windows are back.
+             (with-current-buffer (window-buffer)
+               (run-hook-with-args 'window-buffer-change-functions (selected-window)))
+             ;; In a moment, on a busy machine too.
+             (with-timeout (5)
+               (while (not (eq (window-buffer) pane)) (sleep-for 0.02)))
+             (should (eq (window-buffer) pane))
+             (should-not (buffer-live-p stand-in))
+             (should (memq pane (persp-get-buffers)))
+             ;; And not in the perspective you were in.
+             (should-not (memq pane (persp-get-buffers (roost--perspective-name other))))))
+       (remove-hook 'roost-ghostel-tmux-window-buffer-functions #'roost--gather-task-terminals)
+       (remove-hook 'persp-switch-hook #'roost--gather-task-terminals)
+       (roost--retired-workspace mine)
+       (roost--retired-workspace other)
+       (mapc (lambda (b) (when (buffer-live-p b) (kill-buffer b))) (list controller pane before))
+       (roost-test--kill-stand-ins)))))
+
+(ert-deftest roost-embark-region-action-starts-a-draft ()
+  ;; The manual puts `roost-new-task-from-region' on Embark's `T' for a
+  ;; region.  Through `embark-act', as you would.  (Not `-from-file': a
+  ;; file target reads its name in the minibuffer, which batch Emacs
+  ;; reads from stdin.)
+  (skip-unless (require 'embark nil t))
+  (roost-test--isolated
+   (let* ((default-directory "/tmp/")
+          (checkout (file-name-as-directory (file-truename (make-temp-file "roost-checkout" t))))
+          (transient-mark-mode t)
+          (embark-quit-after-action nil)
+          (embark-indicators nil)
+          (action nil)
+          (embark-prompter (lambda (&rest _) action))
+          (quoted (lambda ()
+                    (prog1 (with-current-buffer roost--compose-buffer
+                             (list (roost--compose-quoted-files) (roost--compose-prompt)))
+                      (kill-buffer roost--compose-buffer)))))
+     (make-directory (expand-file-name ".git" checkout))
+     (make-directory (expand-file-name "src" checkout))
+     (save-window-excursion
+       (unwind-protect
+           (with-temp-buffer
+             (switch-to-buffer (current-buffer))
+             (python-mode)
+             (insert "x = 1\ny = 2\n")
+             (setq buffer-file-name (expand-file-name "src/a.py" checkout))
+             (cl-letf (((symbol-function 'vc-root-dir) (lambda () checkout)))
+               (goto-char (point-min))
+               (set-mark (point-max))
+               (activate-mark)
+               (setq action #'roost-new-task-from-region)
+               (save-current-buffer (embark-act))
+               (should (get-buffer roost--compose-buffer))
+               (should (equal (car (funcall quoted)) '("src/a.py")))))
+         (delete-directory checkout t)
+         (when (get-buffer roost--compose-buffer) (kill-buffer roost--compose-buffer)))))))
+
+(ert-deftest roost-magit-from-an-image-that-fills-the-frame ()
+  ;; Enlarged, then Magit from it: Magit takes its window, and quitting
+  ;; Magit gives the image back, with its way back to your windows.
+  (roost-test--with-magit-task
+    (let* ((key (roost--key task))
+           (buffer (generate-new-buffer "*roost image: budget*"))
+           terminal)
+      (unwind-protect
+          (cl-letf (((symbol-function 'roost--shown-size) (lambda (_buffer) '(30 . 4)))
+                    ((symbol-function 'roost--draw-shown) #'ignore)
+                    ((symbol-function 'roost--task-terminal-window)
+                     (lambda (shown) (and (equal (roost--key shown) key) (window-live-p terminal) terminal)))
+                    ((symbol-function 'message) #'ignore))
+            (with-current-buffer buffer (setq roost--shown-task key))
+            (delete-other-windows)
+            (setq terminal (selected-window))
+            (let ((window (roost--display-shown buffer terminal)))
+              (roost-enlarge-image (list 'mouse-1 (list window 1 '(0 . 0) 0)))
+              (should (one-window-p))
+              (select-window window)
+              (roost--in-task-frame task (lambda () (roost--magit-status-here task)))
+              (with-current-buffer (magit-get-mode-buffer 'magit-status-mode)
+                (with-selected-window (get-buffer-window (current-buffer))
+                  (magit-mode-bury-buffer)))
+              (should (get-buffer-window buffer))
+              (select-window (get-buffer-window buffer))
+              (should (roost--shown-enlarged-p (selected-window)))
+              (with-current-buffer buffer (roost-quit-image))
+              (should (= (length (window-list)) 2))))
+        (kill-buffer buffer)))))
