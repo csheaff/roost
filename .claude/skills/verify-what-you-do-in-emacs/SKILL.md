@@ -8,7 +8,7 @@ description: >
   roost-compose-submit, roost--compose-what, roost--compose-words,
   roost--compose-made, roost--compose-listed, roost--task-made,
   roost--compose-agents, roost--attempt-field, roost--compose-offer,
-  roost-send-submit, roost--send-kept, roost--when-out-of-minibuffer, the
+  roost--compose-looked-p, roost-send-submit, roost--send-kept, roost--when-out-of-minibuffer, the
   questions-left-open quitting, or the helper's create, asking_for,
   made_for, make_task, attempt_of, made_from_other_words or send; when
   reviewing such a change; or when asked to verify the drafts, the creation
@@ -60,14 +60,9 @@ Each variant config's first lines say what it breaks.
 
 ## 1. Does your change touch this?
 
-The models were last checked against the code at the sync commit, `4508d8f`,
-with the changes that came with this line: several attempts, offers' and
-forks' drafts, and the words an attempt's request
-names, in `roost-compose-submit`, `roost--attempt-field` and
-`roost--compose-words`, and the helper's `attempt_of`, `make_task` and
-`made_from_other_words`, which keep the attempts of one draft to one
-wording, with what `create` says of it. This lists each covered definition
-that differs from it in your working tree:
+The models were last checked against the code at the sync commit, `047486f`:
+each covered definition was read there against its step. This lists each
+covered definition that differs from it in your working tree:
 
     python3 test/formal/what_you_do_in_emacs/changed.py
 
@@ -86,7 +81,7 @@ its `SYNC`; keep both in step with this table.
 | `roost--compose-listed` | `Poll` | only when not submitting and the ID is listed, which is the draft's own task's; compares with what the ID first asked |
 | `roost--task-made`, `roost--create-task` | `TaskMade`, `Reply` | says "Roost created" at once; the rest waits for the minibuffer; `alreadyMade` compares with `first`, whichever task comes back: another attempt's, made from other words, comes only to an ID that asked for different things, whose `first` is Unknown, so the draft stays and names it. The reply to another attempt changes nothing of the draft, made, found or failed, so it is no step |
 | failure lambda in `roost-compose-submit` | `Reply` (refused), `NoReply` | clears the flag (`FailureClearsFlag`) |
-| `roost--compose-offer` | `OpenOffer`, `Init` | leaves a draft that holds a prompt, a note or a request, and the offer waits (`OfferKeepsDraft`); otherwise, as over one that holds nothing or only another waiting offer's brief as it came (`roost--compose-looked-p`), the offer's draft is a new buffer, with no ID. Its own draft, left open, shows again as it is, which is no step |
+| `roost--compose-offer`, `roost--compose-looked-p`, `roost--compose-offer-waiting` | `OpenOffer`, `Looked`, `Init` | leaves a draft that holds a prompt, a note or a request, and the offer waits (`OfferKeepsDraft`). One you only looked at, its own offer's or another's (`Looked`: its offer waits, it says what it did as it opened, it is not being created and its header says nothing of a request, `LookedSaysNothing`), gives way to a new buffer with no ID, flag or note; a request or a held closure of the old buffer's finds it dead. Its own draft, changed, shows again as it is, which is no step. A draft that holds no prompt gives way too, which no step has: here a draft always holds one |
 | `roost--when-out-of-minibuffer`, `roost--close-buffer` | `held`, `EndQuestion`, `Timer` | held closures run in order, from `run-at-time 0` timers, all before the next input or reply |
 | `roost--quit-questions-left-open`, `roost--quit-questions-here` | `Submit` with `mini` | the THEN timer is queued before quitting |
 | helper `create`, `asking_for`, `made_for`, `make_task`, `attempt_of` | `HostTake` | one ID's look and make are one step under its lock (`HostLock`), and an attempt's ID is its own; a failure records nothing, as a wrong `attempt`, or a fork whose task's conversation can't go on |
@@ -101,7 +96,7 @@ its `SYNC`; keep both in step with this table.
 
     python3 test/formal/check.py what_you_do_in_emacs
 
-About 40 seconds. `make formal` runs every model. Java and TLC 1.7.4 come
+About a minute. `make formal` runs every model. Java and TLC 1.7.4 come
 from mise. Each `Name.cfg` must pass; each `Name.VARIANT.cfg` must fail on the
 rule its first line names. All `ok` is the result to keep.
 
@@ -156,13 +151,15 @@ run, and see `PromptDraft.cfg` fail on `PromptOnce`. Then drop both.
 ## What it covers, and doesn't
 
 Bounds. NewTaskDraft: one attempt, two projects, three versions of what the
-draft says, three asks, two closures held at once, one host, one draft.
+draft says, three asks, two closures held at once, one host, one draft at a
+time, your own or an offer's that gives way to another (4.5 million states).
 NewTaskAttempts: two attempts, two projects, two versions, two asks, two
 held. PromptDraft: three pieces written, three asks, one send from
 elsewhere, `IdsKept` 4, so the window never fills within the bound. Each
 passed at larger bounds too (NewTaskDraft 3 projects, 4 versions, 4 asks, 3
 held, with `SubmitQuitsQuestion` and `EditBack` off: 4.9 million states,
-2.4 minutes; PromptDraft 4 pieces, 4 asks, 2
+2.4 minutes, before an offer's draft was a step, and not run again since;
+PromptDraft 4 pieces, 4 asks, 2
 others, 8 kept: 31.8 million states, 13 minutes; NewTaskAttempts 3
 projects, 3 versions, 2 asks, 3 held: 3.1 million states, 2.1 minutes, and
 with three asks of a draft that says one thing, 2 projects, 1 held: 2.1
@@ -184,7 +181,11 @@ paste and record), off in `PromptDraft.cfg`.
 What the draft says is one value, a version of its prompt and fields. So
 `C-c C-x`, `C-c C-f` and the task an offer's draft shows under are edits
 like any other, and an offer's draft moved to another project is a move and
-an edit. How many attempts a draft makes is the same at each ask.
+an edit. How many attempts a draft makes is the same at each ask, so only a
+draft that makes one is an offer's you only looked at: an offer's opens
+making one, and how many it makes is among what it says. An offer's draft
+that gives way opens anew with the words it had, in either project; other
+words are an edit away.
 
 Left out: the setup command's question, the Org link, which task opens after
 (`roost--you-stay`), `roost--compose-tied`, notes and attachments in a prompt
@@ -196,12 +197,17 @@ after a request went and before the command returns, a few forms; a draft
 that changes how many attempts it makes between asks; the offer itself, which
 waits while its draft is open and which a task made from it takes (`take_offer`,
 `taken_offers`: "Offers" in `docs/state-machines.md`, and
-`verify-emacs-and-hosts`); Do it here asked again, whose send ID is the
-task's and the offer's, the same each time; and a conversation
+`verify-emacs-and-hosts`), so also an offer that goes while its draft is
+open, which leaves a draft of your own, and Dismiss offer, a C-c C-k that
+takes the offer; a draft that holds no prompt, only a name or fields, which
+an offer's draft and C-c C-k replace without asking; Do it here asked again,
+whose send ID is the task's and the offer's, the same each time, though its
+agent offers the same title again meanwhile; an attachment, an image and a
+page shown, which no model here has; and a conversation
 (`roost-new-conversation`), which has no draft and no creation ID, so that
 `C` again after no reply can start a second.
 
-## Findings at 4508d8f, with what came with this line
+## Findings, as of 047486f
 
 Each is a config here that fails as named.
 
@@ -244,6 +250,11 @@ Each is a config here that fails as named.
    3. You add a line and C-c C-c: another text, ID2. The agent gets P, then
       P and the line. Rests on sshd leaving the helper running, which
       Checked and found sound lists as not proved.
+
+Not a finding, a check added at 047486f: `NewTaskDraft.looked-with-a-note.cfg`
+breaks `roost--compose-looked-p` to take a draft that got no reply for one
+you only looked at, and fails on `AtMostOnce`: RET on its offer starts it
+anew with no ID, and C-c C-c makes a second task.
 
 Known and kept as a config: `PromptDraft.known-kill-after-paste.cfg`, the
 send ID's I1 ("a kill between the two pastes again"); and

@@ -2590,7 +2590,8 @@ Invariants:
   its own, a new buffer, only where the draft holds no prompt, or the brief of an offer
   that waits still, as it came, and says nothing of a request and waits on none.
   Opening an offer takes nothing: it waits until its task is made. (`roost--compose-offer`,
-  `roost--compose-looked-p`.)
+  `roost--compose-looked-p`; `NewTaskDraft.looked-with-a-note.cfg` breaks the second,
+  and a draft that got no reply then asks again under a new ID.)
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
