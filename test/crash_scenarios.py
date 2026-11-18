@@ -588,7 +588,9 @@ class CreateFromOfferFailing(CreateFromOffer):
         waiting = [other.get("id") for other in (box.record(self.parent["id"]) or {}).get("offers") or []]
         if not started and self.offer not in waiting:
             self.went = "no task started from its offer, which waits no more"
-        self.hook.unlink()
+        # Asked more than once, as after a stale lock is cleared.
+        if self.hook.exists():
+            self.hook.unlink()
         return super().again(box)
 
     def holds(self, box, problems):

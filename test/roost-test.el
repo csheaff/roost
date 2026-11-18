@@ -16020,6 +16020,14 @@ it of the same ID's, or nil for the first."
                  (should (string-match-p "Already creating Fix add"
                                          (cadr (should-error (roost-offer-here) :type 'user-error))))
                  (should-not sent)
+                 ;; Nor once the draft is moved to another project meanwhile,
+                 ;; which makes it no draft of the offer: the request is out.
+                 (with-current-buffer roost--compose-buffer
+                   (roost--compose-move "/tmp/roost-elsewhere/")
+                   (should-not (plist-get roost--compose-fields :offer)))
+                 (should (string-match-p "Already creating Fix add"
+                                         (cadr (should-error (roost-offer-here) :type 'user-error))))
+                 (should-not sent)
                  ;; Another offer of its agent's can.
                  (roost--cache-task "dev" (append `((name . "budget") (repo . "/srv/ledger") (live . t)
                                                     (integrationBranch . "main")

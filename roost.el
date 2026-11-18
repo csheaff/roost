@@ -3904,7 +3904,9 @@ Nil too on another host, where reading it would hold up the draft."
           (cons directory (and directory (roost--checkout-branch directory)))))
   (cdr roost--compose-checkout-branch))
 (defvar-local roost--compose-submitting nil
-  "Non-nil while the drafted task is being created.")
+  "Non-nil while the drafted task is being created.
+(PARENT OFFER) while that makes a task of an agent's offer: the key of
+the task that offered it and the offer's ID, as the request went.")
 
 (defvar-local roost--compose-asked nil
   "The project directory and the ID the draft last asked to create its task with.
@@ -5080,7 +5082,11 @@ One of the others that fails says so, and the draft goes on."
            (sent nil)
            ;; The project's setup command is read for each, and asked about once.
            (roost--project-values (list t)))
-      (setq roost--compose-submitting t
+      ;; With the offer it makes a task of, which changing the draft's
+      ;; project meanwhile takes from its fields: `roost-offer-here'.
+      (setq roost--compose-submitting (or (and (plist-get fields :parent) (plist-get fields :offer)
+                                               (list (plist-get fields :parent) (plist-get fields :offer)))
+                                          t)
             roost--draft-note (if others
                                   (format " Creating %s and %d more…" name (length others))
                                 (format " Creating %s…" name)))
@@ -13320,9 +13326,8 @@ title is all it needs.  Not while its draft is creating its task."
     ;; Its draft's Create is on its way, and makes a task of it.
     (when-let* ((draft (get-buffer roost--compose-buffer))
                 ((with-current-buffer draft
-                   (and roost--compose-submitting
-                        (equal (plist-get roost--compose-fields :parent) (roost--key task))
-                        (equal (plist-get roost--compose-fields :offer) (alist-get 'id offer))))))
+                   (equal roost--compose-submitting
+                          (list (roost--key task) (alist-get 'id offer))))))
       (user-error "Already creating %s as a task of its own" (alist-get 'title offer)))
     (roost--send-text task (format "Do this task here: “%s”" (alist-get 'title offer))
                       (lambda (_task) (roost--take-offer task offer))
