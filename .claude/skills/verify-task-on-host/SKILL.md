@@ -117,8 +117,14 @@ A conversation is a task in a repository Roost keeps (`conversation_repository`)
 with a worktree and a branch there, and finishes as any task. `retarget`
 refuses one, so the model's runs with no retarget are its runs.
 
-Last confirmed against the code at commit `047486f`. Since `ec689c7`, the
-commit before it that this was confirmed at, nothing in the table changed
+Last confirmed against the code at commit `951ce59`, with the change that
+came after it: `stop` ends what its agent and shell left running
+(`end_left_running`), `remove_worktrees` checks a worktree with submodules
+again last before `--force`, and `discard` counts its losses again after
+`stop`. Each makes the code do what `Stop`, `RemoveBegin` and `Start`
+already took it to do, so no step changed. Between `047486f` and `951ce59`
+nothing in the table changed. Since `ec689c7`, the
+commit before `047486f` that this was confirmed at, nothing in the table changed
 but `owned_pane`, which takes a dead pane that names no process for the
 task's; what came in was beside it: `x` sending `stop` before `retire`
 (`roost-retire`), hence `YouStop` and `YouResume`, and the record's new
@@ -193,17 +199,18 @@ IDs a request names, and a second task but for the one this was
 forked from: its branch, and its going, where its discard told you it
 would lose nothing. One that told you of the commit, as when this task's
 worktree was going by then, is left out: you chose. `discard` counts its
-losses and stops the agent in one step: an agent's write in the moment
-between them is lost untold, as stopping first would stop an agent you
-didn't agree to stop. Likewise
+losses and stops the agent in one step: the code counts them again once
+`stop` is done, and refuses then, the agent stopped, which is at least as
+strong. Likewise
 `remove_agent_worktrees` reads what x holds, checks its stamp and removes
 it a few Git calls apart, and the model takes those as one step, as it does
 `require_clean` and the removal of the task's worktree: what is written
 there in those milliseconds is lost. `stop` ends the agent's writing in the
-task's worktree: a process it left running that outlives its pane, as the
-background work `x` now stops an agent with, writes into those same
-milliseconds and no others, as `require_clean` and Git's own refusal come
-after the stop. And what you delete by hand is yours:
+task's worktree: it closes the agent's and shell's panes, then ends what
+they left running (`end_left_running`): what is in their panes' sessions,
+and what has the task's `ROOST_TASK_ID`, as each command Claude Code runs
+in a session of its own. Only a process it can't find that way, or yours
+outside the task, writes into those milliseconds. And what you delete by hand is yours:
 a branch you delete with Git while a request counts on it for the task's
 commits, as the agent's worktree's once its agent switched it to another.
 

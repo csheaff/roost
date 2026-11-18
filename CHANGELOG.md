@@ -4,6 +4,14 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Retiring or discarding a task no longer deletes a file that something its
+  agent left running wrote as the worktree went, as a dev server started
+  with `nohup` does. Stopping a task now ends what its agent and its shell
+  left running, and retiring a worktree with submodules checks it once more
+  just before Git removes it; discarding counts again once the agent
+  is stopped, and refuses if there is more than it told you. When
+  upgrading: a server you started from a task's agent or shell stops with
+  the task; start it outside the task to keep it running.
 - A terminal that cannot attach its task's tmux session says so. When the
   session went as you opened the task, or the connection dropped as it
   attached, the window said "Connecting to" the session for good. It now

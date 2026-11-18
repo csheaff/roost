@@ -551,8 +551,8 @@ What each step leaves if it stops there, and what asking again does.
 | 5 | `check_worktree`, clean, submodules, Git lock, agent work | registry | refused, nothing changed |
 | 6 | branch moved from `expect`, then merge, into `integrationBranch` as the record has it then; the record read again after, with `require_finished`, `require_clean` and `require_offers_named` again | registry, released while Git merges | see next machine; a second merge finds it there. Refused after: merged, and not retired |
 | 7 | `safe_to_delete`, by `integrationBranch` and `startCommit` as the record has them now; save `retiringCommit` | registry | |
-| 8 | `stop` | registry | task stopped; agent's window gone |
-| 9 | `remove_worktrees` | released | worktree partly gone; `put_back_removed` restores it |
+| 8 | `stop`: the agent's and shell's panes closed, then what they left running ended, as a server started with nohup: what is still in their panes' sessions, and what has the task's `ROOST_TASK_ID`, as Claude Code's commands each run in a session of their own (`end_left_running`) | registry | task stopped; agent's window gone, nothing it started still running |
+| 9 | `remove_worktrees`: teardown, `require_clean`, submodules, and with submodules, which only `--force` removes, both again just before Git | released | worktree partly gone; `put_back_removed` restores it |
 | 10 | staging folder, `unregister_gone`, `delete_branch` | registry | branch still there, `check_worktree` finds no folder and goes on |
 | 11 | `Store.remove` | registry | record gone; attachments, what its agent showed and a page it was writing first, so a kill between keeps the record |
 | 12 | `delete_remote_branch` | none | remote branch stays; nothing else depends on it |
@@ -560,7 +560,8 @@ What each step leaves if it stops there, and what asking again does.
 `discard`: steps 2, 4, then `check_worktree(branch=False)`; the dry run stops
 there. Then `expect` against the branch, `told` against `discard_losses` counted
 again, `offers` against the offers the record holds (`require_offers_named`),
-`stop`, removal with force, branch, record. No checkpoint: `expect`, `told` and
+`stop`, `told` counted once more, now that nothing the agent left running writes
+there (refused then with the agent stopped), removal with force, branch, record. No checkpoint: `expect`, `told` and
 `offers` are the guards, and a retry asks Emacs for a new dry run.
 
 `forget`: step 2, then no live pane, `require_offers_named`, the window closed and
@@ -568,8 +569,16 @@ again, `offers` against the offers the record holds (`require_offers_named`),
 
 Invariants:
 - I1. No uncommitted work and no unmerged commit is lost by retire: checked
-  before the agent stops (`require_clean`), again after (`remove_worktrees`), and
-  the branch is deleted only at the commit verified. Holds, fuzzed against
+  before the agent stops (`require_clean`), again after (`remove_worktrees`),
+  by Git itself as it removes the worktree, or, with submodules, which Git
+  removes only with `--force`, by Roost again just before, and the branch is
+  deleted only at the commit verified. `stop` ends what the agent and the
+  task's shell left running first, so nothing they started writes after that
+  last check, but for a process whose environment the host hides (macOS hides
+  Apple's own programs') that left the pane's session, or one that cleared its
+  environment. Such a process, or yours outside the task, can still write as
+  Git deletes the worktree, and a file it writes into a folder Git has yet to
+  reach goes. Holds, fuzzed against
   commits landing throughout. What keeps that commit is a branch that stays: the
   branch it merges into, wherever `retarget` has put that, or, for a task that never
   committed, any other. Not one that is going: the branch of a worktree its agent
@@ -875,7 +884,7 @@ Invariants:
 | --- | --- | --- | --- | --- | --- |
 | (none) | create | | `starting` | record saved, then spawned, under one lock | `make_task` |
 | any | resume | pane not live; no agent elsewhere; worktree there | `starting` | new `runId`, `error` None, request forgotten; `lastEvent`, `exitCode`, `statusBeforeCrash` left as they were | `resume`, `spawn` |
-| any but `retired` | stop | | `stopped` | agent's pane and shell closed if owned; `paneId`, `windowId` None; seen carried over | `stop` |
+| any but `retired` | stop | | `stopped` | agent's pane and shell closed if owned, and what they left running ended; `paneId`, `windowId` None; seen carried over | `stop` |
 | not `stopped`/`retired`, this run | agent's process ended | | `exited` if code 0, else `failed` | `exitCode`, `error`, `endedRun`; after `finish()` | `runner` |
 | same | setup, copy or submodules failed | | `failed` | `error` is the reason; pane shows it | `runner` |
 | not `ENDED` | poll: pane not live | tmux answered | `crashed` | `statusBeforeCrash`, `seenBeforeCrash` | `list_tasks` |
