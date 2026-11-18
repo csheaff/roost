@@ -875,7 +875,12 @@ Invariants:
 | `permission` | `PreToolUse` | from the agent that asked | `running` | same | request cleared: it went on, as when what it asked for failed |
 | `permission` | `PreToolUse`, `PostToolUse` | named by a notification, not an MCP question's; the main agent's | `running` | same | request cleared |
 | `permission` | `PreToolUse`, `PostToolUse` | any other | unchanged | unchanged | `tool_answers` |
+| `permission` | `PostToolUseFailure` | not `is_interrupt`; from the agent that asked, of the tool it asked for | `running` | same | request cleared: what it asked for failed, and the turn goes on |
+| `permission` | `SubagentStop` | of the subagent that asked | `running` | same | request cleared |
+| `permission` | `PostToolUseFailure`, `SubagentStop` | any other; a tool you stopped (`is_interrupt`), which the transcript records for the poll | unchanged | unchanged | `claude_answers` |
+| not `permission` | `PostToolUseFailure`, `SubagentStop` | | unchanged | unchanged | nothing at all |
 | any | `PermissionRequest` | | `permission` | same | `request`, `requestCommand` |
+| `permission` | `Stop`, `UserPromptSubmit` | a subagent's request, or overlapping ones with `beside`; the `Stop` leaves work or doesn't say, the prompt is Claude's own | unchanged | unchanged | [A task's request](#a-tasks-request), I6 |
 | any | `Stop` | `background_tasks` or `session_crons` | `background` | `Stop` | `lastReply` |
 | any | `Stop` | else | `ready` | `Stop` | `lastReply` |
 | any | `StopFailure` | | `failed` | same | `error`, `lastReply` |
@@ -889,7 +894,9 @@ Claude waits for a hook before it goes on, and the captures show `PreToolUse`,
 `PermissionRequest`, `PostToolUse` in order. Whether it waits for `Notification`,
 which comes on a timer, isn't established. Subagents' tool events come through
 the same hooks, beside the main agent's, with `agent_id`, which the main agent's
-lack; no capture has one yet. As a request waits, a tool called together with
+lack; no capture has one yet. `claude-2.1.322` has the `SubagentStop` of an agent
+Claude started itself, a second after a turn's end: nobody's request, so it
+ends none. As a request waits, a tool called together with
 the one that asked may still end, and is left out by its arguments: a tool's end
 agrees with the request on each argument both name, as a question's end adds its
 answers, and Codex's leaves out a `description`. A next `PreToolUse` from that
@@ -988,7 +995,8 @@ plugin folds into these.
 A report with an `id` is a subagent's, and left out. A report read before `hookAt`
 is dropped first; every hook of an agent that waits for its hooks (Claude, Codex:
 `waits_for_hooks`) that records a status sets that: any of Codex's, a relayed
-Claude's `failed` or `background`, and its `SessionStart` with `source=clear`. Pi
+Claude's `failed` or `background`, its `SessionStart` with `source=clear`, and
+any of Claude's before its run's first report is recorded. Pi
 and OpenCode may send a hook late, so theirs set none. Conditions are tried in this order:
 
 | From | State | Guard | To | `lastEvent` |
@@ -1059,6 +1067,7 @@ Is the outcome the same in any order? Replayed: each capture in
 | --- | --- | --- |
 | Report later than following hooks (the queue waits for the lock) | Yes | Same end, each step, for all relayed captures: Claude's hooks hold only other fields, and `hookAt` drops the old report, from Codex's hooks and from Claude's `StopFailure` or `Stop` with work left |
 | Report later than another report | No: one queue | |
+| Report read before a hook that says less than it: `working`, then `SessionStart`, on a task's prompt | Yes: Claude 2.1.303 and Codex 0.163.0, relayed, in their captures | Codex: same end. Claude: `ready` for its first turn, if that hook has the lock before the recorder. STATUS-13 |
 | Hook later than the agent's next event | Not for an awaited hook of one agent | Different, and stays so until the next event, for `Stop`, `PermissionRequest` |
 | `PermissionRequest` and another agent's tool event, unrelayed | Yes, with subagents | `permission`, either way |
 
@@ -1075,10 +1084,13 @@ Disagreements, and who wins:
 | `SessionEnd` as tmux goes, relayed or not | Poll: `crashed` | Yes |
 | Hook after the runner's end | Runner: the hook keeps only what it says beside the status | Yes |
 | Claude's `SessionStart` with `source=clear`, report `idle`, either order | Hook: `ready`, `SessionStart` | Yes |
+| Claude's `SessionStart` before its run's first report is recorded, then a `working` read before that hook | Hook: `ready`, as `hookAt` drops the report; once that is recorded the run is relayed, so its `UserPromptSubmit` counts for nothing | No: it works, and reads `ready` until its next report. STATUS-13, `AgentStatus.WorkBeforeStart.cfg` |
 | Poll `crashed`, then a hook of a live agent | Hook, and `statusBeforeCrash` goes stale, unused | Yes |
 | Poll `crashed`, then relayed `done` | Neither: the report changes nothing, and recovery brings back `running` | Would be wrong, but needs a false `crashed`, and none is known since the C locale fix |
 
-Open: STATUS-3.
+Open: STATUS-3. STATUS-13, found by `AgentStatus.tla` on 2026-11-17: since #245
+a relayed Claude that reports its work before its `SessionStart` hook reads
+`ready` through its first turn.
 
 ### A task's request
 

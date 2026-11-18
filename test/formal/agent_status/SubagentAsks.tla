@@ -72,8 +72,10 @@ Outlasts ==
   \/ call \in Subs /\ Break # "sub_ends_with_turn"
   \/ call = "several" /\ beside /\ Break \notin {"several_end_with_turn", "sub_ends_with_turn"}
 
+\* Broken: `any_end_answers` takes any agent's end for the end of what was
+\* asked, whoever asked it.
 Answers(e, w, same) ==
-  IF e = "SubagentStop" THEN call \in Subs /\ w = call
+  IF e = "SubagentStop" THEN Break = "any_end_answers" \/ (call \in Subs /\ w = call)
   ELSE IF Outlasts /\ e = "Stop" THEN says /\ Left = {}
   ELSE IF Outlasts /\ e \in {"UserPromptSubmit", "SelfPrompt"} THEN e = "UserPromptSubmit"
   ELSE ToolAnswers(e, w, same)
@@ -173,6 +175,13 @@ SubEnds(w) ==       \* at work, or refused what it asked
   /\ sub' = [sub EXCEPT ![w] = "none"] /\ UNCHANGED lead
   /\ Hook("SubagentStop", w, FALSE)
 
+\* An agent of Claude's own ends, one no tool of the lead's started and no
+\* Stop lists as left, as the one that ends a second after a turn in
+\* test/captures/claude-2.1.322.jsonl: a SubagentStop of nobody here.
+StrangerEnds ==
+  /\ Step /\ UNCHANGED <<lead, sub>>
+  /\ Hook("SubagentStop", "stranger", FALSE)
+
 LeadEnds ==         \* its turn ends, whatever its subagents do
   /\ steps < MaxSteps /\ steps' = steps + 1 /\ ended' = TRUE /\ UNCHANGED says
   /\ lead = "working"
@@ -182,7 +191,7 @@ LeadEnds ==         \* its turn ends, whatever its subagents do
 Rest == steps = MaxSteps /\ UNCHANGED vars     \* the bound, not a deadlock
 
 Next ==
-  \/ Prompt \/ SelfPrompt \/ LeadAsks \/ Note \/ LeadEnds \/ Rest
+  \/ Prompt \/ SelfPrompt \/ LeadAsks \/ Note \/ LeadEnds \/ StrangerEnds \/ Rest
   \/ \E e \in {"PreToolUse", "PostToolUse", "PostToolUseFailure"} :
        LeadTool(e) \/ LeadAnswered(e) \/ \E w \in Subs : SubTool(w, e) \/ SubAnswered(w, e)
   \/ \E w \in Subs : Start(w) \/ SubAsks(w) \/ SubEnds(w)
