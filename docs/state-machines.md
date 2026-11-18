@@ -183,6 +183,7 @@ code before it was fixed.
 | Finding | Sev | What goes wrong | Machine | Status |
 | --- | --- | --- | --- | --- |
 | STATUS-13 | S3 | A relayed Claude that reports its work before its `SessionStart` hook, as 2.1.303 does on a task's prompt, reads `ready` through its first turn, so a send goes through unasked. Since #245 | [Who wins](#who-wins-hooks-reports-poll-runner) | Fixed, `test_a_claude_that_reports_its_work_before_its_session_start_hook_reads_running` |
+| VIEWS-16 | S3 | An offer's draft that got no reply, asked again and quit at the question about the setup command, reads as one you only looked at: `RET` on its offer starts it anew, and `C-c C-c` makes a second task | [The new task draft](#the-new-task-draft) | Fixed, `roost-an-offers-draft-that-asked-keeps-its-creation-id` |
 | REQUESTS-10 | S4 | A reply read before the task's agent showed an image or a page, as one to opening the task, and arriving after the list that read it since takes the task back to what it showed before, or to nothing: the panel drops or misnames its Image or Page line, and `roost-show-image` says it has shown none, until the next list (found 2026-11-17) | [Cached task](#cached-task) | Fixed, `roost-a-reply-from-before-an-image-was-shown-keeps-what-the-task-shows` |
 
 ## A task on its host
@@ -2598,8 +2599,11 @@ Invariants:
   its own, a new buffer, only where the draft holds no prompt, or the brief of an offer
   that waits still, as it came, and says nothing of a request and waits on none.
   Opening an offer takes nothing: it waits until its task is made. (`roost--compose-offer`,
-  `roost--compose-looked-p`; `NewTaskDraft.looked-with-a-note.cfg` breaks the second,
-  and a draft that got no reply then asks again under a new ID.)
+  `roost--compose-looked-p`.) Nor is one that has asked for its task one you only
+  looked at, though its header no longer says so, as once you quit asking again at
+  the question about the setup command: its ID is what finds the task its host may
+  have made. (`roost-an-offers-draft-that-asked-keeps-its-creation-id`;
+  `NewTaskDraft.looked-with-an-id.cfg` undoes it.)
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
@@ -2607,11 +2611,11 @@ Invariants:
 | Editing | `roost--compose` | prompt empty, or fork | Editing | fields replaced | `roost--compose` |
 | Editing | `roost--compose` | prompt written | Editing | fields kept; a seed is dropped, and a DIRECTORY with it | `roost--compose` |
 | Editing | `roost--compose`, a DIRECTORY and no seed, as a click on a project | prompt written | Editing | moves there, or says why it stays | `roost--compose`, `roost--compose-tied` |
-| Absent, Editing | `RET` on an offer | no prompt, or another waiting offer's brief as it came; no note, not submitting | Editing | a new buffer, with the offer's title, brief and task; the offer waits | `roost--compose-offer`, `roost--compose-looked-p` |
-| Editing | `RET` on the offer the draft opened | you changed the draft | Editing | the draft shows as you left it | `roost--compose-offer` |
-| Editing | `RET` on the offer the draft opened | the draft is as it opened | Editing | a new buffer, from the offer as it is now: its agent may have offered it again, with another brief or project | `roost--compose-offer`, `roost--compose-looked-p` |
+| Absent, Editing | `RET` on an offer | no prompt, or another waiting offer's brief as it came and no ID asked with; no note, not submitting | Editing | a new buffer, with the offer's title, brief and task; the offer waits | `roost--compose-offer`, `roost--compose-looked-p` |
+| Editing | `RET` on the offer the draft opened | you changed the draft, or it has asked for its task | Editing | the draft shows as you left it | `roost--compose-offer` |
+| Editing | `RET` on the offer the draft opened | the draft is as it opened, and has asked for nothing | Editing | a new buffer, from the offer as it is now: its agent may have offered it again, with another brief or project | `roost--compose-offer`, `roost--compose-looked-p` |
 | any but Absent | `RET` on another offer | a prompt of yours, a note, or submitting | same | user-error; the offer waits | `roost--compose-offer` |
-| Editing | Dismiss offer | its offer waits; its brief as it came, or yes | Absent | `quit-window t`; the offer is taken | `roost-compose-dismiss-offer`, `roost--take-offer` |
+| Editing | Dismiss offer | its offer waits; its brief as it came with no ID asked with, or yes | Absent | `quit-window t`; the offer is taken | `roost-compose-dismiss-offer`, `roost--take-offer` |
 | Editing | edit | | Editing | idle timer redraws fields | `roost--compose-changed` |
 | Editing | `C-c C-x` | | Editing | how many tasks it makes, and by which agents | `roost-compose-set-attempts` |
 | Editing | `C-c C-f` | a fork | Editing | goes on with its task's conversation, or starts a new one | `roost-compose-set-conversation` |
@@ -2623,7 +2627,7 @@ Invariants:
 | Editing | `C-c C-c` | | Creating | ID kept or made, request | `roost-compose-submit` |
 | Editing | `C-c C-c` | several attempts | Creating | a request for each, the draft's own last, each other with the ID and its number | `roost-compose-submit` |
 | Asking | answered | | Creating | request | `roost--create-task` |
-| Asking | `C-g` or error | | Editing | flag and note cleared; the ID as it was | `condition-case` in `roost-compose-submit` |
+| Asking | `C-g` or error | | Editing | flag and note cleared; the ID as it was, one that asked before too | `condition-case` in `roost-compose-submit` |
 | Creating | `C-g` or error between its requests | an attempt went | Editing | flag and note cleared; the ID as it asked | `condition-case` in `roost-compose-submit` |
 | Creating | another attempt's reply | | Creating | says it was made, or why not; nothing opens, and the draft is as it was | `roost--task-made`, `roost--create-task` |
 | Creating | `C-c C-c` | | Creating | user-error "Already creating" | `roost-compose-submit` |
@@ -2641,7 +2645,7 @@ Invariants:
 | Refused, NoReply | `C-c C-c` | project changed | Creating | new ID | `roost-compose-submit` |
 | Refused, NoReply | poll lists the ID | says what it asked each time with that ID | Absent | closes; opens if you are in it | `roost--compose-listed` |
 | Refused, NoReply | poll lists the ID | says otherwise now, its project too | Editing | note says what was made; ID forgotten | `roost--compose-listed`, `roost--compose-made` |
-| any | `C-c C-k` | prompt empty, a waiting offer's brief as it came, or yes | Absent | `quit-window t` | `roost-compose-cancel` |
+| any | `C-c C-k` | prompt empty, a waiting offer's brief as it came with no ID asked with, or yes | Absent | `quit-window t` | `roost-compose-cancel` |
 
 Illegal or refused: `C-c C-c` in Creating, and an offer opened over a draft that holds
 anything of yours. While busy the header has no buttons, so a
@@ -2651,11 +2655,7 @@ Creating and text typed there; neither is refused.
 A conversation (`roost-new-conversation`) has no draft and no creation ID: each `C`
 asks for one, so `C` again after no reply can start a second.
 
-Open: an offer's draft that got no reply, asked again and quit before any request
-went (as at the question about the setup command) has no note and keeps its ID, so it
-reads as one you only looked at (I7): `RET` on its offer starts it anew with no ID, and
-`C-c C-c` then makes a second task beside the one the first request made
-(`NewTaskDraft.finding-quit-then-offer.cfg`). [The creation ID](#the-creation-id) has one, of a draft that named
+Open: none here. [The creation ID](#the-creation-id) has one, of a draft that named
 another attempt.
 
 ### The creation ID

@@ -20,6 +20,12 @@ What each release changes, and what to do when upgrading. Newest first.
   read it since. The panel dropped its Image or Page line, or named the one
   before, and `roost-show-image` said the task had shown no image, until
   the next list. Nothing to do when upgrading.
+- An offer's draft that has asked for its task stays yours until the task is
+  made. Before, one that got no reply, asked again and quit at the question
+  about the project's setup command read as an offer you had only looked at:
+  `RET` on the offer opened it anew, and Create then made a second task
+  beside the first; `C-c C-k` and Dismiss offer closed it without asking.
+  Nothing to do when upgrading.
 - With `roost-program-status` on, a Claude Code task started on a prompt
   could read `ready` through its whole first turn, so a prompt sent to it
   went through unasked. It reads `running` now. Nothing to do when
