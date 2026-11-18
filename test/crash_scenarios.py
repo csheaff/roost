@@ -181,6 +181,24 @@ class DiscardDirty(Discard):
         super().prepare(box)
 
 
+class DiscardWritingPage(Discard):
+    """A Pi task discarded as its model wrote a page: what it kept of the
+    page for an Emacs on its machine goes with the task (`way_out`)."""
+
+    def prepare(self, box):
+        folder = box.state / "live"
+        folder.mkdir(exist_ok=True)
+        for kept in (".json", ".json.part"):
+            (folder / (self.task["id"] + kept)).write_text('{"id": "1", "code": "<p>so far</p>"}')
+        super().prepare(box)
+
+    def holds(self, box, problems):
+        super().holds(box, problems)
+        kept = sorted(path.name for path in (box.state / "live").glob(self.task["id"] + "*"))
+        if self.final and self.final.get("ok") and kept:
+            problems.append("said discarded, and the page it was writing stays: %s" % kept)
+
+
 class Forget(Scenario):
     action = "forget"
     leaves = True
@@ -602,7 +620,8 @@ class CreateConversation(Create):
 
 
 ALL = [Merge, MergeSquash, MergeAway, SquashAway, MergeTeardown, MergeSubmodule, MergeAgentWorktree, Retire, RetireMerged,
-       RetireDead, RetireSquashedOnGitHub, Update, UpdateConflict, Discard, DiscardDirty, DiscardTeardown, Forget, Rename,
+       RetireDead, RetireSquashedOnGitHub, Update, UpdateConflict, Discard, DiscardDirty, DiscardTeardown, DiscardWritingPage,
+       Forget, Rename,
        Retarget,
        Stop, Resume, Seen, Turn, Send, Leave, Tell, Shell, Attach, Inspect, Look, PullRequest, PullRequestPush, Create, CreateFromRemote,
        Propose, Show, ShowSeveral, ShowPage, TakeOffer, CreateFromOffer, CreateFork, CreateConversation]

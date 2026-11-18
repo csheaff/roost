@@ -534,6 +534,10 @@ def way_out(box, scenario, outcome):
         folders = [path.name for path in (box.state / "worktrees").glob("*/*") if path.is_dir()]
         if folders:
             problems.append("a folder under worktrees no task knows of: %s" % folders)
+    # What a Pi task kept of a page as its model wrote it.
+    pages = sorted(path.name for path in (box.state / "live").glob("*.json*"))
+    if pages:
+        problems.append("a page being written that no task knows of: %s" % pages)
     windows = box.windows()
     if windows:
         outcome["residue"].append("tmux windows: %s" % windows)

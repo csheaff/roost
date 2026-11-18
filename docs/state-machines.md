@@ -541,7 +541,7 @@ What each step leaves if it stops there, and what asking again does.
 | 8 | `stop` | registry | task stopped; agent's window gone |
 | 9 | `remove_worktrees` | released | worktree partly gone; `put_back_removed` restores it |
 | 10 | staging folder, `unregister_gone`, `delete_branch` | registry | branch still there, `check_worktree` finds no folder and goes on |
-| 11 | `Store.remove` | registry | record gone; attachments first, so a kill between keeps the record |
+| 11 | `Store.remove` | registry | record gone; attachments, what its agent showed and a page it was writing first, so a kill between keeps the record |
 | 12 | `delete_remote_branch` | none | remote branch stays; nothing else depends on it |
 
 `discard`: steps 2, 4, then `check_worktree(branch=False)`; the dry run stops
@@ -3035,16 +3035,23 @@ Invariants:
 - I6. A reply read before the image a buffer holds was shown doesn't replace it
   (`roost--shown-image-at`), and a task's image buffer is found by the task, not
   its name (`roost--shown-buffer`).
-- I5. A frame shows only the image of the task whose terminal it shows
-  (`roost--put-away-shown`), and an image goes with its task (`Store.remove`,
-  `roost--forget-shown`). One put away for another task's terminal comes back
-  with its own; one you closed does not.
+- I5. A frame shows only the image of the task whose terminal it shows, or
+  whose view took it without one, as the files of a task stopped
+  (`roost--put-away-shown`, from `roost--display-task` and `roost--take-frame`),
+  and an image goes with its task (`Store.remove`, `roost--forget-shown`), as
+  does what a Pi task kept of a page it was writing. One put away for another
+  task comes back with its own; one you closed does not. The only window
+  between the frame's sides stays, with nothing to close it into.
 - I7. Roost resizes an image's window only while it is as Roost left it, beside
   its terminal: one you resized, and one that fills the frame, stay as they are
   (`roost-shown-fit`, `roost--refit-shown`). The terminal keeps half its space.
+  A page, and an image this Emacs can't measure, get four tenths of what the
+  window and its terminal have, in a window made for one and in one resized.
 - I8. An image that fills the frame has a way back to the windows as they were,
   by a click or `q`, and to where you were (the window's `roost-shown-back`,
-  `roost-enlarge-image`).
+  `roost-enlarge-image`). The windows come back too when it goes: with its
+  task, when you kill its buffer (`roost--shown-killed`, on `kill-buffer-hook`),
+  and when a view of another task takes the frame (`roost--take-frame`).
 - I9. A page shown while it is written reaches no further than one shown whole.
   Its view loads a page of the helper's that holds nothing of the agent's
   (`live_page`), and what the agent has written is handed to the same frame,
@@ -3063,17 +3070,19 @@ Invariants:
 | Shown, not taken up | a list or reply names it | task known to this Emacs, or its host listed before | On screen or Waiting | `shown` requested; beside the terminal if on screen | `roost--note-shown`, `roost--take-shown` |
 | Shown, not taken up | a list names it | task new to this Emacs, in its host's first list | Closed | noted, not fetched | `roost--note-shown` |
 | Waiting | you open the task | | On screen | beside its terminal | `roost--show-waiting` |
-| On screen | another task's terminal takes the frame | | Waiting | its window deleted | `roost--put-away-shown` |
-| On screen | the next image comes | its window as Roost left it | On screen | window resized for it, on the side it is on | `roost--refit-shown` |
+| On screen | another task's terminal takes the frame, or a view of another task without one | | Waiting | its window deleted | `roost--put-away-shown` |
+| On screen | the next image or page comes | its window as Roost left it | On screen | window resized for it, on the side it is on: four tenths for a page | `roost--refit-shown` |
 | On screen | a click on it, `z` | | Filling the frame | the windows as they were kept; other windows but the sides' deleted | `roost-enlarge-image` |
 | On screen, several together | a click on one, `RET`, `z` | | Filling the frame, that one alone | the windows as they were kept | `roost-enlarge-image` |
 | Filling the frame, one of several | `n`, `p`, the arrows above it | | Filling the frame, the next or the one before | | `roost-next-image`, `roost-previous-image` |
 | Filling the frame, one of several | a click on it, `z`, `q` | | On screen, several together | the windows put back | `roost-enlarge-image`, `roost-quit-image` |
 | Filling the frame | another task's terminal takes its window | | Waiting | the way back dropped | `roost--put-away-shown` |
+| Filling the frame | a view of another task takes the frame without a terminal | | Waiting | the windows put back, its own deleted | `roost--take-frame` |
+| Filling the frame | you kill its buffer | | None | the windows put back, its own deleted | `roost--shown-killed` |
 | Filling the frame | a click on it, `z`, `q` | | On screen | the windows put back | `roost-enlarge-image`, `roost-quit-image` |
 | On screen | `q` | | Closed | | `roost-quit-image` |
 | Closed, Waiting | the panel's Image line, `roost-show-image` | you stayed | On screen | fetched again, beside the window you are in | `roost-show-image` |
-| any | task retired, discarded, forgotten or gone from a list | | None | copy, buffer and both tables' entries go | `Store.remove`, `roost--forget-shown` |
+| any | task retired, discarded, forgotten or gone from a list | | None | copy, buffer and both tables' entries go, and what it kept of a page it was writing; the windows one that filled the frame took are put back | `Store.remove`, `roost--forget-shown`, `roost--shown-killed` |
 | any | Pi's model starts a `show_widget` call | a Pi task on this machine, known to this Emacs, which has a web view and watches | Being written | its buffer shows the page so far: beside the terminal if on screen, waiting otherwise | `roost--read-live`, `roost--take-live` |
 | Being written | the model writes more of the page | the same call | Being written | the view is handed the page so far, once it has loaded the page that takes it | `roost--hand-live`, `roost--page-event` |
 | Being written | its host sends the page whole | its frame holds just the code the view, loaded, was handed, all of it | On screen, Waiting or Closed, as it was | the view stays as it is, and one you closed meanwhile stays closed | `roost--take-shown`, `roost--live-shows-p` |
@@ -3088,8 +3097,8 @@ copy and saving the record leaves the copy until the next image or the task's en
 A `show_widget` call the helper refuses, as for a page too large, leaves the page
 shown as it was written with no record of it: the panel's Image line and
 `roost-show-image` know nothing of it. The file of a page being written goes
-with its task when an Emacs on its machine that watches for such pages sees the
-task go (`roost--forget-shown`), and stays in `live` otherwise.
+with its task (`Store.remove`), and when an Emacs on its machine that watches
+for such pages sees the task go (`roost--forget-shown`).
 A fetch that fails is not tried again by itself: the panel's line brings it up.
 
 ### Opening a task
