@@ -213,16 +213,16 @@ tmux, and ghostel-tmux has no command to run first."
     (or (gethash (cons host socket) roost-ghostel-tmux--socket-paths)
         (let ((default-directory (format "/ssh:%s:" host)))
           (with-temp-buffer
-            ;; stdout alone, the record it marks and ends with a NUL: what
+            ;; stdout alone, the record it marks between NULs: what
             ;; a login script or the host writes besides is no part of the
             ;; path, which is kept for as long as Emacs runs.
             (and (eql 0 (process-file
                          "sh" nil '(t nil) nil "-c"
                          (concat roost--remote-tmux-socket-setup
-                                 " && printf 'roost-socket %s\\0' \"$TMUX_TMPDIR/tmux-$(id -u)/$1\"")
+                                 " && printf '\\0roost-socket\\0%s\\0' \"$TMUX_TMPDIR/tmux-$(id -u)/$1\"")
                          "sh" socket))
                  (progn (goto-char (point-max))
-                        (re-search-backward "roost-socket \\(/[^\0]*\\)\0" nil t))
+                        (re-search-backward "\0roost-socket\0\\(/[^\0]*\\)\0" nil t))
                  (puthash (cons host socket) (match-string 1) roost-ghostel-tmux--socket-paths))))
         socket)))
 
@@ -453,17 +453,18 @@ there: the stand-in would sit beside that session's other panes."
 
 (defun roost-ghostel-tmux--sweep-stand-ins ()
   "Kill the stand-ins no window shows whose pane has come or never will.
-One whose pane has come stays for a workspace not on screen that shows
-it: see `roost-ghostel-tmux--kept-p'."
+One a workspace not on screen shows stays, its client live or not: see
+`roost-ghostel-tmux--kept-p'.  It tells you, when you are back, that it
+connects or could not."
   (dolist (buffer (buffer-list))
     (when (and (eq (buffer-local-value 'major-mode buffer) 'roost-ghostel-tmux-connecting-mode)
                (not (get-buffer-window buffer t)))
       (let ((controller (buffer-local-value 'roost-ghostel-tmux--stands-in-for buffer)))
-        (unless (and (memq controller (ghostel-tmux-controllers))
-                     (equal (buffer-local-value 'roost-ghostel-tmux--place controller)
-                            (buffer-local-value 'roost-ghostel-tmux--place buffer))
-                     (or (not (roost-ghostel-tmux--pane controller))
-                         (roost-ghostel-tmux--kept-p buffer)))
+        (unless (or (roost-ghostel-tmux--kept-p buffer)
+                    (and (memq controller (ghostel-tmux-controllers))
+                         (equal (buffer-local-value 'roost-ghostel-tmux--place controller)
+                                (buffer-local-value 'roost-ghostel-tmux--place buffer))
+                         (not (roost-ghostel-tmux--pane controller))))
           (kill-buffer buffer))))))
 
 (defun roost-ghostel-tmux--workspace-closed (&rest _)
@@ -471,8 +472,9 @@ it: see `roost-ghostel-tmux--kept-p'."
 On `tab-bar-tab-pre-close-functions' and `persp-killed-hook'.  One kept
 for the workspace closed has nothing to show it any more.  From a timer:
 both run before the workspace goes, its windows still on screen or in
-its tab."
-  (run-at-time 0 nil #'roost-ghostel-tmux--sweep-stand-ins))
+its tab; and out of the minibuffer, whose end can show again a stand-in
+covered while a question was open."
+  (run-at-time 0 nil #'roost--when-out-of-minibuffer #'roost-ghostel-tmux--sweep-stand-ins))
 
 (add-hook 'tab-bar-tab-pre-close-functions #'roost-ghostel-tmux--workspace-closed)
 (add-hook 'persp-killed-hook #'roost-ghostel-tmux--workspace-closed)

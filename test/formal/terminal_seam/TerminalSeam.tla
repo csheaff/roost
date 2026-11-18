@@ -53,7 +53,8 @@ CONSTANTS
   HiddenOnly,    \* `--give-way` and the sweep keep only one a workspace not on screen shows (`--kept-p`)
   OpenKeepsHidden, \* connect-or-switch, the pane there: keeps the stand-in a workspace not on screen shows
   ByStandIn,     \* `--stand-in-gives-way` takes the stand-in its window showed, shown there still or not
-  SweepOnClose   \* `--workspace-closed`: closing a tab or perspective sweeps the stand-ins
+  SweepOnClose,  \* `--workspace-closed`: closing a tab or perspective sweeps the stand-ins
+  KeepsDead      \* the sweep keeps one a workspace not on screen shows, its controller live or not
 
 Places == {"A", "B"}
 Wins == 1..Frames
@@ -167,6 +168,19 @@ FirstSi(S, p) == IF ~AttachSays \/ SisOf(S, p) = {} THEN 0 ELSE CHOOSE i \in Sis
 \* the windows on screen being L.
 Hidden(W, L, i) == Workspaces /\ \E w \in Wins \ (L \cup closed) : Shows(W, w, i)
 
+\* `roost-ghostel-tmux--sweep-stand-ins`, with W what the windows show, L
+\* those on screen and C those of a workspace closed: what it kills.
+Keeps(W, L, C, i) ==
+  LET c == si[i].f
+      hid == Workspaces /\ \E v \in Wins \ (L \cup C) : Shows(W, v, i)
+  IN \/ SweepKeeps /\ KeepsDead /\ hid
+     \/ /\ c # 0 /\ Live(c) /\ ctl[c].p = si[i].p
+        /\ (~ctl[c].rows \/ (Workspaces /\ SweepKeeps /\ (~HiddenOnly \/ hid)))
+Swept(W, L, C) == {i \in Sis : si[i].st = "live" /\ ~(\E w \in L : Shows(W, w, i)) /\ ~Keeps(W, L, C, i)}
+\* A workspace not on screen showed one of them: it shows some other buffer
+\* when you are back.
+Lost(W, L, C, S) == \E w \in Wins \ (L \cup C) : W[w].k = "si" /\ W[w].i \in S
+
 NewCtl(p, sin) == [NoCtl EXCEPT !.st = "live", !.p = p, !.s = p, !.sin = sin, !.row = lost[p] > 0]
 
 -----------------------------------------------------------------------------
@@ -180,14 +194,9 @@ Open(f) ==
          L0 == live \cup {f}
          shown == W0[f]
          \* `roost-ghostel-tmux--sweep-stand-ins`
-         keeps(i) == LET c == si[i].f IN
-                       c # 0 /\ Live(c) /\ ctl[c].p = si[i].p
-                       /\ (~ctl[c].rows \/ (Workspaces /\ SweepKeeps
-                                             /\ (~HiddenOnly \/ Hidden(W0, L0, i))))
-         swept == {i \in Sis : si[i].st = "live" /\ ~(\E w \in L0 : Shows(W0, w, i)) /\ ~keeps(i)}
+         swept == Swept(W0, L0, closed)
          S0 == [i \in Sis |-> IF i \in swept THEN [si[i] EXCEPT !.st = "dead"] ELSE si[i]]
-         sweptKept == \E w \in Wins \ (L0 \cup closed) :
-                        W0[w].k = "si" /\ W0[w].i \in swept /\ Arrived(si[W0[w].i].p)
+         sweptKept == Lost(W0, L0, closed, swept)
          C == Found("A", 0)
          reuse == shown.k = "si" /\ S0[shown.i].st = "live" /\ S0[shown.i].p = "A"
          fresh == FreeOf(S0, Sis)
@@ -273,14 +282,9 @@ Open(f) ==
 \* only `roost-ghostel-tmux--sweep-stand-ins` is run.
 OpenOther ==
   /\ Calm /\ ~mini /\ n.opens < MaxOpens
-  /\ LET keeps(i) == LET c == si[i].f IN
-                       c # 0 /\ Live(c) /\ ctl[c].p = si[i].p
-                       /\ (~ctl[c].rows \/ (Workspaces /\ SweepKeeps
-                                             /\ (~HiddenOnly \/ Hidden(win, live, i))))
-         swept == {i \in Sis : si[i].st = "live" /\ ~(\E w \in live : Shows(win, w, i)) /\ ~keeps(i)}
+  /\ LET swept == Swept(win, live, closed)
      IN /\ si' = [i \in Sis |-> IF i \in swept THEN [si[i] EXCEPT !.st = "dead"] ELSE si[i]]
-        /\ bad' = [bad EXCEPT !.kept = @ \/ \E w \in Away :
-                                 win[w].k = "si" /\ win[w].i \in swept /\ Arrived(si[win[w].i].p)]
+        /\ bad' = [bad EXCEPT !.kept = @ \/ Lost(win, live, closed, swept)]
   /\ n' = [n EXCEPT !.opens = @ + 1]
   /\ UNCHANGED <<ctl, win, live, closed, snaps, alive, lost, timers, probes, mini,
                  gHeld, gDue, rHeld, rDue, owed>>
@@ -535,23 +539,20 @@ Leave(w) ==
                  gHeld, gDue, rHeld, rDue, owed, n, bad>>
 
 \* You close the task's workspace in frame W, which is not on screen.
-\* With `--workspace-closed`'s sweep, from a timer at 0, taken here as one
-\* step: what else runs at 0 (`gDue`, `rDue`) kills a stand-in no window of
-\* a closed workspace shows just as the sweep does.
+\* With `--workspace-closed`'s sweep, from a timer at 0 and out of the
+\* minibuffer, taken here as one step, and only with no question open: one
+\* closed while a question is open sweeps as it ends, the same.  What else
+\* runs at 0 (`gDue`, `rDue`) kills a stand-in no window of a closed
+\* workspace shows just as the sweep does.
 Close(w) ==
-  /\ Calm /\ Closes /\ Workspaces /\ w \in Away
+  /\ Calm /\ ~mini /\ Closes /\ Workspaces /\ w \in Away
   /\ closed' = closed \cup {w}
   /\ LET C1 == closed \cup {w}
-         hidden(i) == \E v \in Wins \ (live \cup C1) : Shows(win, v, i)
-         keeps(i) == LET c == si[i].f IN
-                       c # 0 /\ Live(c) /\ ctl[c].p = si[i].p
-                       /\ (~ctl[c].rows \/ (SweepKeeps /\ (~HiddenOnly \/ hidden(i))))
-         swept == {i \in Sis : si[i].st = "live" /\ ~(\E v \in live : Shows(win, v, i)) /\ ~keeps(i)}
-     IN si' = IF SweepOnClose
-              THEN [i \in Sis |-> IF i \in swept THEN [si[i] EXCEPT !.st = "dead"] ELSE si[i]]
-              ELSE si
+         swept == IF SweepOnClose THEN Swept(win, live, C1) ELSE {}
+     IN /\ si' = [i \in Sis |-> IF i \in swept THEN [si[i] EXCEPT !.st = "dead"] ELSE si[i]]
+        /\ bad' = [bad EXCEPT !.kept = @ \/ Lost(win, live, C1, swept)]
   /\ UNCHANGED <<ctl, win, live, snaps, alive, lost, timers, probes, mini,
-                 gHeld, gDue, rHeld, rDue, owed, n, bad>>
+                 gHeld, gDue, rHeld, rDue, owed, n>>
 
 \* You show another buffer in the task's window: `q`, or `C-x b`.
 ShowOther(w) ==
@@ -628,8 +629,8 @@ HandoffOutside == ~bad.handoff
 \* I1: an open leaves its window showing the task, or what it showed before.
 OpenKeepsWindow == ~bad.window
 
-\* I6: a stand-in a workspace you left shows is not killed once its pane has
-\* come: the workspace would show some other buffer when you are back.
+\* I6: a stand-in a workspace you left shows is not killed: the workspace
+\* would show some other buffer when you are back.
 KeptForItsWorkspace == ~bad.kept
 
 \* I6: no stand-in is kept that no window, in any workspace, shows, once its

@@ -3347,7 +3347,8 @@ Invariants:
   is asked for good.
 - I6. A stand-in goes once a window shows its pane in its place. One no window shows
   goes too, except with workspaces, where it waits for a workspace not on screen that
-  shows it: a tab whose windows show it, or a perspective that has it. The
+  shows it: a tab whose windows show it, or a perspective that has it, whether its
+  client lives, failed or waits for a try. The
   pane takes its window only when no question is open, and not from the window-change
   hook itself. Otherwise stand-ins pile up, the workspace you left shows some other
   buffer, or the question's end puts the stand-in back.

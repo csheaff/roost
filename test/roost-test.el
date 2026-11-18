@@ -12425,19 +12425,22 @@ nil), it is discarded."
                  ((symbol-function 'process-file)
                   (lambda (_program _in out _display &rest _)
                     (roost-test--stderr-too out answer) 0)))
-         (setq answer "roost-socket /home/me/.tmux/tmux-1000/roost\0")
+         (setq answer "\0roost-socket\0/home/me/.tmux/tmux-1000/roost\0")
          (should (equal (roost-ghostel-tmux--socket "away" "roost") "/home/me/.tmux/tmux-1000/roost"))
          (should (equal (roost-test--host-setting "away" 'ghostel-tmux-program) "/usr/bin/tmux"))
          ;; A login script that prints on stdout, before the answer or after,
          ;; a path too.
-         (setq answer "Welcome to the host\nroost-socket /home/me/.tmux/tmux-1000/roost\0/etc/motd: read\n")
+         (setq answer "Welcome to the host\n\0roost-socket\0/home/me/.tmux/tmux-1000/roost\0/etc/motd: read\n")
          (should (equal (roost-ghostel-tmux--socket "chatty" "roost") "/home/me/.tmux/tmux-1000/roost"))
          ;; A banner with no newline before the answer.
-         (setq answer "Welcome> roost-socket /home/me/.tmux/tmux-1000/roost\0")
+         (setq answer "Welcome> \0roost-socket\0/home/me/.tmux/tmux-1000/roost\0")
          (should (equal (roost-ghostel-tmux--socket "banner" "roost") "/home/me/.tmux/tmux-1000/roost"))
          ;; A socket's name, yours, is all of the path, a newline too.
-         (setq answer "roost-socket /home/me/.tmux/tmux-1000/two\nlines\0")
+         (setq answer "\0roost-socket\0/home/me/.tmux/tmux-1000/two\nlines\0")
          (should (equal (roost-ghostel-tmux--socket "away" "two\nlines") "/home/me/.tmux/tmux-1000/two\nlines"))
+         ;; A home whose name has the tag in it.
+         (setq answer "\0roost-socket\0/home/roost-socket /.tmux/tmux-1000/roost\0")
+         (should (equal (roost-ghostel-tmux--socket "tagged" "roost") "/home/roost-socket /.tmux/tmux-1000/roost"))
          ;; A host that answers with something else than a path is asked again.
          (setq answer "sh: printf: not found\n")
          (should (equal (roost-ghostel-tmux--socket "other" "roost") "roost"))
@@ -13335,6 +13338,63 @@ nil), it is discarded."
        (kill-buffer pane)
        (kill-buffer before)
        (roost-test--kill-stand-ins)))))
+
+(ert-deftest roost-ghostel-tmux-a-stand-in-another-tab-keeps-stays-as-a-tab-closes ()
+  ;; A tab you left keeps the stand-in of a task whose client failed, or
+  ;; waits for a try.  Closing another tab sweeps the stand-ins: that one
+  ;; stays, to say so when you are back.
+  (roost-test--isolated
+   (roost-test--ghostel-backend)
+   (let ((roost-workspace 'tab-bar)
+         (original-tab-bar-mode tab-bar-mode)
+         (before (generate-new-buffer "before"))
+         (pane (generate-new-buffer "pane"))
+         (controller (generate-new-buffer " controller"))
+         arrived (live t))
+     (unwind-protect
+         (save-window-excursion
+           (cl-letf (((symbol-function 'ghostel-tmux-controller)
+                      (lambda (&optional buffer) (and (eq (or buffer (current-buffer)) pane) controller)))
+                     ((symbol-function 'ghostel-tmux-controllers) (lambda () (and live (list controller))))
+                     ((symbol-function 'ghostel-tmux-active-pane) (lambda (&rest _) (and arrived pane)))
+                     ((symbol-function 'ghostel-tmux-panes) (lambda (&rest _) (and arrived (list pane))))
+                     ((symbol-function 'ghostel-tmux-window-id) #'ignore)
+                     ((symbol-function 'ghostel-tmux-session-name) #'ignore)
+                     ((symbol-function 'ghostel-tmux-window-split) #'ignore)
+                     ((symbol-function 'ghostel-tmux-attach) (lambda (&rest _) controller)))
+             (delete-other-windows)
+             (switch-to-buffer before)
+             (roost-ghostel-tmux-connect-or-switch nil "main" "roost-notes-123456")
+             (let ((stand-in (window-buffer)))
+               (tab-bar-new-tab)
+               (switch-to-buffer before)
+               ;; Its client ends, a try of it to come.
+               (setq live nil)
+               (tab-bar-new-tab)
+               (tab-bar-close-tab)
+               (sleep-for 0.05)
+               (should (buffer-live-p stand-in)))))
+       (while (cdr (roost--tabs)) (tab-bar-close-tab))
+       (tab-bar-mode (if original-tab-bar-mode 1 -1))
+       (kill-buffer controller)
+       (kill-buffer pane)
+       (kill-buffer before)
+       (roost-test--kill-stand-ins)))))
+
+(ert-deftest roost-ghostel-tmux-a-tab-closed-during-a-question-sweeps-once-it-ends ()
+  ;; The question's end can show again a stand-in you covered while it was
+  ;; open: the sweep waits for it.
+  (roost-test--isolated
+   (roost-test--ghostel-backend)
+   (let (swept)
+     (cl-letf (((symbol-function 'roost-ghostel-tmux--sweep-stand-ins) (lambda () (setq swept t))))
+       (cl-letf (((symbol-function 'active-minibuffer-window) #'minibuffer-window))
+         (run-hook-with-args 'tab-bar-tab-pre-close-functions nil nil)
+         (sleep-for 0.02)
+         (should-not swept))
+       (run-hooks 'minibuffer-exit-hook)
+       (sleep-for 0.02)
+       (should swept)))))
 
 (ert-deftest roost-terminal-images-are-what-the-terminal-package-draws ()
   ;; A task's host hears it when the task starts and when it resumes, so

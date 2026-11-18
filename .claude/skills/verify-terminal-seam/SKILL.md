@@ -51,8 +51,8 @@ as the section's invariants in `docs/state-machines.md`:
 - **HandoffOutside** (I6). The pane takes its stand-in's window only when no
   question is open, and not from `window-buffer-change-functions` itself.
 - **KeptForItsWorkspace** (I6). A stand-in a workspace you left still shows
-  is not killed once its pane has come. Harm if broken: that workspace
-  shows some other buffer when you are back.
+  is not killed, its pane come or not, its client live or not. Harm if
+  broken: that workspace shows some other buffer when you are back.
 - **NoStrayStandIn** (I6). No stand-in is kept once its pane has come that
   no window, in any workspace, shows. Harm if broken: hidden buffers pile
   up.
@@ -94,10 +94,10 @@ ghostel-tmux, check those again.
 python3 test/formal/check.py terminal_seam
 ```
 
-About five to seven minutes on a laptop's cores. Every line must say `ok`.
-`TerminalSeam.cfg`, `TerminalSeamPlain.cfg`, `TerminalSeamLocal.cfg` and
-`TerminalSeamFrames.cfg` must pass; each `TerminalSeam.VARIANT.cfg` and
-`TerminalSeamFrames.VARIANT.cfg` must fail as its first line says, which
+About eight to twelve minutes on a laptop's cores. Every line must say `ok`.
+`TerminalSeam.cfg` and the other bases below must pass; each
+`TerminalSeam.VARIANT.cfg`, `TerminalSeamFrames.VARIANT.cfg` and
+`TerminalSeamClosed.VARIANT.cfg` must fail as its first line says, which
 proves the rule can still fail, or, for a finding, that the bug is still
 there. `make formal` runs every model.
 
@@ -140,14 +140,14 @@ Five bases:
   also while a question holds the attach hook (`HeldEnds`), one release by
   Roost, the session ending, one switch to B, one attach that signals, also
   in a row of tries (`FailsInARow`), a window you give another buffer, two
-  questions, three tries a row (60 million states, four to six minutes).
+  questions, three tries a row (56 million states, about six minutes).
 - `TerminalSeamPlain.cfg`: the same without workspaces, and a window you
   give another buffer (4.2 million, about 20 seconds).
 - `TerminalSeamLocal.cfg`: a session on this machine, with workspaces.
-- `TerminalSeamFrames.cfg`: the task opened in two frames, with workspaces;
-  one drop, no release and no switch, for size (1.6 million, about ten seconds).
+- `TerminalSeamFrames.cfg`: the task opened in two frames, with workspaces
+  you can close; one drop, no release and no switch, for size.
 - `TerminalSeamClosed.cfg`: the base with workspaces you close (`Closes`) and
-  no window you give another buffer, for size (29 million, about two minutes).
+  no window you give another buffer, for size (20 million, two to six minutes).
 
 Variants, each a guard of the code turned off, the first seven what
 Copilot's review of #291 found:
@@ -169,6 +169,8 @@ Copilot's review of #291 found:
 | `give-way-keeps-unseen` | `HiddenOnly` | `--give-way` and the sweep keep only a stand-in a workspace not on screen shows (VIEWS-21) | NoStrayStandIn |
 | `handoff-needs-window` | `ByStandIn` | `--stand-in-gives-way` takes the stand-in its window showed, whether or not it shows it still | NoStrayStandIn |
 | `TerminalSeamClosed.close-leaves-kept` | `SweepOnClose` | `--workspace-closed` sweeps the stand-ins as a tab or perspective closes (VIEWS-23) | NoStrayStandIn |
+| `TerminalSeamClosed.sweep-needs-controller` | `KeepsDead` | the sweep keeps a stand-in a workspace not on screen shows though its client failed or waits for a try | KeptForItsWorkspace |
+| `TerminalSeamFrames.close-sweeps-kept` | `SweepKeeps` | as `sweep-takes-kept`, as another frame's workspace closes | KeptForItsWorkspace |
 | `TerminalSeamFrames.open-kills-hidden` | `OpenKeepsHidden` | an open where the pane has come keeps the stand-in a workspace not on screen shows (VIEWS-20) | KeptForItsWorkspace |
 
 `gives-up-first` breaks DropIsTried as well, and leaves it out: TLC's
@@ -221,7 +223,8 @@ and `roost-ghostel-tmux-a-stand-in-you-gave-way-yourself-goes-once-its-pane-come
 VIEWS-22 and 23, found as those were folded in, are fixed too:
 `roost-ghostel-tmux-a-stand-in-you-cover-while-a-question-holds-its-pane-goes`
 and `roost-ghostel-tmux-a-stand-in-kept-for-a-tab-you-close-goes`. `Close`
-takes `--workspace-closed`'s sweep, from a timer at 0, as one step.
+takes `--workspace-closed`'s sweep, from a timer at 0 and out of the
+minibuffer, as one step, and only with no question open.
 
 Roost cannot tell when a perspective that has a
 stand-in no longer shows it: that one goes at the next open made there.
