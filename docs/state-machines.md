@@ -2608,7 +2608,11 @@ Creating and text typed there; neither is refused.
 A conversation (`roost-new-conversation`) has no draft and no creation ID: each `C`
 asks for one, so `C` again after no reply can start a second.
 
-Open: none here. [The creation ID](#the-creation-id) has one, of a draft that named
+Open: an offer's draft that got no reply, asked again and quit before any request
+went (as at the question about the setup command) has no note and keeps its ID, so it
+reads as one you only looked at (I7): `RET` on its offer starts it anew with no ID, and
+`C-c C-c` then makes a second task beside the one the first request made
+(`NewTaskDraft.finding-quit-then-offer.cfg`). [The creation ID](#the-creation-id) has one, of a draft that named
 another attempt.
 
 ### The creation ID
