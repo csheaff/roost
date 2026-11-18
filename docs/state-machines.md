@@ -206,6 +206,15 @@ until its fix brings it into the suite.
 | HOST-RETIRE-1 | S1 | Something the agent left running, as a server started with `nohup`, writes into the worktree after the last check and before Git removes it, and retire or discard deletes that file and says it went well; with a submodule, which Roost removes with `--force`, every time | [Finishing a task](#finishing-a-task) | Fixed: `stop` ends what the agent and the task's shell left running, refusing while any of it won't end, and a worktree with submodules is checked again just before Git; `test/test_left_running.py` |
 | HOST-RETIRE-2 | S1 | A process outside the task, one Roost can't tell is the task's (its environment hidden, as for Apple's own programs, or cleared, outside the panes' sessions) or yours elsewhere, writes between the last check and Git's removal, or into a folder Git has yet to reach: that file goes | [Finishing a task](#finishing-a-task) | Open question: narrowed to those milliseconds, not closed. Closing it would take Roost deleting the worktree itself, keeping each file changed since the check |
 
+### Found by hand, 2026-11-18
+
+Found while fixing a terminal through ghostel-tmux (#299), and replayed on the
+real code before it was fixed.
+
+| Finding | Sev | What goes wrong | Machine | Status |
+| --- | --- | --- | --- | --- |
+| VIEWS-24 | S4 | The same function held twice while a question is open, as two alike closures, is one hook of `minibuffer-exit-hook` but counted twice: once you are done it runs once, and Roost counts one held for good, so the sweeps' `left-behind` rule and QA's `held` say it waits | [Held for the minibuffer](#held-for-the-minibuffer) | Fixed, `roost-the-same-thing-held-twice-for-a-question-goes-once-it-is-done` |
+
 ## A task on its host
 
 The helper's records and what it does to Git, from a task being asked for to its
@@ -3216,6 +3225,7 @@ Kind: implicit. Lives in: closures on `minibuffer-exit-hook`,
 |---|---|---|---|---|---|
 | Free | `roost--when-out-of-minibuffer` | no minibuffer | Free | calls it | same |
 | Free | same | minibuffer | Held | count up, hook | same |
+| Held | same, a closure alike already held | minibuffer | Held | none: the one held goes for both | same |
 | Held | a minibuffer exits, by RET or `C-g` | | Free | count down, timer | `done` |
 | timer | fires | still a minibuffer, as in recursion | Held | | same |
 
@@ -3227,6 +3237,8 @@ Invariants:
   which a session that ended would meet too: rarer, and no finding of its own. So does
   a refused open, whose question then asks about what may have changed; its host
   refuses what no longer applies.
+- I3. The count is the closures held: one alike already on the hook's global value is
+  not counted again, as `add-hook` adds it once. **Was broken**: VIEWS-24.
 
 `roost--compose-listed` holds a closure at each poll while a minibuffer is open: the
 first to run closes and opens, and the rest find you gone. Harmless, and it repeats
