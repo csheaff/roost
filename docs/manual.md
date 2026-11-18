@@ -1265,7 +1265,10 @@ pane you move in tmux is still the agent's, wherever it is; what you start in
 it with `respawn-pane` is not. Stopping a task closes the agent's pane and its
 shell, and their window if nothing else is in it: a pane of your own stays.
 What the agent or that shell left running, as a server started with `nohup`,
-stops too, so that nothing writes into the worktree as retiring removes it.
+stops too, so that nothing writes into the worktree as retiring removes it,
+but for a daemon, such as a build tool's server, which other tasks may share.
+What won't stop, as another user's process, is named, and keeps the task from
+being retired or discarded until you end it.
 Merging needs the task's worktree
 clean. With the primary checkout on the task's integration branch, the merge
 happens there and needs nothing uncommitted (untracked files stay); with it on

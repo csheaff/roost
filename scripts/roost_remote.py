@@ -4558,65 +4558,117 @@ def own_line():
     return pids
 
 
-def left_running(task_id, sessions, own):
-    """The PIDs of what still runs in SESSIONS, or with TASK_ID as its
-    ROOST_TASK_ID in a session whose first process has ended: what the
-    task's agent started, wherever it went, as a server started with nohup
-    from the session Claude Code ran a command in, but for those whose
-    environment the system hides, as macOS does Apple's own programs'. Not
-    a daemon it started, as a build tool's server or an ssh connection
-    other tasks share, which leads a session of its own. Never one in OWN."""
-    marker = "ROOST_TASK_ID=" + task_id
-    # PID -> (session, whether it has the task's ROOST_TASK_ID)
-    running = {}
+def macos_environment(pid):
+    """The environment process PID started with, as entries, bytes, on
+    macOS, apart from its arguments, as the kernel keeps them, or None when
+    the system won't say, as for another user's process. Empty for one of
+    Apple's own programs, whose environment it hides."""
+    import ctypes
+    import ctypes.util
+    libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+
+    def sysctl(*mib, size):
+        name = (ctypes.c_int * len(mib))(*mib)
+        buffer = ctypes.create_string_buffer(size)
+        length = ctypes.c_size_t(size)
+        if libc.sysctl(name, len(mib), buffer, ctypes.byref(length), None, 0):
+            return None
+        return buffer.raw[:length.value]
+    # CTL_KERN, KERN_ARGMAX; then KERN_PROCARGS2: the count of arguments,
+    # the program's path padded with NULs, the arguments, the environment.
+    most = sysctl(1, 8, size=ctypes.sizeof(ctypes.c_int))
+    raw = most and sysctl(1, 49, pid, size=int.from_bytes(most, sys.byteorder))
+    if not raw or len(raw) < 4:
+        return None
+    count = int.from_bytes(raw[:4], sys.byteorder)
+    path_end = raw.find(b"\0", 4)
+    if path_end < 0:
+        return None
+    fields = raw[path_end:].lstrip(b"\0").split(b"\0")
+    return [field for field in fields[count:] if field]
+
+
+def task_environment(pid):
+    """The environment PID started with, as entries, bytes, or None."""
     if os.path.isfile("/proc/self/environ"):
-        for entry in os.listdir("/proc"):
-            if not entry.isdigit():
-                continue
-            pid = int(entry)
-            with contextlib.suppress(OSError, IndexError):
-                # A zombie writes nothing.
-                if Path("/proc/%d/stat" % pid).read_bytes().rsplit(b")", 1)[1].split()[0] == b"Z":
-                    continue
-                running[pid] = (os.getsid(pid), marker.encode() in Path(
-                    "/proc/%d/environ" % pid).read_bytes().split(b"\0"))
-    else:
-        # With -E, ps shows each process's environment after its arguments.
-        result = execute(["ps", "-A", "-E", "-ww", "-o", "pid=,stat=,command="], check=False)
-        for line in result.stdout.splitlines() if result.returncode == 0 else []:
-            fields = line.split(None, 2)
-            if len(fields) < 2 or not fields[0].isdigit() or fields[1].startswith("Z"):
-                continue
-            pid = int(fields[0])
+        with contextlib.suppress(OSError):
+            return Path("/proc/%d/environ" % pid).read_bytes().split(b"\0")
+        return None
+    return macos_environment(pid) if sys.platform == "darwin" else None
+
+
+def left_running(task_id, sessions, own):
+    """The PIDs of what still runs in SESSIONS, or that the task's agent or
+    shell started (`ROOST_TASK_ID` or `ROOST_TASK_SHELL` its TASK_ID in its
+    environment, never its arguments) in a session whose first process has
+    ended: wherever it went, as a server started with nohup from the
+    session Claude Code ran a command in, but for those whose environment
+    the system hides, as macOS does Apple's own programs'. Not a daemon it
+    started, as a build tool's server or an ssh connection other tasks
+    share, which leads a session of its own. Never one in OWN."""
+    markers = {("ROOST_TASK_ID=" + task_id).encode(), ("ROOST_TASK_SHELL=" + task_id).encode()}
+    result = execute(["ps", "-A", "-o", "pid=,stat="], check=False)
+    # PID -> session, of each process but zombies, which write nothing.
+    running = {}
+    for line in result.stdout.splitlines() if result.returncode == 0 else []:
+        fields = line.split()
+        if len(fields) == 2 and fields[0].isdigit() and not fields[1].startswith("Z"):
             with contextlib.suppress(OSError):
-                running[pid] = (os.getsid(pid), len(fields) == 3 and marker in fields[2].split())
-    return {pid for pid, (sid, marked) in running.items()
-            if sid in sessions or marked and sid not in running} - own
+                running[int(fields[0])] = os.getsid(int(fields[0]))
+    found = set()
+    for pid, sid in running.items():
+        if sid in sessions:
+            found.add(pid)
+        elif sid not in running and markers & set(task_environment(pid) or ()):
+            found.add(pid)
+    return found - own
+
+
+def process_starts(pids):
+    """When each of PIDS started, as ps says, PID -> text, for those running
+    but zombies, which write nothing."""
+    if not pids:
+        return {}
+    result = execute(["ps", "-o", "pid=,stat=,lstart=", "-p", ",".join(map(str, sorted(pids)))], check=False)
+    return {int(fields[0]): fields[2].strip() for fields in
+            (line.strip().split(None, 2) for line in result.stdout.splitlines())
+            if len(fields) == 3 and fields[0].isdigit() and not fields[1].startswith("Z")}
 
 
 # How long what a task left running has to end, once asked to.
 LEFT_RUNNING_SECONDS = 1
 
 
-def end_left_running(task_id, sessions):
+def end_left_running(task_id, sessions, known=()):
     """End what TASK_ID's agent or shell left running (`left_running`), as
     a server started with nohup, which outlives its pane and would go on
     writing into its worktree as Roost removes it: asked to, then killed.
-    The agent's hooks, waiting on the registry lock, end with it."""
+    The agent's hooks, waiting on the registry lock, end with it. KNOWN is
+    what an earlier stop could not end, as [PID, start] pairs, which count
+    while each runs with the same start. Return what still runs, as such
+    pairs: with any, nothing can be removed."""
     own = own_line()
+    known = {pair[0]: pair[1] for pair in known if isinstance(pair, list) and len(pair) == 2
+             and isinstance(pair[0], int) and pair[0] > 1 and isinstance(pair[1], str)}
+
+    def members():
+        now = process_starts(set(known))
+        return left_running(task_id, sessions, own) | ({pid for pid, start in known.items()
+                                                        if now.get(pid) == start} - own)
+    left = members()
     for number in (signal.SIGTERM, signal.SIGKILL):
-        members = left_running(task_id, sessions, own)
-        for pid in members:
+        for pid in left:
             with contextlib.suppress(OSError):
                 os.kill(pid, number)
                 # One stopped would not hear it.
                 os.kill(pid, signal.SIGCONT)
         deadline = time.monotonic() + LEFT_RUNNING_SECONDS
-        while members and time.monotonic() < deadline:
+        while left and time.monotonic() < deadline:
             time.sleep(0.05)
-            members = left_running(task_id, sessions, own)
-        if not members:
-            return
+            left = members()
+        if not left:
+            return []
+    return sorted([pid, start] for pid, start in process_starts(left).items())
 
 
 def stop(store, task, inventory=None):
@@ -4628,7 +4680,7 @@ def stop(store, task, inventory=None):
         current = inventory if inventory is not None else inventory_for(task)
     sessions = pane_sessions(task, current)
     close_panes(task, current, fresh=True)
-    end_left_running(task["id"], sessions)
+    left = end_left_running(task["id"], sessions, task.get("leftRunning") or ())
     # Stopping says nothing new: an agent you had seen stays seen.
     was_seen = seen_since_last_event(task)
     # A pane ID owned by something else means ours is gone (for example after a
@@ -4638,8 +4690,19 @@ def stop(store, task, inventory=None):
         task["seen"] = task["updatedAt"]
     task.pop("shellPaneId", None)
     task.pop("panePid", None)
+    # Kept until they end, so that a request after this one, as retire after
+    # x's stop, still knows them once nothing else leads to them.
+    if left:
+        task["leftRunning"] = left
+    else:
+        task.pop("leftRunning", None)
     store.save(task)
     task["live"] = False
+    if left:
+        raise RoostError("Stopped the agent, but what it left running would not end: process%s %s. End %s, "
+                         "then try again" % ("" if len(left) == 1 else "es",
+                                             ", ".join(str(pid) for pid, _ in left),
+                                             "it" if len(left) == 1 else "them"))
     return task
 
 
@@ -5964,7 +6027,10 @@ def shell(store, task):
         if pane and pane["dead"]:
             tmux(task["socket"], "kill-pane", "-t", task["shellPaneId"])
         # tmux reads the directory as a format, where # starts one.
+        # Marked, as the agent is by ROOST_TASK_ID, so that stopping the
+        # task ends what you leave running from it (`left_running`).
         pane_id = tmux(task["socket"], "split-window", "-h", "-d", "-P", "-F", "#{pane_id}",
+                       "-e", "ROOST_TASK_SHELL=" + task["id"],
                        "-t", task["paneId"], "-c", task["worktree"].replace("#", "##")).stdout.strip()
         tmux(task["socket"], "set-option", "-p", "-t", pane_id, "@roost_task_id", task["id"])
         task["shellPaneId"] = pane_id

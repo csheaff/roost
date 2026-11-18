@@ -3,14 +3,22 @@ started with nohup does, beside retiring and discarding its task: none of
 it loses a file Roost didn't count. Real Git, the fake Claude in a tmux
 socket of its own, and the crash harness's log of the helper's commands,
 which says when to write."""
+import importlib.util
+import json
+import re
 from pathlib import Path
 import shlex
 import subprocess
 import sys
 import time
 import unittest
+from unittest.mock import patch
 
-from crash_harness import Box
+from crash_harness import Box, HELPER
+
+spec = importlib.util.spec_from_file_location("roost_remote", HELPER)
+roost = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(roost)
 
 # Once the helper has closed the agent's window, at the next command that
 # reads the submodules (WHEN), write a file into the worktree: after the
@@ -41,8 +49,10 @@ with open(written, "a") as out:
 FOREVER = "import time\nwhile True: time.sleep(1)\n"
 
 # Runs the rest of its arguments in a session of their own, as Claude Code
-# runs each command it is asked to: macOS has no setsid(1).
-OWN_SESSION = "import os, sys; os.setsid(); os.execv(sys.argv[1], sys.argv[1:])"
+# runs each command it is asked to: macOS has no setsid(1). A shell's job
+# leads its process group, which can't start a session: its child does.
+OWN_SESSION = ("import os, sys; os.getpid() == os.getpgrp() and os.fork() and os._exit(0); "
+               "os.setsid(); os.execv(sys.argv[1], sys.argv[1:])")
 
 
 class LeftRunning(unittest.TestCase):
@@ -89,8 +99,9 @@ class LeftRunning(unittest.TestCase):
         box.wait_for(task, "ready", event="Stop")
         self.assertTrue(self.running(argv[-1]), "the agent started nothing")
 
-    def running(self, mark):
-        return self.box.run("pgrep", "-f", str(mark), check=False)
+    def running(self, mark, last=False):
+        """What runs with MARK in its command line, LAST in it with LAST."""
+        return self.box.run("pgrep", "-f", re.escape(str(mark)) + ("$" if last else ""), check=False)
 
     def writer(self, task):
         return [sys.executable, self.script, self.box.inject / "log", "ls-files --stage", task["worktree"],
@@ -133,6 +144,54 @@ class LeftRunning(unittest.TestCase):
         self.assertTrue(self.running(command), "the agent started nothing")
         self.assertTrue(box.helper("stop", id=task["id"])["ok"])
         self.assertFalse(self.running(command), "still running after stop")
+
+    def test_stop_spares_a_process_that_names_the_task_only_in_its_arguments(self):
+        """As one that searches for it does: only the environment counts."""
+        box = self.box
+        task = box.create()
+        other = box.root / "other.py"
+        other.write_text(FOREVER)
+        # In a session whose first process has ended, as a task's server is.
+        command = shlex.join([sys.executable, str(other), "ROOST_TASK_ID=" + task["id"]])
+        subprocess.run([sys.executable, "-c", OWN_SESSION, "/bin/sh", "-c", "nohup %s >/dev/null 2>&1 &" % command],
+                       check=True)
+        deadline = time.monotonic() + 10
+        while not self.running(other) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertTrue(box.helper("stop", id=task["id"])["ok"])
+        self.assertTrue(self.running(other), "ended a process that only named the task")
+
+    def test_stop_ends_what_you_left_running_from_the_task_shell(self):
+        box = self.box
+        task = box.create()
+        reply = box.helper("shell", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        served = box.root / "served.py"
+        served.write_text(FOREVER)
+        command = shlex.join([sys.executable, "-c", OWN_SESSION, "/bin/sh", "-c",
+                              "nohup %s >/dev/null 2>&1 &" % shlex.join([sys.executable, str(served)])])
+        box.tmux("send-keys", "-t", reply["result"]["shellPaneId"], "-l", command)
+        box.tmux("send-keys", "-t", reply["result"]["shellPaneId"], "Enter")
+        deadline = time.monotonic() + 10
+        # Not the command that starts it, which names it too.
+        while not self.running(served, last=True) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertTrue(self.running(served, last=True), "the shell started nothing")
+        self.assertTrue(box.helper("stop", id=task["id"])["ok"])
+        self.assertFalse(self.running(served), "still running after stop")
+
+    def test_stop_ends_what_an_earlier_stop_could_not(self):
+        box = self.box
+        task = box.create()
+        later = subprocess.Popen([sys.executable, "-c", FOREVER], start_new_session=True)
+        self.addCleanup(later.kill)
+        time.sleep(0.2)
+        record = box.record(task["id"])
+        record["leftRunning"] = sorted([pid, start] for pid, start in roost.process_starts({later.pid}).items())
+        (box.state / "tasks" / (task["id"] + ".json")).write_text(json.dumps(record))
+        self.assertTrue(box.helper("stop", id=task["id"])["ok"])
+        self.assertEqual(later.wait(timeout=10), -15)
+        self.assertNotIn("leftRunning", box.record(task["id"]))
 
     def test_stop_leaves_a_daemon_the_agent_started(self):
         """A server of a build tool's, or an ssh connection, that the agent
@@ -186,6 +245,34 @@ class LeftRunning(unittest.TestCase):
         self.assertEqual(writer.wait(timeout=60), 0, "the writer never wrote")
         self.assertEqual(self.lost(reply), [], "discarded a file it never counted")
         self.assertIn("more than you were told", reply["error"])
+
+
+class Refused(unittest.TestCase):
+    """What won't end, as another user's process, keeps the worktree."""
+
+    def test_what_does_not_end_is_said_and_kept(self):
+        process = subprocess.Popen([sys.executable, "-c", FOREVER], start_new_session=True)
+        self.addCleanup(process.kill)
+        with patch.object(roost.os, "kill"), patch.object(roost, "LEFT_RUNNING_SECONDS", 0.1):
+            left = roost.end_left_running("ab" * 8, {process.pid})
+        self.assertEqual([pid for pid, _ in left], [process.pid])
+        # Known by when it started: one with that PID started since is not it.
+        self.assertEqual(roost.end_left_running("ab" * 8, set(), [[process.pid, "Thu Jan  1 00:00:00 1970"]]), [])
+        self.assertIsNone(process.poll())
+        self.assertEqual(roost.end_left_running("ab" * 8, set(), left), [])
+        self.assertEqual(process.wait(timeout=10), -15)
+
+    def test_stop_refuses_and_keeps_what_did_not_end(self):
+        saved = []
+        store = type("Store", (), {"save": lambda self, task: saved.append(dict(task))})()
+        task = dict(id="ab" * 8, socket="none", status="ready", paneId="%1", windowId="@1")
+        with patch.object(roost, "pane_inventory", return_value={}), \
+                patch.object(roost, "close_panes"), \
+                patch.object(roost, "end_left_running", return_value=[[4242, "then"]]):
+            with self.assertRaisesRegex(roost.RoostError, "would not end: process 4242"):
+                roost.stop(store, task)
+        self.assertEqual(saved[-1]["leftRunning"], [[4242, "then"]])
+        self.assertEqual(saved[-1]["status"], "stopped")
 
 
 if __name__ == "__main__":
