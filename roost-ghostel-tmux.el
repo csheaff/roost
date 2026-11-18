@@ -58,9 +58,18 @@
 (defvar roost-ghostel-tmux-window-buffer-functions nil
   "Functions called with each pane buffer ghostel-tmux makes.")
 
+(defvar roost-ghostel-tmux--perspective-going nil
+  "Non-nil while perspective.el kills a perspective and the buffers only it has.")
+
 (define-derived-mode roost-ghostel-tmux-connecting-mode special-mode "Connecting"
   "For the buffer a window shows until its tmux session's pane arrives."
-  (add-hook 'window-buffer-change-functions #'roost-ghostel-tmux--stand-in-shown nil t))
+  (add-hook 'window-buffer-change-functions #'roost-ghostel-tmux--stand-in-shown nil t)
+  ;; A tab not on screen can still show it, with tab-bar and perspective.el
+  ;; both on: killing the perspective it was shown in leaves it to that tab.
+  (add-hook 'kill-buffer-query-functions
+            (lambda () (not (and roost-ghostel-tmux--perspective-going
+                                 (roost-ghostel-tmux--tab-shows-p (current-buffer)))))
+            nil t))
 
 (defun roost-ghostel-tmux-buffer-p ()
   "Whether the current buffer is a terminal of a tmux session.
@@ -355,6 +364,18 @@ says so too where a window shows it."
     (when (and shown (not detached))
       (message "Could not attach to %s" session))))
 
+(defun roost-ghostel-tmux--tab-shows-p (stand-in)
+  "Whether a tab not on screen, of any frame, shows STAND-IN."
+  (let ((name (buffer-name stand-in)))
+    (seq-some (lambda (frame)
+                ;; As the frame keeps them: asking `tab-bar-tabs' would
+                ;; make tabs for a child frame, and rename the current.
+                (seq-some (lambda (tab)
+                            (and (eq (car tab) 'tab)
+                                 (member name (window-state-buffers (alist-get 'ws tab)))))
+                          (frame-parameter frame 'tabs)))
+              (frame-list))))
+
 (defun roost-ghostel-tmux--kept-p (stand-in)
   "Whether a workspace not on screen shows STAND-IN.
 The workspace you opened its task in, and left before the pane came,
@@ -366,15 +387,7 @@ perspective has and no longer shows goes at the next open made there."
   (when (roost--workspace-backend)
     ;; Both, as tabs and perspective.el can be on at once.
     (or
-     (let ((name (buffer-name stand-in)))
-       (seq-some (lambda (frame)
-                   ;; As the frame keeps them: asking `tab-bar-tabs' would
-                   ;; make tabs for a child frame, and rename the current.
-                   (seq-some (lambda (tab)
-                               (and (eq (car tab) 'tab)
-                                    (member name (window-state-buffers (alist-get 'ws tab)))))
-                             (frame-parameter frame 'tabs)))
-                 (frame-list)))
+     (roost-ghostel-tmux--tab-shows-p stand-in)
      (and (bound-and-true-p persp-mode)
           (fboundp 'perspectives-hash)
           (seq-some (lambda (frame)
@@ -467,17 +480,39 @@ connects or could not."
                          (not (roost-ghostel-tmux--pane controller))))
           (kill-buffer buffer))))))
 
+(defvar roost-ghostel-tmux--sweep-timer nil
+  "The timer of the sweep a closed workspace asked for, until it runs.")
+
 (defun roost-ghostel-tmux--workspace-closed (&rest _)
   "Sweep the stand-ins once a tab or perspective has closed.
 On `tab-bar-tab-pre-close-functions' and `persp-killed-hook'.  One kept
 for the workspace closed has nothing to show it any more.  From a timer:
 both run before the workspace goes, its windows still on screen or in
 its tab; and out of the minibuffer, whose end can show again a stand-in
-covered while a question was open."
-  (run-at-time 0 nil #'roost--when-out-of-minibuffer #'roost-ghostel-tmux--sweep-stand-ins))
+covered while a question was open.  Nothing is asked with no stand-in."
+  (when (and (not (timerp roost-ghostel-tmux--sweep-timer))
+             (seq-some (lambda (buffer)
+                         (eq (buffer-local-value 'major-mode buffer)
+                             'roost-ghostel-tmux-connecting-mode))
+                       (buffer-list)))
+    (setq roost-ghostel-tmux--sweep-timer
+          (run-at-time 0 nil (lambda ()
+                               (setq roost-ghostel-tmux--sweep-timer nil
+                                     roost-ghostel-tmux--perspective-going nil)
+                               (roost--when-out-of-minibuffer
+                                #'roost-ghostel-tmux--sweep-stand-ins))))))
+
+(defun roost-ghostel-tmux--perspective-killed ()
+  "Keep the stand-ins a tab shows as perspective.el kills a perspective.
+On `persp-killed-hook', which runs before it kills the buffers only that
+perspective has; the sweep that follows lets go of the rest."
+  (setq roost-ghostel-tmux--perspective-going t)
+  (roost-ghostel-tmux--workspace-closed)
+  (unless (timerp roost-ghostel-tmux--sweep-timer)
+    (setq roost-ghostel-tmux--perspective-going nil)))
 
 (add-hook 'tab-bar-tab-pre-close-functions #'roost-ghostel-tmux--workspace-closed)
-(add-hook 'persp-killed-hook #'roost-ghostel-tmux--workspace-closed)
+(add-hook 'persp-killed-hook #'roost-ghostel-tmux--perspective-killed)
 
 (defun roost-ghostel-tmux-connect-or-switch (host socket-name session)
   "Show tmux SESSION from HOST and SOCKET-NAME in the selected window.
@@ -806,7 +841,10 @@ is no task's has its own name for the task's."
   (remove-hook 'ghostel-tmux-detach-hook #'roost-ghostel-tmux--detached)
   (remove-hook 'ghostel-tmux-pane-mode-hook #'roost-ghostel-tmux--pane-made)
   (remove-hook 'tab-bar-tab-pre-close-functions #'roost-ghostel-tmux--workspace-closed)
-  (remove-hook 'persp-killed-hook #'roost-ghostel-tmux--workspace-closed)
+  (remove-hook 'persp-killed-hook #'roost-ghostel-tmux--perspective-killed)
+  (when (timerp roost-ghostel-tmux--sweep-timer)
+    (cancel-timer roost-ghostel-tmux--sweep-timer)
+    (setq roost-ghostel-tmux--sweep-timer nil))
   ;; And let `unload-feature' go on.
   nil)
 

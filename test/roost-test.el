@@ -13289,12 +13289,17 @@ nil), it is discarded."
   ;; the perspective goes, so the sweep waits for a timer.
   (roost-test--isolated
    (roost-test--ghostel-backend)
-   (let (swept)
+   (let (swept
+         (roost-ghostel-tmux--sweep-timer nil))
+     ;; A stand-in, for the sweep to look at.
+     (with-current-buffer (generate-new-buffer "*roost-terminal: one*")
+       (roost-ghostel-tmux-connecting-mode))
      (cl-letf (((symbol-function 'roost-ghostel-tmux--sweep-stand-ins) (lambda () (setq swept t))))
        (run-hooks 'persp-killed-hook)
        (should-not swept)
        (sleep-for 0.02)
-       (should swept)))))
+       (should swept))
+     (roost-test--kill-stand-ins))))
 
 (ert-deftest roost-ghostel-tmux-a-stand-in-kept-for-a-tab-you-close-goes ()
   ;; VIEWS-23, found by TerminalSeam.tla.  You open a task in a tab, go to
@@ -13381,12 +13386,88 @@ nil), it is discarded."
        (kill-buffer before)
        (roost-test--kill-stand-ins)))))
 
+(ert-deftest roost-ghostel-tmux-a-workspace-closed-with-no-stand-in-asks-for-no-sweep ()
+  ;; Nothing to sweep: no timer, and nothing held for a question.
+  (roost-test--isolated
+   (roost-test--ghostel-backend)
+   (roost-test--kill-stand-ins)
+   (let ((roost-ghostel-tmux--sweep-timer nil))
+     (run-hook-with-args 'tab-bar-tab-pre-close-functions nil nil)
+     (should-not roost-ghostel-tmux--sweep-timer))))
+
+(ert-deftest roost-ghostel-tmux-a-perspective-killed-leaves-a-stand-in-a-tab-shows ()
+  ;; With tab-bar and perspective.el both on, perspective.el kills the
+  ;; buffers only the perspective it kills has: a tab not on screen that
+  ;; shows a stand-in keeps it.
+  (skip-unless (require 'perspective nil t))
+  (roost-test--isolated
+   (roost-test--ghostel-backend)
+   (let ((roost-workspace 'tab-bar)
+         (original-tab-bar-mode tab-bar-mode)
+         (controller (generate-new-buffer " controller"))
+         stand-in)
+     (save-window-excursion
+       (persp-mode 1)
+       (unwind-protect
+           (cl-letf (((symbol-function 'ghostel-tmux-controller) #'ignore)
+                     ((symbol-function 'ghostel-tmux-controllers) (lambda () (list controller)))
+                     ((symbol-function 'ghostel-tmux-active-pane) #'ignore)
+                     ((symbol-function 'ghostel-tmux-panes) #'ignore)
+                     ((symbol-function 'ghostel-tmux-session-name) #'ignore)
+                     ((symbol-function 'ghostel-tmux-window-split) #'ignore)
+                     ((symbol-function 'ghostel-tmux-attach) (lambda (&rest _) controller)))
+             (persp-switch "work")
+             (roost-ghostel-tmux-connect-or-switch nil "main" "roost-notes-123456")
+             (setq stand-in (window-buffer))
+             (tab-bar-new-tab)
+             (switch-to-buffer "*scratch*")
+             (persp-kill "work")
+             (sleep-for 0.05)
+             (should (buffer-live-p stand-in)))
+         (while (cdr (roost--tabs)) (tab-bar-close-tab))
+         (tab-bar-mode (if original-tab-bar-mode 1 -1))
+         (persp-mode -1)
+         (kill-buffer controller)
+         (roost-test--kill-stand-ins))))))
+
+(ert-deftest roost-ghostel-tmux-goes-with-roost ()
+  ;; Unloading Roost unloads its terminal backend first, whose hooks call
+  ;; Roost; and the backend's own unloading leaves no hook or sweep.
+  (roost-test--isolated
+   (roost-test--ghostel-backend)
+   (let (unloaded)
+     (cl-letf (((symbol-function 'unload-feature)
+                (lambda (feature &rest _) (push feature unloaded) (throw 'stop nil))))
+       (catch 'stop (roost-unload-function)))
+     (should (equal unloaded '(roost-ghostel-tmux))))
+   (let ((roost-ghostel-tmux--sweep-timer (run-at-time 60 nil #'ignore))
+         (timer nil))
+     (setq timer roost-ghostel-tmux--sweep-timer)
+     (unwind-protect
+         (progn
+           (roost-ghostel-tmux-unload-function)
+           (should-not (memq #'roost-ghostel-tmux--workspace-closed tab-bar-tab-pre-close-functions))
+           (should-not (memq #'roost-ghostel-tmux--perspective-killed (bound-and-true-p persp-killed-hook)))
+           (should-not (memq #'roost-ghostel-tmux--attached ghostel-tmux-attach-hook))
+           (should-not (memq timer timer-list))
+           (should-not roost-ghostel-tmux--sweep-timer))
+       (add-hook 'ghostel-tmux-attach-hook #'roost-ghostel-tmux--attached)
+       (add-hook 'ghostel-tmux-detach-hook #'roost-ghostel-tmux--detached)
+       (add-hook 'ghostel-tmux-pane-mode-hook #'roost-ghostel-tmux--pane-made)
+       (add-hook 'tab-bar-tab-pre-close-functions #'roost-ghostel-tmux--workspace-closed)
+       (add-hook 'persp-killed-hook #'roost-ghostel-tmux--perspective-killed)
+       (cancel-timer timer)))))
+
 (ert-deftest roost-ghostel-tmux-a-tab-closed-during-a-question-sweeps-once-it-ends ()
   ;; The question's end can show again a stand-in you covered while it was
   ;; open: the sweep waits for it.
   (roost-test--isolated
    (roost-test--ghostel-backend)
-   (let (swept)
+   (let (swept
+         (roost-ghostel-tmux--sweep-timer nil))
+     ;; A stand-in, for the sweep to look at.
+     (with-current-buffer (generate-new-buffer "*roost-terminal: one*")
+       (roost-ghostel-tmux-connecting-mode))
      (cl-letf (((symbol-function 'roost-ghostel-tmux--sweep-stand-ins) (lambda () (setq swept t))))
        (cl-letf (((symbol-function 'active-minibuffer-window) #'minibuffer-window))
          (run-hook-with-args 'tab-bar-tab-pre-close-functions nil nil)
@@ -13394,7 +13475,8 @@ nil), it is discarded."
          (should-not swept))
        (run-hooks 'minibuffer-exit-hook)
        (sleep-for 0.02)
-       (should swept)))))
+       (should swept))
+     (roost-test--kill-stand-ins))))
 
 (ert-deftest roost-terminal-images-are-what-the-terminal-package-draws ()
   ;; A task's host hears it when the task starts and when it resumes, so

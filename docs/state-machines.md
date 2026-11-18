@@ -3377,6 +3377,7 @@ Invariants:
 | Shown, stand-in kept | its workspace shows it | | Shown | pane in its place, stand-in killed unless another workspace off screen shows it | `roost-ghostel-tmux--stand-in-shown` |
 | Shown, stand-in kept | its workspace shows it, and you cover it while a question holds the handoff | | Shown | stand-in killed once the question ends, unless a workspace off screen shows it | `roost-ghostel-tmux--stand-in-gives-way` |
 | Shown, stand-in kept | you close the workspace that kept it | no other workspace off screen shows it | Shown | stand-in killed, from a timer | `roost-ghostel-tmux--workspace-closed` |
+| Shown, stand-in kept | perspective.el kills the perspective it was shown in | a tab off screen shows it | Shown, stand-in kept | the stand-in refuses the kill | `roost-ghostel-tmux--perspective-killed` |
 | Shown, stand-in kept | open | | Shown | pane shown, stand-in killed unless a workspace off screen shows it | `roost-ghostel-tmux-connect-or-switch` |
 | Connecting | client ends | this machine, never attached, detached or ended | Could not attach | the stand-in says so, the echo area too | `roost-ghostel-tmux--detached`, `--not-attached` |
 | Connecting | client ends | a host, a try before it failed | Retrying | stand-in waits on | `roost-ghostel-tmux--detached` |
