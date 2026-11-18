@@ -1015,6 +1015,31 @@ terminal's, on a pty.  Skips the test where it can't be made."
        (roost--when-out-of-minibuffer (lambda () (push 'again shown)))
        (should (equal shown '(again shown)))))))
 
+(ert-deftest roost-the-same-thing-held-twice-for-a-question-goes-once-it-is-done ()
+  ;; Held twice while a question was open, one function was one hook of
+  ;; `minibuffer-exit-hook', which adds a function once, but counted twice:
+  ;; Roost said it held one for good, and waited on it.
+  (roost-test--isolated
+   (let ((minibuffer t) (ran nil) (minibuffer-exit-hook nil) (roost--held-for-minibuffer 0))
+     (cl-letf (((symbol-function 'active-minibuffer-window) (lambda () minibuffer)))
+       ;; From a buffer with an exit hook of its own, as the minibuffer
+       ;; is with some completion packages.
+       (with-temp-buffer
+         (add-hook 'minibuffer-exit-hook #'ignore nil t)
+         (let ((same (lambda () (push 'same ran))))
+           (roost--when-out-of-minibuffer same)
+           (roost--when-out-of-minibuffer same))
+         (should (= roost--held-for-minibuffer 1))
+         (roost--when-out-of-minibuffer (lambda () (push 'other ran)))
+         (should (= roost--held-for-minibuffer 2)))
+       (setq minibuffer nil)
+       (run-hooks 'minibuffer-exit-hook)
+       (accept-process-output nil 0.05)
+       ;; Alike, the same thing done once; each other one too, in turn.
+       (should (equal (reverse ran) '(same other)))
+       (should (= roost--held-for-minibuffer 0))
+       (should-not minibuffer-exit-hook)))))
+
 (ert-deftest roost-opening-a-task-quits-a-question-left-open ()
   ;; A question left open in the minibuffer, which vertico-posframe hides
   ;; once you click elsewhere and C-g there leaves open, held back every

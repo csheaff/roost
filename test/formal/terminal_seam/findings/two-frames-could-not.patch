@@ -1,0 +1,56 @@
+diff --git a/test/roost-test.el b/test/roost-test.el
+index 6202b71..ec293cb 100644
+--- a/test/roost-test.el
++++ b/test/roost-test.el
+@@ -12750,6 +12750,51 @@ A test stubs the functions of ghostel-tmux it reaches."
+        (kill-buffer before)
+        (roost-test--kill-stand-ins)))))
+ 
++(ert-deftest roost-ghostel-tmux-a-stand-in-elsewhere-says-nothing-of-not-attaching-while-the-task-connects ()
++  ;; TerminalSeam.finding-two-frames-could-not.cfg.  A frame shows the
++  ;; task's stand-in, which says "Could not attach".  You open the task in
++  ;; another frame, whose window shows another buffer: it gets a stand-in
++  ;; of its own.  Roost opens a task in the window of the selected frame
++  ;; that shows it, so in one frame it would reuse the first: here the
++  ;; second window stands for the other frame's.
++  (roost-test--isolated
++   (roost-test--ghostel-backend)
++   (let ((before (generate-new-buffer "before"))
++         controller live)
++     (unwind-protect
++         (save-window-excursion
++           (cl-letf (((symbol-function 'ghostel-tmux-controller) #'ignore)
++                     ((symbol-function 'ghostel-tmux-controllers) (lambda () (and live (list controller))))
++                     ((symbol-function 'ghostel-tmux-active-pane) #'ignore)
++                     ((symbol-function 'ghostel-tmux-panes) #'ignore)
++                     ((symbol-function 'ghostel-tmux-session-name) #'ignore)
++                     ((symbol-function 'ghostel-tmux-window-split) #'ignore)
++                     ((symbol-function 'ghostel-tmux-attach)
++                      (lambda (&rest _) (setq live t controller (generate-new-buffer " controller")))))
++             (delete-other-windows)
++             (switch-to-buffer before)
++             (roost-ghostel-tmux-connect-or-switch nil "main" "roost-notes-123456")
++             (let ((first (selected-window))
++                   (stand-in (window-buffer)))
++               ;; tmux: "can't find session", and exits the client.
++               (with-current-buffer controller
++                 (set (make-local-variable 'ghostel-tmux--closing) t))
++               (setq live nil)
++               (roost-test--ghostel-client-ends controller)
++               (should (string-match-p "\\`Could not attach" (with-current-buffer stand-in (buffer-string))))
++               ;; Opened in the other frame's window.
++               (select-window (split-window))
++               (switch-to-buffer before)
++               (roost-ghostel-tmux-connect-or-switch nil "main" "roost-notes-123456")
++               (should live)
++               ;; A client of the session is attaching: no window says that
++               ;; none is coming.
++               (should-not (string-match-p "Could not attach"
++                                           (with-current-buffer (window-buffer first) (buffer-string)))))))
++       (when (buffer-live-p controller) (kill-buffer controller))
++       (kill-buffer before)
++       (roost-test--kill-stand-ins)))))
++
+ (ert-deftest roost-terminal-images-are-what-the-terminal-package-draws ()
+   ;; A task's host hears it when the task starts and when it resumes, so
+   ;; an agent that sends images only when told, as Pi under tmux, is told.

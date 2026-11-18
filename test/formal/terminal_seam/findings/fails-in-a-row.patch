@@ -1,0 +1,67 @@
+diff --git a/test/roost-test.el b/test/roost-test.el
+index 6202b71..ff74859 100644
+--- a/test/roost-test.el
++++ b/test/roost-test.el
+@@ -12750,6 +12750,62 @@ A test stubs the functions of ghostel-tmux it reaches."
+        (kill-buffer before)
+        (roost-test--kill-stand-ins)))))
+ 
++(ert-deftest roost-ghostel-tmux-a-stand-in-says-nothing-of-not-attaching-while-a-try-is-due ()
++  ;; TerminalSeam.finding-fails-in-a-row.cfg.  A host's connection dropped,
++  ;; and is tried again.  You open the task meanwhile, and the attach
++  ;; signals, as TRAMP does for a host still away: the stand-in says "Could
++  ;; not attach", but the row of tries goes on, and its next try attaches.
++  (roost-test--isolated
++   (roost-test--ghostel-backend)
++   (let ((roost-ghostel-tmux--lost (make-hash-table :test #'equal))
++         (place '("far" "main" "one"))
++         (left (generate-new-buffer "left"))
++         controller live)
++     (unwind-protect
++         (save-window-excursion
++           (cl-letf (((symbol-function 'ghostel-tmux-controller) #'ignore)
++                     ((symbol-function 'ghostel-tmux-controllers) (lambda () (and live (list controller))))
++                     ((symbol-function 'ghostel-tmux-active-pane) #'ignore)
++                     ((symbol-function 'ghostel-tmux-panes) #'ignore)
++                     ((symbol-function 'ghostel-tmux-window-id) #'ignore)
++                     ((symbol-function 'ghostel-tmux-session-name) #'ignore)
++                     ((symbol-function 'ghostel-tmux-window-split) #'ignore)
++                     ((symbol-function 'roost-ghostel-tmux--socket) (lambda (_host socket) socket))
++                     ((symbol-function 'ghostel-tmux-attach)
++                      (lambda (&rest _) (setq live t controller (generate-new-buffer " controller"))))
++                     ((symbol-function 'run-at-time) #'ignore))
++             (cl-flet ((shown () (with-current-buffer (window-buffer) (buffer-string)))
++                       (open () (apply #'roost-ghostel-tmux-connect-or-switch place)))
++               ;; The pane the dropped connection left, and its first try due.
++               (with-current-buffer left
++                 (setq roost-ghostel-tmux--place place)
++                 (setq-local ghostel-tmux-pane-mode t))
++               (puthash place 1 roost-ghostel-tmux--lost)
++               (delete-other-windows)
++               (switch-to-buffer "*scratch*")
++               ;; You open the task, and that client drops too before it
++               ;; attached: one of the row, tried again.
++               (open)
++               (setq live nil)
++               (roost-test--ghostel-client-ends controller)
++               (should (string-match-p "\\`Connecting to one" (shown)))
++               (should (gethash place roost-ghostel-tmux--lost))
++               ;; Opened again from its stand-in, the attach signals.
++               (cl-letf (((symbol-function 'ghostel-tmux-attach) (lambda (&rest _) (error "Host away"))))
++                 (should-error (open)))
++               ;; The try due runs: the host answers, and it attaches.
++               (cl-letf (((symbol-function 'make-process)
++                          (lambda (&rest args) (funcall (plist-get args :sentinel) 'probe "finished\n") nil))
++                         ((symbol-function 'process-live-p) #'ignore)
++                         ((symbol-function 'process-exit-status) (lambda (_) 0)))
++                 (roost-ghostel-tmux--try-again place))
++               (should live)
++               ;; A client of the session attaches: its stand-in says so.
++               (should-not (string-match-p "Could not attach" (shown))))))
++       (when (buffer-live-p controller) (kill-buffer controller))
++       (kill-buffer left)
++       (roost-test--kill-stand-ins)))))
++
+ (ert-deftest roost-terminal-images-are-what-the-terminal-package-draws ()
+   ;; A task's host hears it when the task starts and when it resumes, so
+   ;; an agent that sends images only when told, as Pi under tmux, is told.
