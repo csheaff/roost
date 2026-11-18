@@ -12613,6 +12613,16 @@ A test stubs the functions of ghostel-tmux it reaches."
                (open)
                (ends t)
                (should (string-match-p "\\`Detached from one\\." (shown)))
+               ;; tmux exits a client that never attached, as for a session
+               ;; it cannot find: that could not attach, and no try is left
+               ;; of an earlier row of them.
+               (open)
+               (puthash place 3 roost-ghostel-tmux--lost)
+               (with-current-buffer controller
+                 (set (make-local-variable 'ghostel-tmux--closing) t))
+               (ends)
+               (should (string-match-p "\\`Could not attach to one\\." (shown)))
+               (should-not (gethash place roost-ghostel-tmux--lost))
                ;; A host asked for the last time answers once you have
                ;; opened the task yourself: that try is still connecting.
                (open)

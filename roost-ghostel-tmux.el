@@ -499,9 +499,17 @@ that ended.  The hook could say which."
              (not (bound-and-true-p ghostel-tmux--closing))
              (or roost-ghostel-tmux--was-attached (gethash place roost-ghostel-tmux--lost)))
         (roost-ghostel-tmux--attach-again place)
+      ;; Detached, or its session ended: no try is owed it any more, nor
+      ;; is a later attach one of those tries.
+      (when (or (bound-and-true-p ghostel-tmux--detaching)
+                (bound-and-true-p ghostel-tmux--closing))
+        (remhash place roost-ghostel-tmux--lost))
+      ;; tmux says that it exits to a client that never attached too, as
+      ;; for a session it cannot find: that one could not attach.
       (roost-ghostel-tmux--not-attached
        place (or (bound-and-true-p ghostel-tmux--detaching)
-                 (bound-and-true-p ghostel-tmux--closing))))))
+                 (and roost-ghostel-tmux--was-attached
+                      (bound-and-true-p ghostel-tmux--closing)))))))
 
 (defun roost-ghostel-tmux--attach-again (place)
   "Try the session at PLACE again after a second, then two, up to thirty.
