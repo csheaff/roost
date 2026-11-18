@@ -15,6 +15,17 @@ What each release changes, and what to do when upgrading. Newest first.
 - Roost asks for ghostel-tmux 0.4.0, which it has needed since 0.13.0: with
   0.3.0, opening a task failed with "Wrong number of arguments". When
   upgrading, update ghostel-tmux if `M-x roost-doctor` says it is older.
+- One odd file among an agent's conversations no longer stops the task
+  list or a search for every task on its host. A line nested deeper than
+  Python reads, as a tool's input can be, failed the list, the task panel
+  and every search there with "RecursionError", and ended a task's Roost
+  tools for the rest of its session; such a line is now passed over. A
+  session file that was a FIFO held the list of a host with a Pi task, and
+  any search, for good: Roost now reads only regular files, keeps only a
+  session Pi names in the folder Roost gave it for the task, and a search
+  keeps to its time within one long line too. When upgrading: a search
+  passes over a conversation file that is a symbolic link, so keep the
+  files themselves where the agent writes them.
 
 ## 0.13.0
 
