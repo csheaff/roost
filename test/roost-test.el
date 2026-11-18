@@ -139,6 +139,11 @@ ghostel-tmux, the default, choose it themselves."
        (unwind-protect (prog1 (progn ,@body) (roost-test--check-programs))
          ;; Held notifications would go a minute later, in another test.
          (when (timerp roost--notice-timer) (cancel-timer roost--notice-timer))
+         ;; So would a sweep a closed tab asked for, in another test's question.
+         (when (and (boundp 'roost-ghostel-tmux--sweep-timer)
+                    (timerp roost-ghostel-tmux--sweep-timer))
+           (cancel-timer roost-ghostel-tmux--sweep-timer)
+           (setq roost-ghostel-tmux--sweep-timer nil))
          (set-frame-parameter nil 'roost-task nil)))))
 
 ;;;; What Roost starts
@@ -13289,8 +13294,7 @@ nil), it is discarded."
   ;; the perspective goes, so the sweep waits for a timer.
   (roost-test--isolated
    (roost-test--ghostel-backend)
-   (let (swept
-         (roost-ghostel-tmux--sweep-timer nil))
+   (let (swept)
      ;; A stand-in, for the sweep to look at.
      (with-current-buffer (generate-new-buffer "*roost-terminal: one*")
        (roost-ghostel-tmux-connecting-mode))
@@ -13506,8 +13510,7 @@ nil), it is discarded."
   ;; open: the sweep waits for it.
   (roost-test--isolated
    (roost-test--ghostel-backend)
-   (let (swept
-         (roost-ghostel-tmux--sweep-timer nil))
+   (let (swept)
      ;; A stand-in, for the sweep to look at.
      (with-current-buffer (generate-new-buffer "*roost-terminal: one*")
        (roost-ghostel-tmux-connecting-mode))
