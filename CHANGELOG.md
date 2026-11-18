@@ -4,6 +4,17 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A terminal that cannot attach its task's tmux session says so. When the
+  session went as you opened the task, or the connection dropped as it
+  attached, the window said "Connecting to" the session for good. It now
+  says "Could not attach to" it, and that `q` goes back and opening the
+  task again tries once more.
+- A task's terminal shows in its workspace when you go back to it by its
+  tab or perspective. If you left the workspace before the terminal had
+  connected, it showed some other buffer in the terminal's place.
+- Roost asks for ghostel-tmux 0.4.0, which it has needed since 0.13.0: with
+  0.3.0, opening a task failed with "Wrong number of arguments". When
+  upgrading, update ghostel-tmux if `M-x roost-doctor` says it is older.
 - An agent's offer waits on when the task you create from it fails to start,
   as when the repository's post-checkout hook fails: its row no longer goes
   with nothing made. Create the draft again, do it here, or dismiss it.

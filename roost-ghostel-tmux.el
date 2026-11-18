@@ -11,7 +11,7 @@
 ;; when `roost-terminal-backend' is `ghostel-tmux', its default; with
 ;; tmux-control it is never loaded.
 ;;
-;; It needs Ghostel 0.65.0 and ghostel-tmux 0.3.0 or newer.  Each
+;; It needs Ghostel 0.65.0 and ghostel-tmux 0.4.0 or newer.  Each
 ;; function here has the name and arguments of
 ;; the one of tmux-control it stands for, after the prefix.  A definition
 ;; that still has to work around something in ghostel-tmux says so,
@@ -55,7 +55,8 @@
   "Functions called with each pane buffer ghostel-tmux makes.")
 
 (define-derived-mode roost-ghostel-tmux-connecting-mode special-mode "Connecting"
-  "For the buffer a window shows until its tmux session's pane arrives.")
+  "For the buffer a window shows until its tmux session's pane arrives."
+  (add-hook 'window-buffer-change-functions #'roost-ghostel-tmux--stand-in-shown nil t))
 
 (defun roost-ghostel-tmux-buffer-p ()
   "Whether the current buffer is a terminal of a tmux session.
@@ -274,15 +275,96 @@ SHOWN if it is one for PLACE already, else a new one."
   (if (and (buffer-live-p shown)
            (eq (buffer-local-value 'major-mode shown) 'roost-ghostel-tmux-connecting-mode)
            (equal (buffer-local-value 'roost-ghostel-tmux--place shown) place))
-      shown
+      ;; It may say that an earlier try could not attach.
+      (progn (roost-ghostel-tmux--say shown (format "Connecting to %s…" (nth 2 place)))
+             shown)
     (let ((buffer (generate-new-buffer (format "*roost-terminal: %s*" (nth 2 place)))))
       (with-current-buffer buffer
         (roost-ghostel-tmux-connecting-mode)
-        (setq roost-ghostel-tmux--place place)
-        (let ((inhibit-read-only t))
-          (insert (format "Connecting to %s…\n" (nth 2 place)))))
+        (setq roost-ghostel-tmux--place place))
+      (roost-ghostel-tmux--say buffer (format "Connecting to %s…" (nth 2 place)))
       (run-hook-with-args 'roost-ghostel-tmux-window-buffer-functions buffer)
       buffer)))
+
+(defun roost-ghostel-tmux--say (stand-in text)
+  "Have the buffer STAND-IN say TEXT, in place of what it said."
+  (with-current-buffer stand-in
+    (let ((inhibit-read-only t))
+      (erase-buffer)
+      (insert text "\n"))))
+
+(defun roost-ghostel-tmux--stand-ins (place)
+  "The buffers that stand in for the pane of the session at PLACE."
+  (seq-filter (lambda (buffer)
+                (and (eq (buffer-local-value 'major-mode buffer) 'roost-ghostel-tmux-connecting-mode)
+                     (equal (buffer-local-value 'roost-ghostel-tmux--place buffer) place)))
+              (buffer-list)))
+
+(defun roost-ghostel-tmux--not-attached (place &optional detached)
+  "Have what stands in for the session at PLACE say that no pane is coming.
+Its tmux client ended before a pane came, and none is tried again: the
+session went, the connection dropped as it attached, or, with DETACHED,
+its client left a session it had attached: you or Roost detached it, or
+tmux said the session ended.  The buffer says which, and how to leave it or
+try again, as tmux-control's terminal says that its connection was lost;
+it would otherwise say that it is connecting for good.  The echo area
+says so too where a window shows it."
+  (let ((session (nth 2 place))
+        shown)
+    (dolist (stand-in (roost-ghostel-tmux--stand-ins place))
+      (with-current-buffer stand-in
+        (roost-ghostel-tmux--say
+         stand-in
+         (concat (format (if detached "Detached from %s." "Could not attach to %s.") session)
+                 "\n\n"
+                 (substitute-command-keys
+                  "Open its task again to try once more, or press \\[quit-window] to go back."))))
+      (when (get-buffer-window stand-in t)
+        (setq shown t)))
+    (when (and shown (not detached))
+      (message "Could not attach to %s" session))))
+
+(defun roost-ghostel-tmux--give-way (stand-in pane)
+  "Show the buffer PANE in each window that shows STAND-IN, which then goes.
+With workspaces, a STAND-IN no window shows stays: the workspace you
+opened its task in, and left before the pane came, shows it when you
+are back, by its tab or by Roost, and it gives way then, see
+`roost-ghostel-tmux--stand-in-shown'.  Killed, the workspace would show
+some other buffer in its place."
+  (let ((windows (get-buffer-window-list stand-in nil t)))
+    (dolist (window windows)
+      (roost-ghostel-tmux--show-pane pane window))
+    (when (or windows (not (roost--workspace-backend)))
+      (kill-buffer stand-in))))
+
+(defun roost-ghostel-tmux--stand-in-shown (window)
+  "Have the pane that has come take WINDOW, which shows its stand-in now.
+On `window-buffer-change-functions', in a buffer that stands in for a
+pane: as when you are back in the workspace that showed it.  Not from
+the hook itself, which runs as the windows are redrawn, before
+ghostel-tmux has fitted the pane to its window; nor while you answer a
+question, whose end would put the stand-in back."
+  (run-at-time 0 nil #'roost--when-out-of-minibuffer
+               (lambda () (roost-ghostel-tmux--stand-in-gives-way window))))
+
+(defun roost-ghostel-tmux--stand-in-gives-way (window)
+  "Show the pane that has come in WINDOW, if it shows its stand-in still."
+  (when-let* (((window-live-p window))
+              (stand-in (window-buffer window))
+              ((eq (buffer-local-value 'major-mode stand-in) 'roost-ghostel-tmux-connecting-mode))
+              (controller (buffer-local-value 'roost-ghostel-tmux--stands-in-for stand-in))
+              ((memq controller (ghostel-tmux-controllers)))
+              ;; Its own session's still: ghostel-tmux's own command can
+              ;; have switched the controller to another since.
+              ((equal (buffer-local-value 'roost-ghostel-tmux--place controller)
+                      (buffer-local-value 'roost-ghostel-tmux--place stand-in)))
+              ;; Nor switched and yet to say so: ghostel-tmux runs the
+              ;; hook that moves its place once tmux has listed the session.
+              ((let ((session (with-current-buffer controller (ghostel-tmux-session-name))))
+                 (or (not session)
+                     (equal session (nth 2 (buffer-local-value 'roost-ghostel-tmux--place stand-in))))))
+              (pane (roost-ghostel-tmux--pane controller)))
+    (roost-ghostel-tmux--give-way stand-in pane)))
 
 (defun roost-ghostel-tmux--show-stand-in (stand-in controller window)
   "Show STAND-IN for CONTROLLER's pane in WINDOW.
@@ -303,13 +385,18 @@ there: the stand-in would sit beside that session's other panes."
         (switch-to-buffer stand-in t)))))
 
 (defun roost-ghostel-tmux--sweep-stand-ins ()
-  "Kill the stand-ins no window shows whose pane has come or never will."
+  "Kill the stand-ins no window shows whose pane has come or never will.
+With workspaces, one whose pane has come stays, for the workspace that
+shows it when you are back: see `roost-ghostel-tmux--give-way'."
   (dolist (buffer (buffer-list))
     (when (and (eq (buffer-local-value 'major-mode buffer) 'roost-ghostel-tmux-connecting-mode)
                (not (get-buffer-window buffer t)))
       (let ((controller (buffer-local-value 'roost-ghostel-tmux--stands-in-for buffer)))
         (unless (and (memq controller (ghostel-tmux-controllers))
-                     (not (roost-ghostel-tmux--pane controller)))
+                     (equal (buffer-local-value 'roost-ghostel-tmux--place controller)
+                            (buffer-local-value 'roost-ghostel-tmux--place buffer))
+                     (or (not (roost-ghostel-tmux--pane controller))
+                         (roost--workspace-backend)))
           (kill-buffer buffer))))))
 
 (defun roost-ghostel-tmux-connect-or-switch (host socket-name session)
@@ -328,7 +415,11 @@ a buffer that stands in for it."
     (roost-ghostel-tmux--sweep-stand-ins)
     (cond
      (pane
-      (roost-ghostel-tmux--show-pane pane window))
+      (roost-ghostel-tmux--show-pane pane window)
+      ;; What stood in for it here, in a workspace you had left as it came.
+      (when (and (memq shown (roost-ghostel-tmux--stand-ins place))
+                 (not (get-buffer-window shown t)))
+        (kill-buffer shown)))
      (controller
       ;; Its first pane is yet to come: this window waits for it too.
       (roost-ghostel-tmux--show-stand-in
@@ -355,10 +446,14 @@ a buffer that stands in for it."
             (roost-ghostel-tmux--show-stand-in
              stand-in (roost-ghostel-tmux--attach place t) window)
           ((error quit)
-           (when (and (window-live-p window) (eq (window-buffer window) stand-in)
-                      (buffer-live-p shown) (not (eq shown stand-in)))
-             (set-window-buffer window shown))
-           (kill-buffer stand-in)
+           (if (eq shown stand-in)
+               ;; One that said an earlier try could not attach, opened
+               ;; again from it: it says so of this one, where it shows.
+               (roost-ghostel-tmux--not-attached place)
+             (when (and (window-live-p window) (eq (window-buffer window) stand-in)
+                        (buffer-live-p shown))
+               (set-window-buffer window shown))
+             (kill-buffer stand-in))
            (signal (car err) (cdr err)))))))))
 
 (defun roost-ghostel-tmux--attached ()
@@ -376,17 +471,27 @@ tmux no longer has."
     ;; Roost do.
     (when-let* ((session (ghostel-tmux-session-name))
                 ((not (equal session (nth 2 place)))))
+      ;; What stood in for the session it left has no pane coming, and
+      ;; is this controller's no more: its place would follow it.
+      (dolist (stand-in (roost-ghostel-tmux--stand-ins place))
+        (with-current-buffer stand-in
+          (setq roost-ghostel-tmux--stands-in-for nil)))
+      ;; Nor is it tried again, should a try of it be due.
+      (remhash place roost-ghostel-tmux--lost)
+      (roost-ghostel-tmux--not-attached place t)
       (setq place (list (nth 0 place) (nth 1 place) session)
             roost-ghostel-tmux--place place))
     (setq roost-ghostel-tmux--was-attached t)
     (remhash place roost-ghostel-tmux--lost)
-    (when-let* ((stand-in roost-ghostel-tmux--stand-in)
-                ((buffer-live-p stand-in))
-                (pane (roost-ghostel-tmux--pane (current-buffer))))
-      (dolist (window (get-buffer-window-list stand-in nil t))
-        (roost-ghostel-tmux--show-pane pane window))
-      (setq roost-ghostel-tmux--stand-in nil)
-      (kill-buffer stand-in))
+    ;; Each of the session's: one of a connection that dropped as it
+    ;; attached waits on, for the try that brings this controller.
+    (when-let* ((controller (current-buffer))
+                (pane (roost-ghostel-tmux--pane controller)))
+      (dolist (stand-in (roost-ghostel-tmux--stand-ins place))
+        (with-current-buffer stand-in
+          (setq roost-ghostel-tmux--stands-in-for controller))
+        (roost-ghostel-tmux--give-way stand-in pane))
+      (setq roost-ghostel-tmux--stand-in nil))
     (mapc #'kill-buffer (roost-ghostel-tmux--snapshots place))))
 
 (add-hook 'ghostel-tmux-attach-hook #'roost-ghostel-tmux--attached)
@@ -403,26 +508,45 @@ tmux no longer has."
   "Attach again a session on a host whose connection dropped.
 On `ghostel-tmux-detach-hook', in the controller.  A session that was
 detached, or that tmux said has ended, is left: Roost's helper ends a
-task's session.
+task's session.  So is one on this machine, and one that never
+attached: what stands in for its pane says that none is coming.
 NEEDS: `ghostel-tmux--detaching' and `ghostel-tmux--closing', to tell a
 connection that dropped from a client that was detached or a session
 that ended.  The hook could say which."
-  (when-let* ((place roost-ghostel-tmux--place)
-              ((nth 0 place))
-              ((not (bound-and-true-p ghostel-tmux--detaching)))
-              ((not (bound-and-true-p ghostel-tmux--closing)))
-              ((or roost-ghostel-tmux--was-attached (gethash place roost-ghostel-tmux--lost))))
-    (roost-ghostel-tmux--attach-again place)))
+  (when-let* ((place roost-ghostel-tmux--place))
+    (if (and (nth 0 place)
+             (not (bound-and-true-p ghostel-tmux--detaching))
+             (not (bound-and-true-p ghostel-tmux--closing))
+             (or roost-ghostel-tmux--was-attached (gethash place roost-ghostel-tmux--lost)))
+        (roost-ghostel-tmux--attach-again place)
+      ;; Detached, or its session ended: no try is owed it any more, nor
+      ;; is a later attach one of those tries.
+      (when (or (bound-and-true-p ghostel-tmux--detaching)
+                (bound-and-true-p ghostel-tmux--closing))
+        (remhash place roost-ghostel-tmux--lost))
+      ;; tmux says that it exits to a client that never attached too, as
+      ;; for a session it cannot find: that one could not attach.
+      (roost-ghostel-tmux--not-attached
+       place (or (bound-and-true-p ghostel-tmux--detaching)
+                 (and roost-ghostel-tmux--was-attached
+                      (bound-and-true-p ghostel-tmux--closing)))))))
 
 (defun roost-ghostel-tmux--attach-again (place)
   "Try the session at PLACE again after a second, then two, up to thirty.
 Eight times, about two and a half minutes: after that, opening the task
 attaches it."
   (let ((tries (gethash place roost-ghostel-tmux--lost 0)))
-    (if (>= tries 8)
-        (remhash place roost-ghostel-tmux--lost)
+    (cond
+     ;; Attaching already, as when you opened its task while the host was
+     ;; asked: that try says how it went.  The count stays until it has
+     ;; attached, so that its connection dropping is tried again.
+     ((roost-ghostel-tmux--find-controller place))
+     ((>= tries 8)
+      (remhash place roost-ghostel-tmux--lost)
+      (roost-ghostel-tmux--not-attached place))
+     (t
       (puthash place (1+ tries) roost-ghostel-tmux--lost)
-      (run-at-time (min 30 (expt 2 tries)) nil #'roost-ghostel-tmux--try-again place))))
+      (run-at-time (min 30 (expt 2 tries)) nil #'roost-ghostel-tmux--try-again place)))))
 
 (defun roost-ghostel-tmux--try-again (place)
   "Attach the session at PLACE if its host answers, else try later.
@@ -433,9 +557,11 @@ when you opened its task, or once none of its panes is left to bring
 back, as when Roost has put them away."
   (cond
    ((not (gethash place roost-ghostel-tmux--lost)))
-   ((or (roost-ghostel-tmux--find-controller place)
-        (not (roost-ghostel-tmux--snapshots place)))
-    (remhash place roost-ghostel-tmux--lost))
+   ;; Attaching already: `roost-ghostel-tmux--attached' forgets the count.
+   ((roost-ghostel-tmux--find-controller place))
+   ((not (roost-ghostel-tmux--snapshots place))
+    (remhash place roost-ghostel-tmux--lost)
+    (roost-ghostel-tmux--not-attached place))
    (t
     (make-process
      :name "roost-ghostel-tmux-host-there"
