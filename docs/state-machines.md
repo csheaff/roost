@@ -1627,7 +1627,14 @@ Notes:
 - A reply's callback can ask for a refresh, in the reply's own sentinel: `B`'s for its
   task, measured against its new branch, and `m`'s for the rest. It is a refresh as any
   other, owed if a list is in flight, and it reads the revision its reply just bumped,
-  so its list is not dropped for that reply.
+  so its list is not dropped for that reply. So does the draft of an offer once its
+  task is made, for the task that offered it, whose offer its host took: in that
+  sentinel, or once you are out of the minibuffer (`roost-compose-submit`,
+  `roost--task-made`). Not quietly, which would do nothing while a poll is in flight,
+  and that poll, read before the task was made, is dropped for the creation's reply.
+  `test/formal/emacs_and_hosts` checks it as `OfferRowGoes`.
+- A page a Pi task on this machine has written whole asks for a quiet poll half a
+  second later, as a timer's does (`roost--read-live`).
 - `roost--pull-requests-asked` is stamped before the request, and put back as it was
   if the list fails or is dropped, so a poll after an outage asks GitHub.
 - A full list that takes over a minute reads as Offline until the next quiet poll.
@@ -1643,7 +1650,9 @@ Notes:
 
 Kind: implicit. Lives in: `roost--tasks`, and what is keyed alongside:
 `roost--statuses`, `roost--pr-verdicts`, `roost--agent-news`, `roost--seen`,
-`roost--turns-sent`, `roost--merges-reported`.
+`roost--turns-sent`, `roost--merges-reported`, what Roost told its agent
+(`roost--telling`, `roost--told-here`, `roost--sent-at`, `roost--untold`) and what it
+shows (`roost--shown-at`, `roost--shown-waiting`, its buffer).
 What Emacs believes of each task, and how a reply merges into it.
 
 | State | Meaning | How you can tell |
@@ -1654,12 +1663,15 @@ What Emacs believes of each task, and how a reply merges into it.
 
 Invariants:
 - I1. A reply read before a task went doesn't bring it back (`roost--cache-reply`, `roost--went-p`; lists by I3 of Host refresh). Checked for `inspect`, `roost--act`, the turn reply, `roost--compose-listed`, and create's reply, of a task a list showed and that went before it came (`roost--went`).
-- I2. No reply rolls a task back: older `updatedAt` keeps the old record with the reply's measurements (`roost--newer-events`). What changes with no event of the agent's has a clock of its own, and a reply with an older one keeps what Emacs has of it: the name (`renamedAt`, `roost--newer-name`), the look (`roost--newer-look`), the offers (`offersAt`, `roost--newer-offers`) and the branch it starts from and merges into (`retargetedAt`, `roost--newer-branch`).
+- I2. No reply rolls a task back: older `updatedAt` keeps the old record with the reply's measurements (`roost--newer-events`). What changes with no event of the agent's has a clock of its own, and a reply with an older one keeps what Emacs has of it: the name (`renamedAt`, `roost--newer-name`), the look (`roost--newer-look`), the offers (`offersAt`, `roost--newer-offers`), the branch it starts from and merges into (`retargetedAt`, `roost--newer-branch`) and a pull request left to its agent (`prLeftAt`, `roost--newer-left`). Not what it shows, which has a clock (`shown.at`) that the merge doesn't go by: Open, below.
 - I3. A reply saying the task went always counts. It would not if its `updatedAt` were older, but `retire`, `discard` and `forget` all stamp `now()` last.
 - I4. String order of `updatedAt` is time order, and of the other clocks. `now()` is UTC isoformat; `+` sorts before `.`, so a whole second sorts first. True while the host's clock doesn't step back.
 
 `test/formal/emacs_and_hosts` checks I1 and I2 as `NoRollback`, and I2 of the offers
 and the branch as `NoOfferRollback` and `NoBranchRollback`, with replies in every order.
+I2 of what a task shows is `NoShownRollback`, which fails
+(`CachedTasks.finding-shown-rollback.cfg`); of a pull request left to its agent,
+`test/formal/pull_request_left` has it.
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
@@ -1667,7 +1679,9 @@ and the branch as `NoOfferRollback` and `NoBranchRollback`, with replies in ever
 | Absent | Create replies | | Cached | Revision bumped; each of a draft's several attempts replies for itself | `roost--task-made` |
 | Went | Create replies | a list showed it, and it went | Went | Revision bumped; the reply goes only to the command, and nothing opens | `roost--task-made`, `roost--cache-reply` |
 | Cached | List names it | | Cached | Merged by I2; absent measurements carried over | `roost--cache-task` |
-| Cached | Reply or list names it | read before a rename, a look, an offer made or taken, or `B` that Emacs has news of already | Cached | Emacs keeps its own of that; the rest merged by I2 | `roost--cache-task` |
+| Cached | Reply or list names it | read before a rename, a look, an offer made or taken, `B`, or a pull request left, taken back or told of, that Emacs has news of already | Cached | Emacs keeps its own of that; the rest merged by I2 | `roost--cache-task` |
+| Cached | Reply names it | read before its agent showed an image or a page that Emacs has news of already, with the same `updatedAt` | Cached | **The reply's `shown` replaces the newer one**, until the next list | `roost--cache-task` |
+| Cached | Create replies, of a task made from its offer | | Cached | Nothing of it in the reply: its host took the offer, and the draft asks for the host to be listed, so the offer's row goes with that list | `roost-compose-submit`, `roost--refresh-host` |
 | Cached | List lacks it | | Went | All keyed state and its notes go; its key noted in `roost--went` | `roost--apply-snapshot` |
 | Cached | Reply says retired, forgotten or discarded | | Went | Its notes go; its key noted in `roost--went` | `roost--cache-task` |
 | Cached | Host forgotten | | Absent | | `roost-forget-host` |
@@ -1676,7 +1690,16 @@ and the branch as `NoOfferRollback` and `NoBranchRollback`, with replies in ever
 
 Illegal or refused: none.
 
-Open: none. Found by the model and fixed: a reply its host read before `B`, as one
+Open: a reply its host read before the task's agent showed an image or a page, as one
+to opening the task (`inspect`), that comes after the list that read it since has the
+same `updatedAt`, as showing is no event of the agent's, and takes the task back to
+what it showed before, or to nothing, until the next list: the panel no longer names
+the image, and `roost-show-image` says the task has shown none. The image on screen
+stays, and no older one is fetched: `roost--shown-at` only moves on. Found by the
+model, 2026-11-17 (`CachedTasks.finding-shown-rollback.cfg`); in the code since
+`show_image` (#263).
+
+Found by the model and fixed: a reply its host read before `B`, as one
 to stopping the task, that came after `B`'s own had the same `updatedAt`, and brought
 back the branch the task merged into before, until the next poll: `m` asked about
 that branch, and the host merged into the new one. `retarget` now stamps
