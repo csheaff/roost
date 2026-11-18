@@ -1351,6 +1351,21 @@ CODEX_NOTE = re.compile(r"\s*<(environment_context|user_instructions|user_shell_
                         r"|subagent_notification|skill)>.*</\1>\s*\Z", re.S)
 
 
+def toml_value(value):
+    """VALUE, a string or a list of them, as a TOML value for Codex's -c.
+    A JSON string reads as TOML's with each character as itself: TOML
+    takes no escaped pair, as JSON writes one past the BMP, and DEL
+    escaped, which JSON leaves as it is."""
+    return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f")
+
+
+# The name of Roost's MCP server for a Codex task, which its hooks name its
+# tools by (mcp__roost_task__show_image). Not `roost', which a server of
+# your own in ~/.codex/config.toml may be named; tasks started before
+# report that.
+CODEX_SERVER = "roost_task"
+
+
 def asks_about_plan(task):
     """Whether TASK's agent rests at a menu that asks whether to implement
     its plan: its turn is over, and nothing of it is at work."""
@@ -1384,9 +1399,7 @@ class CodexAgent:
         command = shlex.join([sys.executable, hook_shim(store)])
         argv = list(task["command"])
         for event in CODEX_HOOK_EVENTS:
-            # A JSON string reads as TOML's with each character as itself:
-            # TOML takes no escaped pair, as JSON writes one past the BMP.
-            handler = ('{ hooks = [{ type = "command", command = ' + json.dumps(command, ensure_ascii=False)
+            handler = ('{ hooks = [{ type = "command", command = ' + toml_value(command)
                        + ', timeout = 3 }] }')
             argv += ["-c", "hooks." + event + "=[" + handler + "]"]
         if task.get("mayOffer") is True:
@@ -1396,8 +1409,10 @@ class CodexAgent:
             # so Codex runs them as if approved.
             server = dict(command=sys.executable, args=mcp_arguments(store, task),
                           default_tools_approval_mode="approve")
+            # Under a name of its own: Codex merges an override into a
+            # server of yours by the same name, key by key.
             for key, value in server.items():
-                argv += ["-c", "mcp_servers.roost.%s=%s" % (key, json.dumps(value, ensure_ascii=False))]
+                argv += ["-c", "mcp_servers.%s.%s=%s" % (CODEX_SERVER, key, toml_value(value))]
         session = task.get("agentSession")
         prompt = [first_message(task)] if first_message(task) else []
         if resume_conversation and session:
@@ -1495,10 +1510,13 @@ class CodexAgent:
             return None
         plan = None
         for entry in entries:
-            if self.said(entry, "user") is not None:
+            yours = self.said(entry, "user")
+            if yours is not None:
                 # Another turn, or what you sent during this one, which
-                # Codex goes on with rather than ask.
-                plan = None
+                # Codex goes on with rather than ask; not a note of its
+                # own, as a subagent's that ended, after which it asks.
+                if not self.own_note(entry, yours):
+                    plan = None
             else:
                 found = PROPOSED_PLAN.search(self.said(entry, "assistant") or "")
                 if found:
@@ -1557,7 +1575,7 @@ class CodexAgent:
 
 
 PI_EXTENSION = r'''import { spawn } from "node:child_process";
-import { renameSync, writeFileSync } from "node:fs";
+import { renameSync, unlinkSync, writeFileSync } from "node:fs";
 export default function (pi) {
   // A dialog that outlives its session has a context that throws.
   const sessionOf = ctx => { try { return ctx.sessionManager.getSessionFile(); } catch { return undefined; } };
@@ -1615,15 +1633,55 @@ export default function (pi) {
   // what there is of a tool call's input so far, so what there is of a
   // show_widget call's page goes in a file an Emacs on this machine
   // watches, at most ten times a second and less often as the page grows
-  // long, and once more when it is whole. The call itself then reaches
+  // long, and once more when it is whole; the file of one it stops
+  // writing goes, as Emacs then closes the page. The call itself then reaches
   // Roost's MCP server as any call does. A Pi that takes no such listener
   // goes without, as one with no MCP client goes without the tools.
   if (process.env.ROOST_PI_LIVE) {
     const file = process.env.ROOST_PI_LIVE;
-    let latest, timer;
+    // What the file holds, what there is of the page since, and the call
+    // whose page is more than Roost shows.
+    let written, latest, timer, refused;
+    // The bytes the helper counts of CODE in the page it keeps: in UTF-8,
+    // escaped as html.escape does, a lone half of a pair as "?". Past the
+    // room the page's frame leaves, its server refuses the call.
+    const room = __PAGE_ROOM__;
+    const fits = code => {
+      if (code.length * 6 <= room) return true;
+      let bytes = 0;
+      for (let i = 0; i < code.length && bytes <= room; i++) {
+        const unit = code.charCodeAt(i);
+        if (unit === 38) bytes += 5;
+        else if (unit === 60 || unit === 62) bytes += 4;
+        else if (unit === 34 || unit === 39) bytes += 6;
+        else if (unit < 0x80) bytes += 1;
+        else if (unit < 0x800) bytes += 2;
+        else if (unit < 0xdc00 && unit >= 0xd800 && (code.charCodeAt(i + 1) & 0xfc00) === 0xdc00) { bytes += 4; i++; }
+        else if (unit >= 0xd800 && unit < 0xe000) bytes += 1;
+        else bytes += 3;
+      }
+      return bytes <= room;
+    };
+    // No more of a page the file holds half of: Emacs takes the file's
+    // going for the end of that page, as when you stop the run.
+    const drop = () => {
+      clearTimeout(timer);
+      timer = latest = undefined;
+      if (written && !written.whole) {
+        written = undefined;
+        try { unlinkSync(file); } catch {}
+      }
+    };
     const write = () => {
       timer = undefined;
-      try { writeFileSync(file + ".part", JSON.stringify(latest)); renameSync(file + ".part", file); } catch {}
+      // More than Roost shows: its server will say so, of the whole
+      // call, and no more of this one is kept.
+      if (!fits(latest.code)) { refused = latest.id; return drop(); }
+      try {
+        writeFileSync(file + ".part", JSON.stringify(latest));
+        renameSync(file + ".part", file);
+        written = latest;
+      } catch {}
     };
     try {
       pi.on("message_update", event => {
@@ -1632,15 +1690,19 @@ export default function (pi) {
         const whole = update.type === "toolcall_end";
         const call = whole ? update.toolCall : (update.partial ?? event.message)?.content?.[update.contentIndex];
         if (!call || call.name !== "mcp__roost__show_widget") return;
+        const id = String(call.id ?? "");
+        if (id === refused) return;
         const code = call.arguments?.widget_code, title = call.arguments?.title;
-        // More than Roost shows: its server will say so, of the whole
-        // call, and no more of this one is kept.
-        if (typeof code === "string" && code.length > 500000) { clearTimeout(timer); timer = undefined; return; }
-        latest = { id: String(call.id ?? ""), title: typeof title === "string" ? title : "",
+        latest = { id, title: typeof title === "string" ? title : "",
                    code: typeof code === "string" ? code : "", whole };
         if (whole) { clearTimeout(timer); write(); }
         // The whole of it is handed on each time: a long page, less often.
         else if (!timer) timer = setTimeout(write, Math.max(100, latest.code.length / 500));
+      });
+      // A message that ends with its page half written, as when you stop
+      // it with Esc, writes no more of it.
+      pi.on("message_end", event => {
+        if (event?.message?.role === "assistant") { drop(); refused = undefined; }
       });
     } catch {}
   }
@@ -1683,8 +1745,11 @@ class PiAgent:
             raise RoostError("Roost owns Pi's session and interactive mode; remove conflicting CLI flags")
 
     def launch(self, store, task, resume_conversation):
-        extension = store.root / ("pi-observer-" + hashlib.sha256(PI_EXTENSION.encode()).hexdigest()[:16] + ".mjs")
-        atomic_text(extension, PI_EXTENSION)
+        # The room a page's frame leaves for the agent's code, as the
+        # helper counts it, so the extension keeps no page the helper refuses.
+        code = PI_EXTENSION.replace("__PAGE_ROOM__", str(PAGE_LIMIT - len(widget_page("").encode())))
+        extension = store.root / ("pi-observer-" + hashlib.sha256(code.encode()).hexdigest()[:16] + ".mjs")
+        atomic_text(extension, code)
         sessions = store.root / "sessions" / task["id"]
         sessions.mkdir(mode=0o700, parents=True, exist_ok=True)
         argv = task["command"] + ["--extension", str(extension), "--session-dir", str(sessions)]

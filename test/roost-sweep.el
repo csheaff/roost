@@ -1204,7 +1204,8 @@ Only for a task that waits, which it goes to, in echo areas narrow and wide."
 (defun roost-sweep--gone (view state width actions way)
   "Draw VIEW for STATE at WIDTH, do ACTIONS, and have it go by WAY.
 WAY is one of the view's :goes.  Return what is wrong then, or nil: a
-Lisp error, its buffer still there, or a window you had beside it gone."
+Lisp error, its buffer still there, a window you had beside it gone,
+or its frame, as if you had another one open."
   (roost-sweep--world
     (save-window-excursion
       (let* ((existing (buffer-list))
@@ -1212,9 +1213,23 @@ Lisp error, its buffer still there, or a window you had beside it gone."
              ;; What you had beside it as it came: one that fills the
              ;; frame from the start has taken their windows already.
              (yours (delq nil (mapcar #'get-buffer '("*sweep elsewhere*" "*sweep code*"))))
+             (deletable (symbol-function 'window-deletable-p))
+             (deleting (symbol-function 'delete-frame))
+             (alone (null (cdr (frame-list))))
+             (frame (selected-frame))
+             frame-deleted
              error)
         (unwind-protect
-            (progn
+            (cl-letf* (;; Batch Emacs has one frame: as with another, a
+                       ;; frame's only window can go, and its frame with it.
+                       ((symbol-function 'window-deletable-p)
+                        (lambda (&optional window &rest more)
+                          (if (and alone (frame-root-window-p (window-normalize-window window)))
+                              'frame
+                            (apply deletable window more))))
+                       ((symbol-function 'delete-frame)
+                        (lambda (&rest args)
+                          (if alone (setq frame-deleted t) (apply deleting args)))))
               (dolist (action actions)
                 (when (and (buffer-live-p buffer) (not error))
                   (set-buffer buffer)
@@ -1224,6 +1239,7 @@ Lisp error, its buffer still there, or a window you had beside it gone."
                                 (progn (funcall way state buffer) nil)
                               (error err))))
               (cond (error (format "fails: %S" error))
+                    ((or frame-deleted (not (frame-live-p frame))) "deletes its frame")
                     ((buffer-live-p buffer) "leaves its buffer")
                     ((seq-find (lambda (mine) (not (get-buffer-window mine))) yours)
                      (format "takes the window of %s with it"

@@ -17,6 +17,37 @@ What each release changes, and what to do when upgrading. Newest first.
 - A project or state folder named under a user this host doesn't have
   (`~someone/project`) is refused with a plain message, rather than an
   internal error.
+- Codex tasks start with a server of your own named `roost` in
+  `~/.codex/config.toml`. Codex merged Roost's tools into yours: a task
+  failed to start beside an HTTP server, and took your server's environment
+  and switches. Roost's server is now `roost_task` for Codex, and its hooks
+  name the tools `mcp__roost_task__…`. When upgrading, tasks started before
+  keep the old name until they start again; a rule or hook of yours that
+  names `mcp__roost__` tools in Codex needs the new name.
+- A Codex task whose state directory's name holds a DEL character starts:
+  Codex refused the hook and server settings Roost gave it.
+- A Codex task that ends a Plan-mode turn with a note of its own after the
+  plan, as a subagent's that ended, shows as asking about its plan, not
+  ready.
+- A Pi task's page drawn as the model writes it is shown whole only when
+  Roost can keep it: a page of non-Latin text, or mostly tags and quotes,
+  showed whole and was then refused as more than 512 KB. One that grows
+  past that, or that you stop with Esc while it is written, closes rather
+  than staying half drawn, and Roost says it stopped.
+- A page that fills its frame no longer deletes the frame when its task
+  goes while you have another frame open. Your windows come back, as for
+  an image.
+- With Evil, `q` goes back from several images or a page an agent shows,
+  and from a terminal still connecting, rather than recording a macro;
+  over one image, `q`, `z`, `n` and `p` are Roost's in normal state too.
+  These views start in `roost-evil-state`, as the panels do, or in motion
+  state where it is nil.
+- Magit's status of a task opens beside an image its agent shows, or in
+  place of another window, rather than in the image's window.
+- The sidebar shows the task you work on when your windows come back:
+  after `q` from an image that filled the frame, or going back to a
+  task's tab or perspective. It came back at its top, the task's row out
+  of view.
 - Retiring or discarding a task no longer deletes a file that something its
   agent left running wrote as the worktree went, as a dev server started
   with `nohup` does. Stopping a task now ends what its agent and its shell
@@ -27,6 +58,26 @@ What each release changes, and what to do when upgrading. Newest first.
   upgrading: a server you started from a task's agent or shell stops with
   the task, but for a daemon, such as a build tool's server; start it
   outside the task to keep it running.
+- Tasks on a remote host attach when the host writes to stderr, such as a
+  login script's warning, while Roost asks it where its tmux socket is.
+  The warning became part of the path, and every task on that host said
+  "Could not attach" until Emacs restarted. A line a login script prints
+  before the answer is left out too.
+- A terminal on a host whose connection drops while you answer a question
+  in the minibuffer is tried again. It said "Could not attach" of a session
+  that had attached, and stayed so until you opened its task again.
+- A terminal waiting for its session no longer says "Could not attach"
+  while it connects: when a try of a dropped host's connection, an open in
+  another frame, or ghostel-tmux switching another client to the session
+  attaches it, every window waiting for it says
+  "Connecting to" it. Its mode line says the same as its text: "Could not
+  attach" or "Detached", not "Connecting".
+- With tab-bar or perspective.el workspaces, a task opened in two frames
+  while it connects shows its terminal in both, though one was in another
+  workspace when it connected. And the buffer that stood in for a terminal
+  you put another buffer over, before it connected or while a question was
+  open, goes once it does, rather than staying hidden; so does one kept for
+  a tab or perspective you close.
 - A terminal that cannot attach its task's tmux session says so. When the
   session went as you opened the task, or the connection dropped as it
   attached, the window said "Connecting to" the session for good. It now

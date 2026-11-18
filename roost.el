@@ -1979,7 +1979,18 @@ As when it has been closed, or was shown before this Emacs started."
        (ignore-errors (delete-file file)))))
   (when-let* ((buffer (roost--shown-buffer key)))
     ;; With its window, and once you are out of the minibuffer.
-    (roost--close-buffer buffer)))
+    (roost--when-out-of-minibuffer
+     (lambda ()
+       (when (buffer-live-p buffer)
+         (dolist (window (get-buffer-window-list buffer nil t))
+           ;; Your windows first, if it filled the frame.
+           (when (roost--shown-enlarged-p window)
+             (roost--shown-go-back window)))
+         ;; A page's window is its own: quitting it as its frame's only
+         ;; window would delete the frame, where you have another.
+         (dolist (window (get-buffer-window-list buffer nil t))
+           (set-window-dedicated-p window nil))
+         (roost--close-buffer buffer))))))
 
 ;;;; Notifications held to go together
 
@@ -3223,14 +3234,18 @@ answer to the task's terminal.  A question you had left open when you
 asked for the task is quit first, by `roost--quit-questions-left-open'."
   (if (not (active-minibuffer-window))
       (funcall function)
-    (cl-incf roost--held-for-minibuffer)
     (letrec ((done (lambda ()
                      (cl-decf roost--held-for-minibuffer)
                      (remove-hook 'minibuffer-exit-hook done)
                      ;; Once its window has given the selection back.
                      (run-at-time 0 nil #'roost--when-out-of-minibuffer function))))
-      ;; In turn: a terminal that goes, then the one that takes its place.
-      (add-hook 'minibuffer-exit-hook done t))))
+      ;; One held already, alike, as the same function held twice, goes
+      ;; for both: `add-hook' adds it once to the global value, and the
+      ;; count with it.
+      (unless (member done (default-value 'minibuffer-exit-hook))
+        (cl-incf roost--held-for-minibuffer)
+        ;; In turn: a terminal that goes, then the one that takes its place.
+        (add-hook 'minibuffer-exit-hook done t)))))
 
 (defun roost--close-buffer (buffer)
   "Close BUFFER, as a host's reply says it is done, and the windows made for it.
@@ -4300,6 +4315,8 @@ window is a tiled terminal's pane, which BUFFER would not keep."
                                 ;; a text terminal.
                                 (not (or (window-parameter window 'window-side)
                                          (window-dedicated-p window)
+                                         ;; Nor one of an image an agent showed.
+                                         (roost--shown-window-p window)
                                          (with-current-buffer (window-buffer window)
                                            (roost--tmux-buffer-p)))))
                               (window-list nil 'nomini))))
@@ -6548,7 +6565,8 @@ their changes together.  See `roost-magit-status-sections'."
          ;; has the function under its older name.
          (if (fboundp 'magit--insert-log)
              (magit--insert-log nil range magit-buffer-log-args)
-           (magit-insert-log range magit-buffer-log-args))
+           ;; Obsolete where the new name is, so not called there.
+           (with-no-warnings (magit-insert-log range magit-buffer-log-args)))
          (magit-log-insert-child-count))))))
 
 (defvar-keymap roost-since-looked-section-map
@@ -7796,7 +7814,38 @@ Without Magit, Dired."
       (dired (roost--remote-directory task))
     (add-hook 'magit-post-refresh-hook #'roost--magit-refreshed)
     (roost--magit-setup)
-    (magit-status (roost--remote-directory task))))
+    (let ((display-buffer-base-action
+           ;; Not in the window of an image an agent showed, where Magit
+           ;; has no place of its own: the image would go from view.
+           (if (seq-some #'roost--shown-window-p (window-list))
+               (cons (append (ensure-list (car display-buffer-base-action))
+                             '(display-buffer-reuse-window roost--display-past-shown))
+                     (cdr display-buffer-base-action))
+             display-buffer-base-action)))
+      ;; Its command, which offers to make a repository where there is
+      ;; none, as `magit-status-setup-buffer' would not.
+      (with-no-warnings (magit-status (roost--remote-directory task))))))
+
+(defun roost--shown-window-p (window)
+  "Whether WINDOW shows what a task's agent showed."
+  (buffer-local-value 'roost--shown-task (window-buffer window)))
+
+(defun roost--display-past-shown (buffer alist)
+  "Show BUFFER beside or in a window that shows no agent's image.
+In a new window split from the selected one, if it shows none and can
+be split, or else in another window of the frame's, or the selected
+one.  ALIST is as for `display-buffer'."
+  (let* ((windows (window-list nil 'no-minibuffer))
+         (free (lambda (window)
+                 (not (or (roost--shown-window-p window)
+                          (window-dedicated-p window)
+                          (window-parameter window 'window-side)))))
+         (new (and (funcall free (selected-window))
+                   (split-window-sensibly (selected-window)))))
+    (if new
+        (window--display-buffer buffer new 'window alist)
+      (when-let* ((window (seq-find free (append (cdr windows) (list (car windows))))))
+        (window--display-buffer buffer window 'reuse alist)))))
 
 (defun roost--measure-task-in (directory)
   "Fetch the Git statistics of the task whose worktree contains DIRECTORY.
@@ -10719,7 +10768,9 @@ Claude Code makes them for its EnterWorktree tool and isolated subagents."
                             'help-echo (concat path "\nmouse-1: open it in Magit")
                             'action (lambda (_)
                                       (let ((directory (roost--host-directory (roost--field task 'host) path)))
-                                        (if (require 'magit nil t) (magit-status directory) (dired directory)))))
+                                        (if (require 'magit nil t)
+                                            (with-no-warnings (magit-status directory))
+                                          (dired directory)))))
         (insert "  "
                 (propertize (string-join
                              (or (delq nil (list (when (> ahead 0)
@@ -12151,7 +12202,9 @@ And show all of several images again, where it showed one alone."
       (setq roost--shown-one nil))
     (set-window-parameter window 'roost-shown-back nil)
     (when back
-      (set-window-configuration (cdr back)))
+      (set-window-configuration (cdr back))
+      (with-selected-frame (window-configuration-frame (cdr back))
+        (roost--sidebar-show-current)))
     (when-let* ((window (get-buffer-window buffer)))
       (roost--draw-shown buffer window))))
 
@@ -12168,6 +12221,7 @@ its window, the only one left, would show another buffer in its place."
             (set-window-parameter window 'roost-shown-back nil)
             (when (eq (window-configuration-frame (cdr back)) frame)
               (set-window-configuration (cdr back))
+              (with-selected-frame frame (roost--sidebar-show-current))
               ;; Its own window among them goes with it.
               (dolist (own (get-buffer-window-list buffer nil frame))
                 (when (eq (window-deletable-p own) t)
@@ -12207,12 +12261,28 @@ that came while one filled the frame, to the windows as they were."
 (define-derived-mode roost-shown-sheet-mode special-mode "Roost-Images"
   "The images a task's agent showed you together.
 \\{roost-shown-sheet-mode-map}"
+  ;; As a panel, or else where `q' is not Evil's.
+  (roost--evil-state 'roost-shown-sheet-mode (or roost-evil-state 'motion))
   (setq-local cursor-type nil
               truncate-lines t))
 
+(defvar roost--shown-evil-keys nil
+  "Non-nil once the keys of an image an agent showed have Evil bindings.")
+
 (define-minor-mode roost-shown-mode
-  "Keys for an image a task's agent showed: a click or `z' enlarges it."
-  :lighter nil)
+  "Keys for an image a task's agent showed: a click or `z' enlarges it.
+With Evil, they work in normal and motion state too, over those
+`image-mode' has there."
+  :lighter nil
+  (when (and roost-shown-mode (fboundp 'evil-define-minor-mode-key))
+    (unless roost--shown-evil-keys
+      (setq roost--shown-evil-keys t)
+      (evil-define-minor-mode-key '(normal motion) 'roost-shown-mode
+        "z" #'roost-enlarge-image
+        "n" #'roost-next-image
+        "p" #'roost-previous-image
+        "q" #'roost-quit-image))
+    (evil-normalize-keymaps)))
 
 ;;;; Pages an agent shows
 
@@ -12240,6 +12310,7 @@ that came while one filled the frame, to the windows as they were."
 (define-derived-mode roost-shown-page-mode special-mode "Roost-Page"
   "A page a task's agent showed you, in a web view.
 \\{roost-shown-page-mode-map}"
+  (roost--evil-state 'roost-shown-page-mode (or roost-evil-state 'motion))
   (setq-local cursor-type nil
               ;; Its view goes with it, without asking.
               kill-buffer-query-functions
@@ -12470,12 +12541,30 @@ While one is being written, look again shortly, whether or not its
 file's changes are each reported."
   (setq roost--live-timer nil)
   (let ((now (float-time))
+        (files (roost--live-files))
         again)
-    (pcase-dolist (`(,file . ,time) (roost--live-files))
+    ;; A page whose file went while it was being written ends there, as
+    ;; when you stop its agent or the page is more than Roost shows.
+    (let (gone)
+      ;; Not when the folder can't be read: then nothing says which went.
+      (when (file-accessible-directory-p (roost--live-directory))
+        (maphash (lambda (file seen)
+                   (when (and (eq (nth 1 seen) 'writing) (not (assoc file files)))
+                     (push file gone)))
+                 roost--live-seen))
+      (dolist (file gone)
+        (remhash file roost--live-seen)
+        (with-demoted-errors "Roost: %S" (roost--live-stopped file))))
+    (pcase-dolist (`(,file . ,time) files)
       (let ((seen (gethash file roost--live-seen)))
         (unless (equal time (car seen))
-          (let ((state (with-demoted-errors "Roost: %S" (roost--take-live file))))
-            (setq seen (puthash file (list time state now) roost--live-seen))
+          (let ((state (and (file-exists-p file)
+                            (with-demoted-errors "Roost: %S" (roost--take-live file)))))
+            ;; A file that went before it could be read keeps what was
+            ;; seen of it, so the next look finds a page that stopped.
+            (if (and (null state) (not (file-exists-p file)))
+                (setq again t)
+              (setq seen (puthash file (list time state now) roost--live-seen)))
             ;; Whole: its host, this machine, has the call next, and says
             ;; so when asked.
             (when (eq state 'whole)
@@ -12546,6 +12635,27 @@ nil if FILE is no page of a task this Emacs knows."
          (format-message "%s is drawing a page" (roost--field task 'name))
          (format-message "%s is drawing a page: open it to see" (roost--field task 'name)))))
       (if whole 'whole 'writing))))
+
+(defun roost--live-stopped (file)
+  "Close the page that was being written in FILE, which went before it was whole.
+Its agent's extension removes the file when the agent stops writing the
+page, as when you stop it, or when the page is more than Roost shows: its
+host never has it.  What the task showed before, which this buffer held,
+is fetched again by the next poll."
+  (when-let* ((task (gethash (list nil (file-name-base file)) roost--tasks))
+              (key (roost--key task))
+              (buffer (roost--shown-buffer key))
+              (live (buffer-local-value 'roost--shown-live buffer))
+              ((not (nth 2 live))))
+    (when (eq (gethash key roost--shown-waiting) buffer)
+      (remhash key roost--shown-waiting))
+    (remhash key roost--shown-at)
+    (roost--when-out-of-minibuffer
+     (lambda ()
+       ;; Unless another page or image has taken the buffer meanwhile.
+       (when (and (buffer-live-p buffer) (eq (buffer-local-value 'roost--shown-live buffer) live))
+         (roost--close-buffer buffer))))
+    (message "%s stopped drawing a page" (roost--field task 'name))))
 
 (defun roost--hand-live ()
   "Hand this buffer's view what its agent has written of its page so far.
@@ -14978,29 +15088,51 @@ for any other directory, which asks for a host and a folder first."
     ;; changes, so that its band shows however many tasks there are; one
     ;; you scrolled since stays where you left it.
     (dolist (shown (get-buffer-window-list (current-buffer) nil t))
-      ;; With workspaces, each frame's own task.
-      (let ((current (if (roost--workspace-backend)
-                         (with-selected-frame (window-frame shown)
-                           (when-let* ((task (roost--frame-task))) (roost--key task)))
-                       roost--current-task)))
+      (let ((current (roost--sidebar-current shown)))
         (unless (or (eq shown (selected-window))
                     (equal (window-parameter shown 'roost-followed) current))
           ;; Followed once its row is there, as a new task's may not be yet.
           (unless current (set-window-parameter shown 'roost-followed nil))
           (when-let* ((row (and current (roost--task-row current))))
             (set-window-parameter shown 'roost-followed current)
-            (set-window-point shown row)
-            ;; Scrolled no further than it shows the row, at the bottom:
-            ;; the top, with the hosts it can't reach, stays as long as
-            ;; it can.
-            (let ((height (window-body-height shown))
-                  (top (line-number-at-pos (window-start shown)))
-                  (at (line-number-at-pos row)))
-              (unless (and (>= at top) (< at (+ top height)))
-                (set-window-start shown (save-excursion (goto-char row) (forward-line (- 1 height)) (point))
-                                  t)))))))
+            (roost--sidebar-bring-row shown row)))))
     ;; Redrawing removed the highlight with the text.
     (roost--sidebar-mark-selection)))
+
+(defun roost--sidebar-current (window)
+  "The key of the task WINDOW, a sidebar's, marks as the one you work on.
+With workspaces, its frame's own task."
+  (if (roost--workspace-backend)
+      (with-selected-frame (window-frame window)
+        (when-let* ((task (roost--frame-task))) (roost--key task)))
+    roost--current-task))
+
+(defun roost--sidebar-bring-row (window row)
+  "Put WINDOW's point on ROW, scrolling it if it does not show ROW.
+No further than it shows the row, at the bottom: the top, with the
+hosts it can't reach, stays as long as it can.  In the sidebar's buffer."
+  (set-window-point window row)
+  (let ((height (window-body-height window))
+        (top (line-number-at-pos (window-start window)))
+        (at (line-number-at-pos row)))
+    (unless (and (>= at top) (< at (+ top height)))
+      (set-window-start window (save-excursion (goto-char row) (forward-line (- 1 height)) (point))
+                        t))))
+
+(defun roost--sidebar-show-current (&rest _)
+  "Show the task you work on in the selected frame's sidebar, if it has one.
+As windows that were put away come back, as they were then: the
+sidebar's among them kept where it was in text a redraw has replaced
+since, and comes back at its top or elsewhere.  For
+`tab-bar-tab-post-select-functions', or after `tab-bar-select-tab'
+before Emacs 30, and `persp-switch-hook' too."
+  (when-let* ((buffer (get-buffer roost--sidebar-buffer)))
+    (with-current-buffer buffer
+      (dolist (shown (get-buffer-window-list buffer nil (selected-frame)))
+        (when-let* (((not (eq shown (selected-window))))
+                    (current (roost--sidebar-current shown))
+                    (row (roost--task-row current)))
+          (roost--sidebar-bring-row shown row))))))
 
 (defun roost--sidebar-get-buffer ()
   "The task sidebar buffer, rendered."
@@ -15216,7 +15348,12 @@ Workspace switches, splits, resizes and new frames all change the layout.
 Called when Roost first shows a side window, rather than when it loads;
 `roost-unload-function' stops it."
   (add-hook 'window-configuration-change-hook #'roost--layout-changed)
-  (add-hook 'after-delete-frame-functions #'roost--frame-deleted))
+  (add-hook 'after-delete-frame-functions #'roost--frame-deleted)
+  ;; Emacs 30 has the hook; before it, after the command it runs.
+  (if (boundp 'tab-bar-tab-post-select-functions)
+      (add-hook 'tab-bar-tab-post-select-functions #'roost--sidebar-show-current)
+    (advice-add 'tab-bar-select-tab :after #'roost--sidebar-show-current))
+  (add-hook 'persp-switch-hook #'roost--sidebar-show-current))
 
 (defun roost--frame-deleted (_frame)
   "Mark the selected frame's task once the task marked is in no frame.
@@ -15320,6 +15457,9 @@ Beside a terminal, that turns off `roost-task-panel-mode'."
 (defun roost-unload-function ()
   "Remove Roost's hooks, advice and side windows for `unload-feature'.
 Requests under way go too, as their replies would find no Roost to take them."
+  ;; The terminal backend first: its hooks call Roost's functions.
+  (when (featurep 'roost-ghostel-tmux)
+    (unload-feature 'roost-ghostel-tmux t))
   (dolist (process (copy-sequence roost--requests))
     (process-put process 'roost-dropped t)
     (delete-process process))
@@ -15335,6 +15475,9 @@ Requests under way go too, as their replies would find no Roost to take them."
         (delete-window panel))))
   (remove-hook 'window-configuration-change-hook #'roost--layout-changed)
   (remove-hook 'after-delete-frame-functions #'roost--frame-deleted)
+  (remove-hook 'tab-bar-tab-post-select-functions #'roost--sidebar-show-current)
+  (advice-remove 'tab-bar-select-tab #'roost--sidebar-show-current)
+  (remove-hook 'persp-switch-hook #'roost--sidebar-show-current)
   (when (timerp roost--layout-timer) (cancel-timer roost--layout-timer))
   (when (timerp roost--opening-timer) (cancel-timer roost--opening-timer))
   (remove-hook 'magit-post-refresh-hook #'roost--magit-refreshed)
