@@ -10860,6 +10860,24 @@ print(json.dumps(dict(data=data)))
         self.assertIn('srcdoc="%s"' % html.escape(roost.WIDGET_HEAD, quote=True), page)
         self.assertIn("var roostHead = roostFrame.getAttribute('srcdoc');", page)
         self.assertIn("var roostHead = null;", roost.widget_page("<p>whole</p>"))
+
+    def test_removing_a_task_takes_the_page_it_was_writing(self):
+        store = roost.Store(str(self.state))
+        task = dict(id="1234567890abcdef", command=["pi"], prompt="Look",
+                    mayOffer=True, mayShowPages=True, pagesAsWritten=True)
+        store.save(task)
+        live = Path(roost.PiAgent().environment(store, task, {})["ROOST_PI_LIVE"])
+        # As Roost's Pi extension writes it, and one it was killed writing.
+        live.write_text(json.dumps(dict(id="1", title="A page", code="<p>secret</p>", whole=True)))
+        part = live.with_name(live.name + ".part")
+        part.write_text('{"id": "2", "code": "<p>sec')
+        # As retiring, discarding and forgetting a task each end.
+        store.remove(task["id"])
+        self.assertFalse(store.path(task["id"]).exists())
+        for left in (live, part):
+            self.assertFalse(left.exists(), "%s stays after its task is gone" % left)
+        # The page Emacs loads to show one being written is every task's.
+        self.assertTrue((store.root / "live" / "page.html").exists())
         self.assertIn(html.escape(roost.WIDGET_HEAD + "<p>whole</p>", quote=True), roost.widget_page("<p>whole</p>"))
 
         # What Emacs goes by to leave a page it showed being written as it
