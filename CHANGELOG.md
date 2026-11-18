@@ -4,6 +4,16 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- An agent's offer waits on when the task you create from it fails to start,
+  as when the repository's post-checkout hook fails: its row no longer goes
+  with nothing made. Create the draft again, do it here, or dismiss it.
+- Do it here (`e`) on an offer is refused while its draft is creating its
+  task, and an offer the agent made again is sent to it again rather than
+  answered with "Already sent".
+- An agent that offers a task in the project of a user this host doesn't
+  have (`~someone/project`) is told so, rather than getting an internal
+  error.
+
 ## 0.13.0
 
 To upgrade from 0.12:

@@ -11382,6 +11382,89 @@ console.log(JSON.stringify(seen));
                              command=[sys.executable, str(FAKE)])
         self.assertEqual(reply, dict(ok=False, error="Invalid task ID"))
 
+    def failing_checkout(self):
+        """Have the repository's post-checkout hook write a file, then fail,
+        and return the hook."""
+        hooks = self.root / "hooks"
+        hooks.mkdir()
+        hook = hooks / "post-checkout"
+        hook.write_text("#!/bin/sh\necho made > made-by-hook\nexit 1\n")
+        hook.chmod(0o755)
+        self.git("config", "core.hooksPath", str(hooks))
+        return hook
+
+    def offers_listed(self, parent):
+        """PARENT's offers that wait, as a listing gives them and leaves them."""
+        listed = {task["id"]: task for task in self.request("list")["result"]}
+        self.assertEqual(listed[parent["id"]].get("offers"),
+                         roost.Store(str(self.state)).read(parent["id"]).get("offers"))
+        return listed[parent["id"]].get("offers")
+
+    def test_an_offer_whose_task_failed_to_start_waits_still(self):
+        # A post-checkout hook that wrote a file, then failed, leaves a
+        # failed record to look at, which is no task made from the offer:
+        # the draft says the task didn't start, and its offer waits.
+        parent = self.create(name="parent")
+        offer = self.offered(parent)
+        self.failing_checkout()
+        asked = dict(directory=str(self.repo), name=offer["title"], prompt=offer["brief"], parent=parent["id"],
+                     offer=offer["id"], createId="ab" * 8, socket=self.socket, command=[sys.executable, str(FAKE)])
+        reply = self.request("create", **asked)
+        self.assertIn("its worktree is kept", reply["error"])
+        [failed] = [task for task in roost.Store(str(self.state)).all() if task["status"] == "failed"]
+        # Under the task whose agent offered it, and made from no offer.
+        self.assertEqual((failed["parent"], failed.get("offer")), (parent["id"], None))
+        self.assertEqual(self.offers_listed(parent), [offer])
+        # Nor does finishing the failed task take it.
+        self.assertTrue(self.request("forget", id=failed["id"])["ok"])
+        self.assertEqual(self.offers_listed(parent), [offer])
+        # Asked for again while the hook still fails, and retired.
+        self.assertIn("its worktree is kept", self.request("create", **asked)["error"])
+        [failed] = [task for task in roost.Store(str(self.state)).all() if task["status"] == "failed"]
+        (Path(failed["worktree"]) / "made-by-hook").unlink()
+        reply = self.request("retire", id=failed["id"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(self.offers_listed(parent), [offer])
+
+    def test_a_failed_creation_from_an_offer_asked_again_takes_it_once(self):
+        parent = self.create(name="parent")
+        offer, other = self.offered(parent), self.offered(parent, title="Test calc")
+        hook = self.failing_checkout()
+        asked = dict(directory=str(self.repo), name=offer["title"], prompt=offer["brief"], parent=parent["id"],
+                     offer=offer["id"], createId="cd" * 8, socket=self.socket, command=[sys.executable, str(FAKE)])
+        self.assertIn("its worktree is kept", self.request("create", **asked)["error"])
+        self.assertEqual(self.offers_listed(parent), [offer, other])
+        # The same draft, sent again once the hook is put right: its task
+        # is made, and takes the offer, and no other.
+        hook.unlink()
+        reply = self.request("create", **asked)
+        self.assertTrue(reply["ok"], reply)
+        self.assertNotIn("alreadyMade", reply["result"])
+        self.assertEqual((reply["result"]["parent"], reply["result"]["offer"]), (parent["id"], offer["id"]))
+        self.assertEqual(roost.Store(str(self.state)).read(parent["id"])["offers"], [other])
+        self.assertEqual(self.offers_listed(parent), [other])
+        self.wait(reply["result"], "ready")
+        # Offered again, it waits as a new offer, whatever the failed
+        # record and the task made hold.
+        again = self.offered(parent)
+        self.assertNotEqual(again["id"], offer["id"])
+        self.assertEqual(self.offers_listed(parent), [other, again])
+        # And asked a third time, as after no reply, it is the task made.
+        reply = self.request("create", **asked)
+        self.assertTrue(reply["result"]["alreadyMade"], reply)
+        self.assertEqual(self.offers_listed(parent), [other, again])
+
+    def test_a_project_of_an_unknown_user_is_refused_as_any_other(self):
+        # Told to the agent, as a tool's error it can read and put right.
+        parent = self.create(name="parent")
+        reply = self.serve(parent, dict(id="call", method="tools/call", params=dict(
+            name="propose_task", arguments=dict(title="Tidy docs", brief="Tidy them.",
+                                                project="~nosuchuser-roost-hunt/project"))))["call"]
+        self.assertNotIn("error", reply, reply)
+        self.assertTrue(reply["result"]["isError"])
+        self.assertIn("by its whole path", reply["result"]["content"][0]["text"])
+        self.assertFalse(roost.Store(str(self.state)).read(parent["id"]).get("offers"))
+
     def test_an_offer_that_hides_what_it_says_is_refused(self):
         parent = self.create(name="parent")
         refused = [("", "Brief"), ("Title", " \n "), ("Two\nlines", "Brief"), ("Tab\there", "Brief"),

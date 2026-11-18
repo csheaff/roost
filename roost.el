@@ -13307,7 +13307,7 @@ replaces would be answered with that one's task."
   "Have the agent that made the offer at point, or clicked in EVENT, do it.
 Its task gets the prompt Do this task here: “TITLE”, as `e' sends
 one, and the offer no longer waits.  The agent wrote the brief, so the
-title is all it needs."
+title is all it needs.  Not while its draft is creating its task."
   (interactive (list last-nonmenu-event))
   (pcase-let ((`(,task ,offer) (roost--offer-at event)))
     (when (roost--offer-project task offer)
@@ -13317,12 +13317,23 @@ title is all it needs."
                   (roost--field task 'name)))
     (unless (roost--agent-running-p task)
       (user-error "%s's agent isn't running; resume it first" (roost--field task 'name)))
+    ;; Its draft's Create is on its way, and makes a task of it.
+    (when-let* ((draft (get-buffer roost--compose-buffer))
+                ((with-current-buffer draft
+                   (and roost--compose-submitting
+                        (equal (plist-get roost--compose-fields :parent) (roost--key task))
+                        (equal (plist-get roost--compose-fields :offer) (alist-get 'id offer))))))
+      (user-error "Already creating %s as a task of its own" (alist-get 'title offer)))
     (roost--send-text task (format "Do this task here: “%s”" (alist-get 'title offer))
                       (lambda (_task) (roost--take-offer task offer))
                       nil nil
                       ;; The same for the same offer, so that asking again,
-                      ;; as after no reply, pastes it once.
-                      (concat (roost--field task 'id) (alist-get 'id offer)))))
+                      ;; as after no reply, pastes it once.  An offer its
+                      ;; agent made again keeps its ID and says when, so
+                      ;; that one is asked anew.
+                      (substring (secure-hash 'sha256 (concat (roost--field task 'id) (alist-get 'id offer)
+                                                              (alist-get 'at offer)))
+                                 0 32))))
 
 (defun roost-offer-dismiss (&optional event)
   "Dismiss the offer at point, or the one clicked in EVENT.

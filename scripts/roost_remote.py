@@ -2779,6 +2779,9 @@ def abandon(store, task):
     worktree, repo = Path(task["worktree"]), task["repo"]
     # Asked for again, it is made anew.
     task.pop("createId", None)
+    # No task was made from its offer, which waits still: a listing takes
+    # the offer of a record that names one (`taken_offers`).
+    task.pop("offer", None)
     if task.get("windowId"):
         tmux(task["socket"], "kill-window", "-t", task["windowId"], check=False)
     # Never force-remove: a runner could already have written real work.
@@ -5280,7 +5283,11 @@ def offered_project(store, task, project):
     hidden = hidden_character(project) or ("\n" if "\n" in project else None)
     if hidden:
         raise RoostError("The project holds U+%04X, which no folder Roost offers a task in has" % ord(hidden))
-    folder = Path(project).expanduser()
+    try:
+        folder = Path(project).expanduser()
+    except RuntimeError:
+        # A ~user this host has none of.
+        folder = Path(project)
     if not folder.is_absolute():
         raise RoostError("Name the project by its whole path, as list_projects does")
     folder = Path(os.path.normpath(folder))

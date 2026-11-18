@@ -274,8 +274,10 @@ Invariants:
   (`hidden_character`.)
 - I5. A task made from an offer leaves none of it waiting, though its creation was
   cut short once the task was saved: the task records the offer it came from, and
-  every listing takes such an offer. (`make_task`,
-  `taken_offers`; `make crash`'s `CreateFromOffer`.)
+  every listing takes such an offer. A creation that failed makes no task: the
+  failed record it leaves to look at names no offer, so the offer waits, for the
+  same draft asked again or another. (`make_task`, `abandon`,
+  `taken_offers`; `make crash`'s `CreateFromOffer` and `CreateFromOfferFailing`.)
 - I6. An offer goes with its task only if the question before named it: the request
   says which offers that question named, and its host refuses while the record holds
   another. ([Finishing a task](#finishing-a-task), I6.)
@@ -289,6 +291,8 @@ Invariants:
 | Waiting | you have its agent do it here, or dismiss it, from its row or its draft | | Waiting or None | dropped | `take_offer` |
 | Waiting | a task is made from it | | Waiting or None | dropped; Emacs lists the host again, so its row goes | `make_task`, `take_offer` |
 | Waiting | a listing | a task records it as the offer it came from | Waiting or None | dropped | `taken_offers` |
+| Waiting | a task asked for from it fails to start, as when a post-checkout hook fails | | Waiting | none: the failed record, if one is kept, shows under its task and names no offer; asked again, the draft makes its task, which takes it | `abandon` |
+| Waiting | you have its agent do it here | its draft is creating its task | Waiting | refused: nothing is sent | `roost-offer-here` |
 | Waiting | task finished or forgotten | every offer it holds is one the question named | gone with the record | the question before names them, and the request says which, as `offers` | `roost--offers-sentence`, `roost--offers-named` |
 | Waiting | task finished or forgotten | it holds an offer the question didn't name, as one made while you read | Waiting | refused, naming it, and nothing changes; Emacs lists the task again, so asking again names it | `require_offers_named`, `roost--finish-refused` |
 
@@ -305,8 +309,10 @@ own, though what it says includes the task it shows under, so
 a late reply leaves a draft moved elsewhere and back. The draft knows its offer only to
 show it again as you left it, to give way to another offer while its brief is as it
 came, to close without a question then, and to dismiss it from its header. Do it here is an ordinary
-[send](#the-send-id) of a fixed line, with a send ID of the task's and the offer's IDs,
-so that asking again pastes it once, then a take. A take is asked only for a task still listed: one that went while
+[send](#the-send-id) of a fixed line, with a send ID of the task's and the offer's IDs
+and when it was offered (`at`), so that asking again pastes it once, and an offer its
+agent made again since, which keeps its ID, is asked of it anew; then a take. It is
+refused while the offer's draft is creating its task, which would be made as well. A take is asked only for a task still listed: one that went while
 Do it here's prompt went, as its host was forgotten, stays gone.
 Open: none.
 
