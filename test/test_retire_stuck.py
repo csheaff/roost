@@ -1,6 +1,7 @@
 """Ways a retire used to stay refused for good, against real Git: a
 removal Git cut short, a teardown command that leaves a file, and a ~user
 the host doesn't have."""
+import importlib.util
 import json
 from pathlib import Path
 import subprocess
@@ -8,6 +9,10 @@ import sys
 import unittest
 
 from crash_harness import Box, BUG_WORDS, FAKE, HELPER
+
+spec = importlib.util.spec_from_file_location("roost_remote", HELPER)
+roost = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(roost)
 
 # Once Git has begun to delete the worktree, write a file into the
 # worktree's own folder, which Git empties last: Git then fails to delete
@@ -113,6 +118,67 @@ class CutShort(unittest.TestCase):
                 self.assert_finishes()
                 self.assertEqual([path for path in box.worktrees() if ".relink-" in path], [])
                 self.assertEqual(list(self.worktree.parent.glob(".relink-*")), [])
+
+    def spare_left(self, step="reset -q"):
+        """Retire, Git stopped by a folder it can't delete, and the helper
+        killed at STEP of the relink, with its spare worktree made: the
+        spare's folder."""
+        box = self.box
+        stuck = self.worktree / "d025"
+        stuck.chmod(0o555)
+        self.addCleanup(lambda: stuck.exists() and stuck.chmod(0o755))
+        box.arm("before", match=step)
+        self.assertIsNone(box.helper("retire", id=self.task["id"]))
+        box.disarm()
+        stuck.chmod(0o755)
+        spares = [Path(path) for path in box.worktrees() if ".relink-" in path]
+        self.assertEqual(len(spares), 1, box.worktrees())
+        return spares[0]
+
+    def test_asking_what_a_discard_loses_deletes_no_spare(self):
+        box = self.box
+        spare = self.spare_left()
+        told = box.helper("discard", id=self.task["id"], dryRun=True)
+        self.assertTrue(told["ok"], told)
+        self.assertTrue(spare.parent.is_dir())
+        self.assertIn(str(spare), box.worktrees())
+        told = told["result"]["discard"]
+        reply = box.helper("discard", id=self.task["id"], told=told, expect=told["commit"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertFalse(spare.parent.exists())
+        self.assertEqual([path for path in box.worktrees() if ".relink-" in path], [])
+
+    def test_a_spare_that_holds_work_is_kept_and_said(self):
+        box = self.box
+        spare = self.spare_left()
+        (spare / "notes").write_text("mine\n")
+        for action in ("retire", "discard"):
+            reply = box.helper(action, id=self.task["id"], **({"dryRun": True} if action == "discard" else {}))
+            self.assertFalse(reply["ok"], reply)
+            self.assertIn(str(spare), reply["error"])
+        self.assertTrue((spare / "notes").exists())
+        self.assertIn(str(spare), box.worktrees())
+        (spare / "notes").unlink()
+        self.assert_finishes()
+
+    def test_a_spare_left_once_the_worktree_folder_went_is_no_worktree_moved(self):
+        box = self.box
+        spare = self.spare_left("symbolic-ref HEAD refs/heads/")
+        # You deleted what was left of it, its work all committed.
+        subprocess.run(["rm", "-rf", str(self.worktree)], check=True)
+        reply = box.helper("retire", id=self.task["id"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertFalse(spare.parent.exists())
+        self.assertNotIn(self.task["branch"], box.branches())
+
+    def test_only_a_spare_of_this_worktree_is_taken_for_one(self):
+        worktree = Path("/state/worktrees/abc/build-abcdef")
+        self.assertTrue(roost.spare_of(worktree, "/state/worktrees/abc/.relink-build-abcdef-0123456789ab/build-abcdef"))
+        for other in ("/state/worktrees/abc/.relink-build-abcdef-extra-123456-0123456789ab/build-abcdef-extra-123456",
+                      "/state/worktrees/abc/.relink-build-abcdef-extra-0123456789ab/build-abcdef",
+                      "/state/worktrees/abc/.relink-build-abcdef-0123456789ab/other",
+                      "/state/worktrees/xyz/.relink-build-abcdef-0123456789ab/build-abcdef"):
+            self.assertFalse(roost.spare_of(worktree, other), other)
 
     def test_a_worktree_git_forgot_can_be_discarded(self):
         box = self.box

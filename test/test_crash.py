@@ -454,6 +454,32 @@ class Crashes(unittest.TestCase):
         self.assertTrue(reply["ok"], reply)
         self.assertTrue((worktree / "hello").exists())
         self.assertFalse(ran.exists())
+        box.git("config", "--unset", "core.fsmonitor")
+        # Nor when Git forgot the worktree, stopped partway by a folder it
+        # can't delete, and Roost makes it one again.
+        box.disarm()
+        (box.repo / "stuck").mkdir()
+        (box.repo / "stuck" / "kept").write_text("x\n")
+        box.git("add", "stuck")
+        box.git("commit", "-qm", "Stuck")
+        other = box.create("other")
+        folder = Path(other["worktree"])
+        box.helper("stop", id=other["id"])
+        (folder / "stuck").chmod(0o555)
+        self.addCleanup(lambda: (folder / "stuck").exists() and (folder / "stuck").chmod(0o755))
+        box.arm("after", match="worktree remove")
+        self.assertIsNone(box.helper("retire", id=other["id"]))
+        box.disarm()
+        (folder / "stuck").chmod(0o755)
+        self.assertTrue(folder.is_dir())
+        # Written meanwhile, which keeps it from going once it is back.
+        (folder / "written").write_text("x\n")
+        box.git("config", "core.fsmonitor", str(program))
+        reply = box.helper("retire", id=other["id"])
+        self.assertFalse(reply["ok"], reply)
+        self.assertIn("Uncommitted or untracked", reply["error"])
+        self.assertTrue((folder / "hello").exists())
+        self.assertFalse(ran.exists())
 
     def test_a_window_nothing_knows_of_closes(self):
         box = self.box()
