@@ -20,6 +20,10 @@ What each release changes, and what to do when upgrading. Newest first.
   read it since. The panel dropped its Image or Page line, or named the one
   before, and `roost-show-image` said the task had shown no image, until
   the next list. Nothing to do when upgrading.
+- With `roost-program-status` on, a Claude Code task started on a prompt
+  could read `ready` through its whole first turn, so a prompt sent to it
+  went through unasked. It reads `running` now. Nothing to do when
+  upgrading.
 
 ## 0.13.0
 
