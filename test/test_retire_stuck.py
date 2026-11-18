@@ -161,6 +161,14 @@ class CutShort(unittest.TestCase):
         (spare / "notes").unlink()
         self.assert_finishes()
 
+    def test_what_else_is_beside_a_spare_stays(self):
+        box = self.box
+        spare = self.spare_left()
+        (spare.parent / "notes.txt").write_text("mine\n")
+        self.assert_finishes()
+        self.assertEqual((spare.parent / "notes.txt").read_text(), "mine\n")
+        self.assertFalse(spare.exists())
+
     def test_a_spare_left_once_the_worktree_folder_went_is_no_worktree_moved(self):
         box = self.box
         spare = self.spare_left("symbolic-ref HEAD refs/heads/")

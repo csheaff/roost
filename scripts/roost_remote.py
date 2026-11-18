@@ -6429,14 +6429,16 @@ def spare_holds(repo, gitdir, folder, branch):
         if head.startswith("ref:"):
             if head[len("ref:"):].strip() != "refs/heads/" + branch:
                 held.append("another branch checked out")
-        elif head and git(repo, "rev-list", "--count", head, "--not", "--branches", check=False).stdout.strip() != "0":
+        elif head and git(repo, *measuring(repo), "rev-list", "--count", head, "--not", "--branches",
+                          check=False).stdout.strip() != "0":
             held.append("commits on no branch")
         if operation_in(gitdir) or (gitdir / "MERGE_HEAD").exists():
             held.append("a Git command under way")
         if (gitdir / "index").is_file():
-            commit = git(repo, "rev-parse", "--verify", "-q", "HEAD^{commit}", check=False,
+            # Measured, as reading an index runs what core.fsmonitor names.
+            commit = git(repo, *measuring(repo), "rev-parse", "--verify", "-q", "HEAD^{commit}", check=False,
                          env=dict(os.environ, GIT_DIR=str(gitdir))).stdout.strip()
-            staged = git(repo, "--no-optional-locks", "diff-index", "--cached", "--quiet", commit or EMPTY_TREE,
+            staged = git(repo, *measuring(repo), "diff-index", "--cached", "--quiet", commit or EMPTY_TREE,
                          check=False, env=dict(os.environ, GIT_INDEX_FILE=str(gitdir / "index")))
             if not commit or staged.returncode:
                 held.append("changes staged in its index")
@@ -6467,7 +6469,11 @@ def drop_spares(repo, worktree, branch, dry_run=False):
     for folder, gitdir in spares.items():
         if gitdir:
             shutil.rmtree(gitdir, ignore_errors=True)
-        shutil.rmtree(folder.parent, ignore_errors=True)
+        # Only the folder checked, then the one Roost made it in, if
+        # nothing else is there: what is, stays.
+        shutil.rmtree(folder, ignore_errors=True)
+        with contextlib.suppress(OSError):
+            folder.parent.rmdir()
 
 
 def restore_deleted(worktree):
