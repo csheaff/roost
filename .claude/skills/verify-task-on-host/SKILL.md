@@ -207,10 +207,13 @@ it a few Git calls apart, and the model takes those as one step, as it does
 `require_clean` and the removal of the task's worktree: what is written
 there in those milliseconds is lost. `stop` ends the agent's writing in the
 task's worktree: it closes the agent's and shell's panes, then ends what
-they left running (`end_left_running`): what is in their panes' sessions,
-and what has the task's `ROOST_TASK_ID`, as each command Claude Code runs
-in a session of its own. Only a process it can't find that way, or yours
-outside the task, writes into those milliseconds. And what you delete by hand is yours:
+they left running (`end_left_running`): what is in their panes' sessions
+or those of what the panes run, as Claude Code runs each command in one of
+its own, and what has the task's `ROOST_TASK_ID` in a session whose first
+process has ended, as a server started with nohup there. Not a daemon,
+which leads its own session, and other tasks may share. Only a process it
+can't find that way, or yours outside the task, writes into those
+milliseconds. And what you delete by hand is yours:
 a branch you delete with Git while a request counts on it for the task's
 commits, as the agent's worktree's once its agent switched it to another.
 

@@ -4500,7 +4500,9 @@ def pane_sessions(task, inventory):
     has them: tmux starts each pane's process in a session of its own,
     whose ID is that process's PID. A dead pane's PID, or the record's for
     one that names none, counts only while no process has it: once its
-    session has ended, another may."""
+    session has ended, another may. Those of what a live pane's process
+    runs, as the session Claude Code starts for each command, count too:
+    read before the panes close, as once they do, nothing leads there."""
     pane = owned_pane(task, inventory)
     shell = inventory.get(task.get("shellPaneId"))
     panes = [(pane, pane and (pane["pid"] or task.get("panePid")))]
@@ -4519,6 +4521,16 @@ def pane_sessions(task, inventory):
             except OSError:
                 continue
         sessions.add(pid)
+    table = processes()
+    children = collections.defaultdict(list)
+    for child, (parent, _) in table.items():
+        children[parent].append(child)
+    pending = [pid for pid in sessions if pid in table]
+    while pending:
+        for child in children.pop(pending.pop(), ()):
+            with contextlib.suppress(OSError):
+                sessions.add(os.getsid(child))
+            pending.append(child)
     return sessions
 
 
@@ -4534,12 +4546,15 @@ def own_line():
 
 def left_running(task_id, sessions, own):
     """The PIDs of what still runs in SESSIONS, or with TASK_ID as its
-    ROOST_TASK_ID: what the task's agent started, wherever it went, as
-    Claude Code runs each command in a session of its own, whose processes
-    outlive it, but for those whose environment the system hides, as macOS
-    does Apple's own programs'. Never one in OWN."""
+    ROOST_TASK_ID in a session whose first process has ended: what the
+    task's agent started, wherever it went, as a server started with nohup
+    from the session Claude Code ran a command in, but for those whose
+    environment the system hides, as macOS does Apple's own programs'. Not
+    a daemon it started, as a build tool's server or an ssh connection
+    other tasks share, which leads a session of its own. Never one in OWN."""
     marker = "ROOST_TASK_ID=" + task_id
-    found = set()
+    # PID -> (session, whether it has the task's ROOST_TASK_ID)
+    running = {}
     if os.path.isfile("/proc/self/environ"):
         for entry in os.listdir("/proc"):
             if not entry.isdigit():
@@ -4549,9 +4564,8 @@ def left_running(task_id, sessions, own):
                 # A zombie writes nothing.
                 if Path("/proc/%d/stat" % pid).read_bytes().rsplit(b")", 1)[1].split()[0] == b"Z":
                     continue
-                if os.getsid(pid) in sessions or marker.encode() in Path(
-                        "/proc/%d/environ" % pid).read_bytes().split(b"\0"):
-                    found.add(pid)
+                running[pid] = (os.getsid(pid), marker.encode() in Path(
+                    "/proc/%d/environ" % pid).read_bytes().split(b"\0"))
     else:
         # With -E, ps shows each process's environment after its arguments.
         result = execute(["ps", "-A", "-E", "-ww", "-o", "pid=,stat=,command="], check=False)
@@ -4561,9 +4575,9 @@ def left_running(task_id, sessions, own):
                 continue
             pid = int(fields[0])
             with contextlib.suppress(OSError):
-                if (len(fields) == 3 and marker in fields[2].split()) or os.getsid(pid) in sessions:
-                    found.add(pid)
-    return found - own
+                running[pid] = (os.getsid(pid), len(fields) == 3 and marker in fields[2].split())
+    return {pid for pid, (sid, marked) in running.items()
+            if sid in sessions or marked and sid not in running} - own
 
 
 # How long what a task left running has to end, once asked to.

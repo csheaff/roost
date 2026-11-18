@@ -11,7 +11,8 @@ What each release changes, and what to do when upgrading. Newest first.
   just before Git removes it; discarding counts again once the agent
   is stopped, and refuses if there is more than it told you. When
   upgrading: a server you started from a task's agent or shell stops with
-  the task; start it outside the task to keep it running.
+  the task, but for a daemon, such as a build tool's server; start it
+  outside the task to keep it running.
 - A terminal that cannot attach its task's tmux session says so. When the
   session went as you opened the task, or the connection dropped as it
   attached, the window said "Connecting to" the session for good. It now

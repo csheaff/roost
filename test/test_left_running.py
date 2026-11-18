@@ -69,14 +69,17 @@ class LeftRunning(unittest.TestCase):
         box.git("submodule", "update", "--init", "-q", cwd=task["worktree"])
         return task
 
-    def agent_runs(self, task, argv, own_session=True):
+    def agent_runs(self, task, argv, own_session=True, daemon=False):
         """Have TASK's agent start ARGV with nohup, in the background, as
-        Claude Code starts a dev server, in a session of its own with
-        OWN_SESSION, as Claude Code's commands run, and finish its turn."""
+        Claude Code starts a dev server, from a shell in a session of its
+        own with OWN_SESSION, as Claude Code runs each command, and finish
+        its turn. A DAEMON leads a session of its own instead."""
         box = self.box
-        if own_session:
-            argv = [sys.executable, "-c", OWN_SESSION, *argv]
         command = "nohup %s >/dev/null 2>&1 &" % shlex.join(map(str, argv))
+        if daemon:
+            command = "%s >/dev/null 2>&1 &" % shlex.join(map(str, [sys.executable, "-c", OWN_SESSION, *argv]))
+        elif own_session:
+            command = shlex.join([sys.executable, "-c", OWN_SESSION, "/bin/sh", "-c", command])
         pane = box.record(task["id"])["paneId"]
         box.tmux("send-keys", "-t", pane, "-l", "ask " + command)
         box.tmux("send-keys", "-t", pane, "Enter")
@@ -110,6 +113,37 @@ class LeftRunning(unittest.TestCase):
         self.assertTrue(box.helper("stop", id=task["id"])["ok"])
         self.assertFalse(self.running(beside), "still running after stop")
         self.assertFalse(self.running(apart), "still running after stop")
+
+    def test_stop_ends_the_command_the_agent_is_running(self):
+        """In the session Claude Code starts for it, which leads to the
+        agent's pane only until the pane closes."""
+        box = self.box
+        task = box.create()
+        command = box.root / "command.py"
+        command.write_text(FOREVER)
+        box.tmux("send-keys", "-t", box.record(task["id"])["paneId"], "-l",
+                 "ask " + shlex.join([sys.executable, "-c", OWN_SESSION, sys.executable, str(command)]))
+        box.tmux("send-keys", "-t", box.record(task["id"])["paneId"], "Enter")
+        box.wait_for(task, "permission")
+        box.tmux("send-keys", "-t", box.record(task["id"])["paneId"], "-l", "yes")
+        box.tmux("send-keys", "-t", box.record(task["id"])["paneId"], "Enter")
+        deadline = time.monotonic() + 10
+        while not self.running(command) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertTrue(self.running(command), "the agent started nothing")
+        self.assertTrue(box.helper("stop", id=task["id"])["ok"])
+        self.assertFalse(self.running(command), "still running after stop")
+
+    def test_stop_leaves_a_daemon_the_agent_started(self):
+        """A server of a build tool's, or an ssh connection, that the agent
+        started and other tasks share, leads a session of its own."""
+        box = self.box
+        task = box.create()
+        daemon = box.root / "daemon.py"
+        daemon.write_text(FOREVER)
+        self.agent_runs(task, [sys.executable, daemon], daemon=True)
+        self.assertTrue(box.helper("stop", id=task["id"])["ok"])
+        self.assertTrue(self.running(daemon), "a daemon was ended")
 
     def test_retire_keeps_a_file_what_the_agent_left_running_writes_as_the_worktree_goes(self):
         box = self.box
