@@ -670,7 +670,12 @@ fixed time needn't be, and earlier than what its host does next.")
 (defun roost-sweep-late--note-place ()
   "Note where you are, as the reply comes."
   (setq roost-sweep-late--place (list :window (selected-window) :buffer (window-buffer (selected-window))
-                                :terminal (roost--terminal-place (window-buffer (selected-window)))
+                                ;; Of what stands in for a pane only: its
+                                ;; pane may take its place, and no other.
+                                :terminal (let ((buffer (window-buffer (selected-window))))
+                                            (and (eq (buffer-local-value 'major-mode buffer)
+                                                     'roost-ghostel-tmux-connecting-mode)
+                                                 (roost--terminal-place buffer)))
                                 :task roost--current-task
                                 :shown-tasks (seq-keep (lambda (window)
                                                          (when-let* ((task (roost--terminal-task (window-buffer window))))

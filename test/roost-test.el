@@ -12623,11 +12623,19 @@ A test stubs the functions of ghostel-tmux it reaches."
                ;; ghostel-tmux's own command switches the controller to
                ;; another session: the pane that comes is not this one's.
                (let ((stand-in (window-buffer)))
-                 (with-current-buffer controller
-                   (setq roost-ghostel-tmux--place '("far" "main" "two")))
                  (setq arrived t)
+                 (cl-letf (((symbol-function 'ghostel-tmux-session-name) (lambda (&rest _) "two")))
+                   (with-current-buffer controller
+                     (run-hooks 'ghostel-tmux-attach-hook)))
+                 (should (equal (buffer-local-value 'roost-ghostel-tmux--place controller)
+                                '("far" "main" "two")))
+                 ;; Asked its place, as a workspace gathering its terminals
+                 ;; asks, it says its own session still.
+                 (with-current-buffer stand-in
+                   (should (equal (roost-ghostel-tmux--buffer-place) place)))
                  (roost-ghostel-tmux--stand-in-shown (selected-window))
-                 (should (eq (window-buffer) stand-in))))))
+                 (should (eq (window-buffer) stand-in))
+                 (should (string-match-p "\\`Detached from one\\." (shown)))))))
        (when (buffer-live-p controller) (kill-buffer controller))
        (kill-buffer pane)
        (roost-test--kill-stand-ins)))))

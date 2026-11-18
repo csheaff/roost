@@ -453,7 +453,11 @@ tmux no longer has."
     ;; Roost do.
     (when-let* ((session (ghostel-tmux-session-name))
                 ((not (equal session (nth 2 place)))))
-      ;; What stood in for the session it left has no pane coming.
+      ;; What stood in for the session it left has no pane coming, and
+      ;; is this controller's no more: its place would follow it.
+      (dolist (stand-in (roost-ghostel-tmux--stand-ins place))
+        (with-current-buffer stand-in
+          (setq roost-ghostel-tmux--stands-in-for nil)))
       (roost-ghostel-tmux--not-attached place t)
       (setq place (list (nth 0 place) (nth 1 place) session)
             roost-ghostel-tmux--place place))
