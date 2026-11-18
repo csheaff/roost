@@ -187,7 +187,12 @@ Report(f) ==
             ELSE IF st = "error" /\ s # "failed" THEN "failed"
             ELSE "none"
       after == IF ch = "none" THEN s ELSE ch
-  IN /\ psRun' = run
+  \* programStatusRun: a report older than the last hook's status counts
+  \* for nothing, the run's relay included, so the hooks go on counting
+  \* until a report newer than them all is recorded.  Broken:
+  \* `stale_report_relays` counts the run as relayed from any report, as
+  \* before.
+  IN /\ psRun' = IF f.stale /\ Break \notin {"no_hookat", "stale_report_relays"} THEN psRun ELSE run
      /\ status' = after
      /\ dialog' = IF ch = "none" THEN dialog ELSE (st = "blocked" /\ s # "running")
      /\ plan' = IF ch = "none" THEN plan ELSE FALSE
