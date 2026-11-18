@@ -33,9 +33,9 @@ CONSTANTS
   SessionCanEnd, \* the task's session ends, as when its agent exits
   MaxCtl,        \* controllers, over the whole run
   MaxSi,         \* stand-ins, over the whole run
-  \* Scope the base config leaves out, each a finding:
+  \* Scope a finding needed, on in the base once fixed:
   HeldEnds,      \* a client ends while ghostel-tmux holds its attach hook
-  Closes,        \* you close a workspace that is not on screen
+  Closes,        \* you close a workspace that is not on screen: off, see verify-terminal-seam
   FailsInARow,   \* your open's attach signals while a row of tries is under way
   \* The code as it is: each TRUE.  FALSE is a broken variant.
   OwnSession,    \* `--stand-in-gives-way`: the controller is still the stand-in's place and session
@@ -47,7 +47,12 @@ CONSTANTS
   Deferred,      \* `--stand-in-shown`: the handoff waits for a timer and the minibuffer
   ProbeRechecks, \* `--try-again`'s probe looks again before it attaches
   SweepKeeps,    \* `--sweep-stand-ins` keeps one, with workspaces, whose pane has come
-  GiveWayKeeps   \* `--give-way` keeps one, with workspaces, that no window shows
+  GiveWayKeeps,  \* `--give-way` keeps one, with workspaces, that no window shows
+  PanesSay,      \* `--pane-made`: a pane made marks its controller `--was-attached`
+  AttachSays,    \* `--attach`: every stand-in of the place says it connects, and waits for it
+  HiddenOnly,    \* `--give-way` and the sweep keep only one a workspace not on screen shows (`--kept-p`)
+  OpenKeepsHidden, \* connect-or-switch, the pane there: keeps the stand-in a workspace not on screen shows
+  ByStandIn      \* `--stand-in-gives-way` takes the stand-in its window showed, shown there still or not
 
 Places == {"A", "B"}
 Wins == 1..Frames
@@ -79,8 +84,8 @@ VARIABLES
   mini,    \* a minibuffer is open
   gHeld,   \* controllers whose attach hook ghostel-tmux holds for the minibuffer
   gDue,    \* controllers whose attach hook is due now
-  rHeld,   \* windows whose handoff `roost--when-out-of-minibuffer` holds
-  rDue,    \* windows whose handoff is due now
+  rHeld,   \* handoffs `roost--when-out-of-minibuffer` holds: [w |-> window, i |-> its stand-in then]
+  rDue,    \* handoffs due now
   owed,    \* no try is owed the place: you detached it, it ended, or its client left it
   n,       \* how many of each bounded step
   bad      \* what a rule watches for as it happens
@@ -143,6 +148,19 @@ AttachAgain(p, x, L, T, S) ==
 \* A pane of a session of P has come, to a live controller.
 Arrived(p) == \E c \in Ctls : Live(c) /\ ctl[c].p = p /\ ctl[c].rows
 
+\* `roost-ghostel-tmux--attach`: what stands in for P anywhere says it
+\* connects, and waits for K.
+Waits(S, p, k) == IF ~AttachSays THEN S
+                  ELSE [i \in Sis |-> IF S[i].st = "live" /\ S[i].p = p
+                                      THEN [S[i] EXCEPT !.t = "connecting", !.f = k] ELSE S[i]]
+
+\* `--attach`: the controller's `--stand-in`, one of those of P, if any.
+FirstSi(S, p) == IF ~AttachSays \/ SisOf(S, p) = {} THEN 0 ELSE CHOOSE i \in SisOf(S, p) : TRUE
+
+\* `roost-ghostel-tmux--kept-p`: a workspace not on screen shows stand-in I,
+\* the windows on screen being L.
+Hidden(W, L, i) == Workspaces /\ \E w \in Wins \ (L \cup closed) : Shows(W, w, i)
+
 NewCtl(p, sin) == [NoCtl EXCEPT !.st = "live", !.p = p, !.s = p, !.sin = sin, !.row = lost[p] > 0]
 
 -----------------------------------------------------------------------------
@@ -158,7 +176,8 @@ Open(f) ==
          \* `roost-ghostel-tmux--sweep-stand-ins`
          keeps(i) == LET c == si[i].f IN
                        c # 0 /\ Live(c) /\ ctl[c].p = si[i].p
-                       /\ (~ctl[c].rows \/ (Workspaces /\ SweepKeeps))
+                       /\ (~ctl[c].rows \/ (Workspaces /\ SweepKeeps
+                                             /\ (~HiddenOnly \/ Hidden(W0, L0, i))))
          swept == {i \in Sis : si[i].st = "live" /\ ~(\E w \in L0 : Shows(W0, w, i)) /\ ~keeps(i)}
          S0 == [i \in Sis |-> IF i \in swept THEN [si[i] EXCEPT !.st = "dead"] ELSE si[i]]
          sweptKept == \E w \in Wins \ (L0 \cup closed) :
@@ -177,7 +196,8 @@ Open(f) ==
         /\ \/ \* The pane is there: shown, and what stood in for it here goes.
               \E c \in C :
                 /\ ctl[c].rows
-                /\ LET gone == reuse /\ ~(\E w \in L0 \ {f} : Shows(W0, w, shown.i))
+                /\ LET gone == /\ reuse /\ ~(\E w \in L0 \ {f} : Shows(W0, w, shown.i))
+                               /\ (~OpenKeepsHidden \/ ~Hidden(W0, L0, shown.i))
                    IN /\ win' = [W0 EXCEPT ![f] = Pane(c, ctl[c].s)]
                       /\ si' = IF gone THEN [S0 EXCEPT ![shown.i].st = "dead"] ELSE S0
                       /\ bad' = [bad EXCEPT
@@ -204,14 +224,15 @@ Open(f) ==
               /\ C = {}
               /\ shown.k = "snap" /\ shown.p = "A"
               /\ \/ /\ k # 0
-                    /\ ctl' = [ctl EXCEPT ![k] = NewCtl("A", 0)]
+                    /\ ctl' = [ctl EXCEPT ![k] = NewCtl("A", FirstSi(S0, "A"))]
                     /\ owed' = [owed EXCEPT !["A"] = FALSE]
                     /\ n' = opened
+                    /\ si' = Waits(S0, "A", k)
                  \/ /\ n.errors < MaxErrors  \* the error is yours to read
                     /\ n' = failed
                     /\ UNCHANGED <<ctl, owed>>
+                    /\ si' = S0
               /\ win' = W0
-              /\ si' = S0
               /\ bad' = [bad EXCEPT !.kept = @ \/ sweptKept]
               /\ UNCHANGED <<snaps, lost>>
            \/ \* Nothing of it: a stand-in, then the attach.
@@ -220,7 +241,7 @@ Open(f) ==
               /\ standIn # 0
               /\ \/ /\ k # 0
                     /\ ctl' = [ctl EXCEPT ![k] = NewCtl("A", standIn)]
-                    /\ si' = [S1 EXCEPT ![standIn].f = k]
+                    /\ si' = Waits([S1 EXCEPT ![standIn].f = k], "A", k)
                     /\ win' = [W0 EXCEPT ![f] = SiW(standIn)]
                     /\ owed' = [owed EXCEPT !["A"] = FALSE]
                     /\ n' = opened
@@ -248,7 +269,8 @@ OpenOther ==
   /\ Calm /\ ~mini /\ n.opens < MaxOpens
   /\ LET keeps(i) == LET c == si[i].f IN
                        c # 0 /\ Live(c) /\ ctl[c].p = si[i].p
-                       /\ (~ctl[c].rows \/ (Workspaces /\ SweepKeeps))
+                       /\ (~ctl[c].rows \/ (Workspaces /\ SweepKeeps
+                                             /\ (~HiddenOnly \/ Hidden(win, live, i))))
          swept == {i \in Sis : si[i].st = "live" /\ ~(\E w \in live : Shows(win, w, i)) /\ ~keeps(i)}
      IN /\ si' = [i \in Sis |-> IF i \in swept THEN [si[i] EXCEPT !.st = "dead"] ELSE si[i]]
         /\ bad' = [bad EXCEPT !.kept = @ \/ \E w \in Away :
@@ -275,7 +297,8 @@ Hello(c) ==
 Rows(c) ==
   /\ Calm /\ Live(c) /\ ctl[c].sid /\ ~ctl[c].rows /\ ~ctl[c].closing /\ alive[ctl[c].s]
   /\ LET s == ctl[c].s IN
-     /\ ctl' = [ctl EXCEPT ![c].rows = TRUE, ![c].ever = TRUE]
+     \* `--pane-made`, on `ghostel-tmux-pane-mode-hook`, which is not held.
+     /\ ctl' = [ctl EXCEPT ![c].rows = TRUE, ![c].ever = TRUE, ![c].was = (@ \/ PanesSay)]
      /\ win' = [w \in Wins |-> IF (win[w].k = "snap" /\ win[w].s = s)
                                   \/ (win[w].k = "pane" /\ win[w].i = c)
                                THEN Pane(c, s) ELSE win[w]]
@@ -365,7 +388,8 @@ Attached(c) ==
       GW == IF ctl[c].rows THEN {i \in Sis : S1[i].st = "live" /\ S1[i].p = s} ELSE {}
       ws == {w \in live : win[w].k = "si" /\ win[w].i \in GW}
       \* `roost-ghostel-tmux--give-way`
-      K == {i \in GW : (\E w \in ws : win[w].i = i) \/ ~Workspaces \/ ~GiveWayKeeps}
+      K == {i \in GW : ~Workspaces \/ ~GiveWayKeeps
+                       \/ IF HiddenOnly THEN ~Hidden(win, live, i) ELSE \E w \in ws : win[w].i = i}
   IN /\ si' = [i \in Sis |-> IF i \in K THEN [S1[i] EXCEPT !.st = "dead", !.f = c]
                              ELSE IF i \in GW THEN [S1[i] EXCEPT !.f = c]
                              ELSE S1[i]]
@@ -379,22 +403,25 @@ Attached(c) ==
      /\ owed' = IF sw THEN [owed EXCEPT ![p0] = TRUE] ELSE owed
      /\ bad' = [bad EXCEPT !.kept = @ \/ \E w \in Away : win[w].k = "si" /\ win[w].i \in K]
 
-\* `roost-ghostel-tmux--stand-in-gives-way` in W, as a result record.
-\* IN_HOOK: run from `window-buffer-change-functions` itself.
-GivesWay(w, L, inHook) ==
-  LET i == win[w].i
-      c == si[i].f
-      ok == /\ w \in L /\ win[w].k = "si" /\ si[i].st = "live"
+\* `roost-ghostel-tmux--stand-in-gives-way` for stand-in I, which window W
+\* showed as `--stand-in-shown` ran, as a result record.  IN_HOOK: run from
+\* `window-buffer-change-functions` itself.
+GivesWay(w, i, L, inHook) ==
+  LET c == si[i].f
+      ok == /\ (ByStandIn \/ (w \in L /\ Shows(win, w, i)))
+            /\ si[i].st = "live"
             /\ c # 0 /\ Live(c)
             /\ (~OwnSession \/ (ctl[c].p = si[i].p /\ (~ctl[c].sid \/ ctl[c].s = si[i].p)))
             /\ ctl[c].rows
       ws == {v \in L : Shows(win, v, i)}
+      \* `--give-way`: kept for a workspace not on screen that shows it
+      keep == HiddenOnly /\ Hidden(win, L, i)
   IN IF ok
-     THEN [si |-> [si EXCEPT ![i].st = "dead"],
+     THEN [si |-> IF keep THEN si ELSE [si EXCEPT ![i].st = "dead"],
            win |-> [v \in Wins |-> IF v \in ws THEN Pane(c, ctl[c].s) ELSE win[v]],
            pane |-> ctl[c].s # si[i].p,
            handoff |-> inHook \/ mini,
-           kept |-> \E v \in Wins \ (L \cup closed) : Shows(win, v, i)]
+           kept |-> ~keep /\ \E v \in Wins \ (L \cup closed) : Shows(win, v, i)]
      ELSE [si |-> si, win |-> win, pane |-> FALSE, handoff |-> FALSE, kept |-> FALSE]
 
 -----------------------------------------------------------------------------
@@ -406,12 +433,12 @@ RunHook(c) ==
   /\ IF Live(c) THEN Attached(c) ELSE UNCHANGED <<si, win, snaps, lost, ctl, owed, bad>>
   /\ UNCHANGED <<live, closed, alive, timers, probes, mini, gHeld, rHeld, rDue, n>>
 
-RunHandoff(w) ==
-  /\ w \in rDue
-  /\ rDue' = rDue \ {w}
+RunHandoff(x) ==
+  /\ x \in rDue
+  /\ rDue' = rDue \ {x}
   /\ IF mini
-     THEN rHeld' = rHeld \cup {w} /\ UNCHANGED <<si, win, bad>>
-     ELSE LET g == GivesWay(w, live, FALSE) IN
+     THEN rHeld' = rHeld \cup {x} /\ UNCHANGED <<si, win, bad>>
+     ELSE LET g == GivesWay(x.w, x.i, live, FALSE) IN
           /\ rHeld' = rHeld
           /\ si' = g.si /\ win' = g.win
           /\ bad' = [bad EXCEPT !.pane = @ \/ g.pane, !.handoff = @ \/ g.handoff,
@@ -442,9 +469,10 @@ Probe(p, ok) ==
          again == AttachAgain(p, 0, lost, timers, si)
      IN IF ok /\ (want \/ (~ProbeRechecks /\ Found(p, 0) = {}))
         THEN \/ /\ k # 0
-                /\ ctl' = [ctl EXCEPT ![k] = NewCtl(p, 0)]
+                /\ ctl' = [ctl EXCEPT ![k] = NewCtl(p, FirstSi(si, p))]
+                /\ si' = Waits(si, p, k)
                 /\ bad' = [bad EXCEPT !.try = @ \/ owed[p]]
-                /\ UNCHANGED <<lost, timers, si, n>>
+                /\ UNCHANGED <<lost, timers, n>>
              \/ /\ n.errors < MaxErrors
                 /\ n' = [n EXCEPT !.errors = @ + 1]
                 /\ lost' = again.l /\ timers' = again.t /\ si' = again.s
@@ -482,8 +510,8 @@ Enter(w) ==
      THEN win' = [win EXCEPT ![w] = Other] /\ UNCHANGED <<si, rDue, bad>>
      ELSE IF win[w].k = "si"
      THEN IF Deferred
-          THEN rDue' = rDue \cup {w} /\ UNCHANGED <<si, win, bad>>
-          ELSE LET g == GivesWay(w, live \cup {w}, TRUE) IN
+          THEN rDue' = rDue \cup {[w |-> w, i |-> win[w].i]} /\ UNCHANGED <<si, win, bad>>
+          ELSE LET g == GivesWay(w, win[w].i, live \cup {w}, TRUE) IN
                /\ si' = g.si /\ win' = g.win /\ rDue' = rDue
                /\ bad' = [bad EXCEPT !.pane = @ \/ g.pane, !.handoff = @ \/ g.handoff,
                                      !.kept = @ \/ g.kept]
@@ -521,7 +549,8 @@ Next ==
   \/ SessionEnds
   \/ \E p \in Places : Fire(p) \/ \E ok \in BOOLEAN : Probe(p, ok)
   \/ MiniOpen \/ MiniClose
-  \/ \E w \in Wins : RunHandoff(w) \/ Enter(w) \/ Leave(w) \/ Close(w) \/ ShowOther(w)
+  \/ \E x \in rDue : RunHandoff(x)
+  \/ \E w \in Wins : Enter(w) \/ Leave(w) \/ Close(w) \/ ShowOther(w)
   \/ UNCHANGED vars  \* bounded runs end; that is no deadlock
 
 Spec == Init /\ [][Next]_vars
@@ -582,11 +611,13 @@ OpenKeepsWindow == ~bad.window
 KeptForItsWorkspace == ~bad.kept
 
 \* I6: no stand-in is kept that no window, in any workspace, shows, once its
-\* pane has come and the attach hook has run.
+\* pane has come and the attach hook has run, and no handoff of it waits for
+\* a question to end.
 NoStrayStandIn ==
   \A i \in Sis :
     (si[i].st = "live" /\ si[i].f # 0 /\ Live(si[i].f) /\ ctl[si[i].f].rows
-     /\ ctl[si[i].f].p = si[i].p /\ si[i].f \notin gHeld \cup gDue)
+     /\ ctl[si[i].f].p = si[i].p /\ si[i].f \notin gHeld \cup gDue
+     /\ ~\E x \in rHeld \cup rDue : x.i = i)
     => \E w \in Wins \ closed : Shows(win, w, i)
 
 =============================================================================

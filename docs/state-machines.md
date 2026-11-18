@@ -184,20 +184,19 @@ fails in its place.
 
 Found as the models were brought in line with 0.13.0, and replayed on the real
 code before it was fixed. The VIEWS-17 to 21 rows came from the first model of
-[a terminal through ghostel-tmux](#a-terminal-through-ghostel-tmux): each replay
-fails on the code, and is a patch under `test/formal/terminal_seam/findings/`
-until its fix brings it into the suite.
+[a terminal through ghostel-tmux](#a-terminal-through-ghostel-tmux).
 
 | Finding | Sev | What goes wrong | Machine | Status |
 | --- | --- | --- | --- | --- |
 | STATUS-13 | S3 | A relayed Claude that reports its work before its `SessionStart` hook, as 2.1.303 does on a task's prompt, reads `ready` through its first turn, so a send goes through unasked. Since #245 | [Who wins](#who-wins-hooks-reports-poll-runner) | Fixed, `test_a_claude_that_reports_its_work_before_its_session_start_hook_reads_running` |
 | VIEWS-16 | S3 | An offer's draft that got no reply, asked again and quit at the question about the setup command, reads as one you only looked at: `RET` on its offer starts it anew, and `C-c C-c` makes a second task | [The new task draft](#the-new-task-draft) | Fixed, `roost-an-offers-draft-that-asked-keeps-its-creation-id` |
 | REQUESTS-10 | S4 | A reply read before the task's agent showed an image or a page, as one to opening the task, and arriving after the list that read it since takes the task back to what it showed before, or to nothing: the panel drops or misnames its Image or Page line, and `roost-show-image` says it has shown none, until the next list (found 2026-11-17) | [Cached task](#cached-task) | Fixed, `roost-a-reply-from-before-an-image-was-shown-keeps-what-the-task-shows` |
-| VIEWS-17 | S3 | A host's session attaches while you answer a question, and its ssh drops before you are done: ghostel-tmux drops the attach hook it held, so the terminal says "Could not attach" and is not tried again | [A terminal through ghostel-tmux](#a-terminal-through-ghostel-tmux) | Open: `TerminalSeam.finding-ends-while-held.cfg`, `findings/ends-while-held.patch` |
-| VIEWS-18 | S4 | Opened while a dropped host is tried again, an attach that signals says "Could not attach", and the next try attaches anyway | [A terminal through ghostel-tmux](#a-terminal-through-ghostel-tmux) | Open: `TerminalSeam.finding-fails-in-a-row.cfg`, `findings/fails-in-a-row.patch` |
-| VIEWS-19 | S4 | A frame that says "Could not attach" keeps saying it while the task, opened in another frame, connects | [A terminal through ghostel-tmux](#a-terminal-through-ghostel-tmux) | Open: `TerminalSeam.finding-two-frames-could-not.cfg`, `findings/two-frames-could-not.patch` |
-| VIEWS-20 | S4 | The task opened in two frames as it connects: a frame in another workspace when the pane comes shows some other buffer in the task's workspace | [A terminal through ghostel-tmux](#a-terminal-through-ghostel-tmux) | Open: `TerminalSeam.finding-two-frames-workspace.cfg`, `findings/two-frames-workspace.patch` |
-| VIEWS-21 | S4 | With workspaces, a stand-in whose window you gave another buffer, or whose workspace you closed, before its pane came stays hidden until its client ends | [A terminal through ghostel-tmux](#a-terminal-through-ghostel-tmux) | Open: `TerminalSeam.finding-stray-stand-in.cfg`, `findings/stray-stand-in.patch` |
+| VIEWS-17 | S3 | A host's session attaches while you answer a question, and its ssh drops before you are done: ghostel-tmux drops the attach hook it held, so the terminal says "Could not attach" and is not tried again | [A terminal through ghostel-tmux](#a-terminal-through-ghostel-tmux) | Fixed, `roost-ghostel-tmux-a-connection-that-drops-while-a-question-holds-its-hook-is-tried-again` |
+| VIEWS-18 | S4 | Opened while a dropped host is tried again, an attach that signals says "Could not attach", and the next try attaches anyway | [A terminal through ghostel-tmux](#a-terminal-through-ghostel-tmux) | Fixed, `roost-ghostel-tmux-a-stand-in-says-nothing-of-not-attaching-while-a-try-is-due` |
+| VIEWS-19 | S4 | A frame that says "Could not attach" keeps saying it while the task, opened in another frame, connects | [A terminal through ghostel-tmux](#a-terminal-through-ghostel-tmux) | Fixed, `roost-ghostel-tmux-a-stand-in-elsewhere-says-nothing-of-not-attaching-while-the-task-connects` |
+| VIEWS-20 | S4 | The task opened in two frames as it connects: a frame in another workspace when the pane comes shows some other buffer in the task's workspace | [A terminal through ghostel-tmux](#a-terminal-through-ghostel-tmux) | Fixed, `roost-ghostel-tmux-a-pane-that-came-shows-in-each-workspace-that-waited-for-it` |
+| VIEWS-21 | S4 | With workspaces, a stand-in whose window you gave another buffer, or whose workspace you closed, before its pane came stays hidden until its client ends | [A terminal through ghostel-tmux](#a-terminal-through-ghostel-tmux) | Fixed, `roost-ghostel-tmux-a-stand-in-you-gave-way-yourself-goes-once-its-pane-comes` |
+| VIEWS-22 | S4 | With workspaces, back in the one that kept a stand-in while a question is open, you put another buffer over it before you answer: the stand-in stayed hidden until its client ended. Found as VIEWS-21's fix was folded into the model | [A terminal through ghostel-tmux](#a-terminal-through-ghostel-tmux) | Fixed, `roost-ghostel-tmux-a-stand-in-you-cover-while-a-question-holds-its-pane-goes` |
 
 ## A task on its host
 
@@ -3307,8 +3306,8 @@ action, with either package; this is what the terminal does by itself.
 |---|---|---|
 | No terminal | Nothing of the session in Emacs | no controller, pane or stand-in has the place |
 | Connecting | A tmux client runs, its pane yet to come | a controller `ghostel-tmux-controllers` lists, no pane; the stand-in says "Connecting to" |
-| Shown | The pane is there | `roost-ghostel-tmux--was-attached`; pane buffers have the controller |
-| Shown, stand-in kept | The pane came while its workspace was not current | workspaces on; a stand-in no window shows, its controller with a pane |
+| Shown | The pane is there | `roost-ghostel-tmux--was-attached`, set as each pane is made; pane buffers have the controller |
+| Shown, stand-in kept | The pane came while a workspace that shows the stand-in was not current | workspaces on; a stand-in no window on screen shows, that another tab or perspective has (`roost-ghostel-tmux--kept-p`), its controller with a pane |
 | Left as it was | The client ended, its panes kept | pane buffers with the place and no controller; place not in `--lost` |
 | Retrying | A host's connection dropped, and it is tried again | place in `--lost`; a timer or an `ssh` probe under way |
 | Could not attach | The client ended before a pane, and none is tried | the stand-in says "Could not attach to", or "Detached from"; no controller |
@@ -3327,11 +3326,12 @@ Invariants:
   open, or tells you to open again what is on its way. (Sweep's `left-behind`;
   `roost-ghostel-tmux-a-stand-in-says-its-session-could-not-be-attached`; model:
   `ConnectingIsTrue`, `EndIsTrue`.) **Was broken** for a session on this machine and
-  for one that never attached. **Broken** the other way by VIEWS-18 and VIEWS-19.
+  for one that never attached, and the other way by VIEWS-18 and VIEWS-19: each attach
+  now has every stand-in of its place say it connects.
 - I3. A stand-in that no pane is coming to names a way back, and opening its task
   again connects in it. Otherwise the window is a dead end. It says "Could not attach"
   only of a client whose panes never came, and "Detached" only of one whose had, or
-  that you or Roost detached. (Model: `WordIsTrue`.) **Broken** by VIEWS-17.
+  that you or Roost detached. (Model: `WordIsTrue`.) **Was broken** by VIEWS-17.
 - I4. Only a connection that dropped is tried again: not a session on this machine,
   one you or Roost detached, one tmux said has ended, one its client was switched away
   from, or one that never attached. (Docstring of `roost-ghostel-tmux--detached`;
@@ -3339,19 +3339,22 @@ Invariants:
   comes back and reports a lost connection, or an ended session is asked for again
   and again. And a host's connection that drops after its panes came, or in a row of
   tries, is tried again (`DropIsTried`): otherwise it stays dead until you open the
-  task. **Broken** by VIEWS-17.
+  task. **Was broken** by VIEWS-17.
 - I5. Tries end: eight, no more than thirty seconds apart, and none once the session
   is attached again or no pane of it is left. (`roost-ghostel-tmux--attach-again`,
   `roost-ghostel-tmux--try-again`; model: `TriesEnd`.) Otherwise a host that is gone
   is asked for good.
 - I6. A stand-in goes once a window shows its pane in its place. One no window shows
-  goes too, except with workspaces, where it waits for its workspace to show it. The
+  goes too, except with workspaces, where it waits for a workspace not on screen that
+  shows it: a tab whose windows show it, or a perspective that has it. The
   pane takes its window only when no question is open, and not from the window-change
   hook itself. Otherwise stand-ins pile up, the workspace you left shows some other
   buffer, or the question's end puts the stand-in back.
   (`roost-ghostel-tmux--give-way`, `roost-ghostel-tmux--stand-in-shown`; model:
-  `KeptForItsWorkspace`, `NoStrayStandIn`, `HandoffOutside`.) **Broken** by VIEWS-20
-  and VIEWS-21.
+  `KeptForItsWorkspace`, `NoStrayStandIn`, `HandoffOutside`.) **Was broken** by
+  VIEWS-20, VIEWS-21 and VIEWS-22. A perspective that has the stand-in but no longer shows it
+  keeps it until an open made in that perspective sweeps it; a tab you close keeps
+  it until the next open.
 - I7. A place has one controller. Roost attaches only when
   `roost-ghostel-tmux--find-controller` finds none, and a try's probe looks again
   before it attaches. Two would fight over the session's size. (Model:
@@ -3364,24 +3367,26 @@ Invariants:
 | No terminal | open | | Connecting | stand-in shown, then the client starts | `roost-ghostel-tmux-connect-or-switch` |
 | No terminal | open | the attach signals | No terminal | window put back, stand-in killed, error passed on | `roost-ghostel-tmux-connect-or-switch` |
 | Connecting | open, another window | | Connecting | the same stand-in there too | `roost-ghostel-tmux-connect-or-switch` |
-| Connecting | tmux lists the windows | a window shows the stand-in | Shown | pane in its place, stand-in and old snapshots killed | `roost-ghostel-tmux--attached` |
-| Connecting | tmux lists the windows | no window shows it, no workspaces | Shown | stand-in killed | `roost-ghostel-tmux--give-way` |
-| Connecting | tmux lists the windows | no window shows it, workspaces | Shown, stand-in kept | | `roost-ghostel-tmux--give-way` |
-| Shown, stand-in kept | its workspace shows it | | Shown | pane in its place, stand-in killed | `roost-ghostel-tmux--stand-in-shown` |
-| Shown, stand-in kept | open | | Shown | pane shown, stand-in killed | `roost-ghostel-tmux-connect-or-switch` |
+| Connecting | a pane is made | | Connecting | `--was-attached` set, though the attach hook is held for a question | `roost-ghostel-tmux--pane-made` |
+| Connecting | tmux lists the windows | a window shows the stand-in, no workspace off screen does | Shown | pane in its place, stand-in and old snapshots killed | `roost-ghostel-tmux--attached` |
+| Connecting | tmux lists the windows | no workspace off screen shows the stand-in | Shown | pane in each window on screen that showed it, stand-in killed | `roost-ghostel-tmux--give-way` |
+| Connecting | tmux lists the windows | a workspace off screen shows it | Shown, stand-in kept | pane in each window on screen that showed it | `roost-ghostel-tmux--give-way`, `--kept-p` |
+| Shown, stand-in kept | its workspace shows it | | Shown | pane in its place, stand-in killed unless another workspace off screen shows it | `roost-ghostel-tmux--stand-in-shown` |
+| Shown, stand-in kept | its workspace shows it, and you cover it while a question holds the handoff | | Shown | stand-in killed once the question ends, unless a workspace off screen shows it | `roost-ghostel-tmux--stand-in-gives-way` |
+| Shown, stand-in kept | open | | Shown | pane shown, stand-in killed unless a workspace off screen shows it | `roost-ghostel-tmux-connect-or-switch` |
 | Connecting | client ends | this machine, never attached, detached or ended | Could not attach | the stand-in says so, the echo area too | `roost-ghostel-tmux--detached`, `--not-attached` |
 | Connecting | client ends | a host, a try before it failed | Retrying | stand-in waits on | `roost-ghostel-tmux--detached` |
 | Shown | client ends | a host, not detached, not ended | Retrying | panes kept by ghostel-tmux | `roost-ghostel-tmux--detached` |
 | Shown | client ends | otherwise | Left as it was, or No terminal | ghostel-tmux keeps or kills the panes | `roost-ghostel-tmux--detached` |
 | Shown | Roost releases it | | Left as it was | `ghostel-tmux-detach`, panes kept | `roost-ghostel-tmux-disconnect` |
-| Retrying | 1 s, 2 s, … 30 s | host answers `ssh`, panes left, no controller | Connecting | attached with no window waiting | `roost-ghostel-tmux--try-again` |
+| Retrying | 1 s, 2 s, … 30 s | host answers `ssh`, panes left, no controller | Connecting | attached with no window waiting; each stand-in of the place says "Connecting to" | `roost-ghostel-tmux--try-again`, `--attach` |
 | Retrying | timer | host does not answer, or the attach signals | Retrying | one try more | `roost-ghostel-tmux--attach-again` |
 | Retrying | timer | attached again meanwhile | Connecting or Shown | `--lost` cleared | `roost-ghostel-tmux--try-again` |
 | Retrying | timer | no pane left, or eight tries | Left as it was, or Could not attach | `--lost` cleared; a stand-in says so | `roost-ghostel-tmux--try-again`, `--attach-again` |
 | Left as it was | open, from one of its panes | | Connecting | the panes reach the new controller as a stand-in does, and come alive where they are | `roost-ghostel-tmux-connect-or-switch` |
 | Left as it was | open, from elsewhere | | Connecting | stand-in | `roost-ghostel-tmux-connect-or-switch` |
 | Left as it was | `roost-ghostel-tmux-reconnect` | | Connecting | as open | `roost-ghostel-tmux-reconnect` |
-| Could not attach | open, from the stand-in | | Connecting | the stand-in says "Connecting to" again | `roost-ghostel-tmux--stand-in-for` |
+| Could not attach | open, from the stand-in or another window | | Connecting | every stand-in of the place says "Connecting to" again, and its mode line "Connecting" | `roost-ghostel-tmux--stand-in-for`, `--attach` |
 | Could not attach | `q` | | No terminal | the window shows what it did; the next open kills the stand-in | `quit-window`, `roost-ghostel-tmux--sweep-stand-ins` |
 | any | the controller is switched to another session | | the other place's | place follows the session | `roost-ghostel-tmux--attached` |
 
@@ -3395,15 +3400,15 @@ a minibuffer is open, is left out.
 The open questions of the map, answered:
 - A client that ends while ghostel-tmux holds its attach hook for the minibuffer: the
   hook never runs, as `ghostel-tmux--run-held-calls` skips a controller that is gone,
-  so no snapshot is killed. But `--was-attached` is never set: the stand-in says
-  "Could not attach" of a session that attached, and a host's connection that dropped
-  is not tried again. VIEWS-17.
+  so no snapshot is killed. `--was-attached` was set only by that hook, so the stand-in
+  said "Could not attach" of a session that attached, and a host's connection that
+  dropped was not tried again: VIEWS-17, fixed by setting it as each pane is made.
 - A try's probe under way when you open the task, and two timers for one place: the
   probe's sentinel and `--attach-again` look for a controller first, so nothing
   attaches twice, and a client attaching keeps the count. Two timers run two probes,
   and each failure counts one try, so such a row ends sooner, never later. Checked and
-  sound. The model found a neighbour: an open that fails mid-row says "Could not
-  attach" over the row, VIEWS-18.
+  sound. The model found a neighbour: an open that fails mid-row said "Could not
+  attach" over the row, VIEWS-18, fixed.
 - `ghostel-tmux--closing` is set only by `%exit` and by `ghostel-tmux-detach`. tmux
   3.6a answers an attach to a session it can't find with `%error`, then `%exit`, and
   sends `%exit` to a client whose session is killed, so a session that ended reads as
@@ -3416,10 +3421,12 @@ The open questions of the map, answered:
   are forgotten (`--attached`). Checked and sound, for a switch before or after the
   first pane, and with the hook held for a question.
 - The same task in two workspaces while it connects: one stand-in in both, and the
-  frame not showing it when its pane comes loses it. VIEWS-20, and VIEWS-19 for the
-  other frame's word.
+  frame not showing it when its pane came lost it. VIEWS-20, and VIEWS-19 for the
+  other frame's word; both fixed.
 - A stand-in kept for a workspace that is closed, or whose window you gave another
-  buffer, stays until its client ends and another task opens. VIEWS-21.
+  buffer, stayed until its client ended and another task opened. VIEWS-21 and VIEWS-22, fixed for
+  the window you gave another buffer, and for a closed tab at the next open. The
+  model leaves closing out (`Closes`).
 - The session ending between the host's `inspect` and the attach: tmux answers
   `%error` and `%exit`, the stand-in says "Could not attach" and that opening its task
   again tries once more, and that open asks the host again. Checked and sound.
@@ -3755,7 +3762,7 @@ next one starts somewhere else.
   under way and two timers for one place; a session that ends between `inspect` and
   the attach; ghostel-tmux switching a controller to another session, before its
   first pane or with its hook held: `test/formal/terminal_seam` finds nothing there
-  beyond VIEWS-17 to 21.
+  beyond VIEWS-17 to 22, now fixed.
 
 Not proved: that sshd leaves a helper running after a dropped connection, taken from
 OpenSSH's behaviour and not run; perspective.el and tab-bar paths, read but not driven;

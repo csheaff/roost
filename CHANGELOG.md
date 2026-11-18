@@ -4,6 +4,24 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Tasks on a remote host attach when the host writes to stderr, such as a
+  login script's warning, while Roost asks it where its tmux socket is.
+  The warning became part of the path, and every task on that host said
+  "Could not attach" until Emacs restarted. A line a login script prints
+  before the answer is left out too.
+- A terminal on a host whose connection drops while you answer a question
+  in the minibuffer is tried again. It said "Could not attach" of a session
+  that had attached, and stayed so until you opened its task again.
+- A terminal waiting for its session no longer says "Could not attach"
+  while it connects: when a try of a dropped host's connection, or an open
+  in another frame, attaches the session, every window waiting for it says
+  "Connecting to" it. Its mode line says the same as its text: "Could not
+  attach" or "Detached", not "Connecting".
+- With tab-bar or perspective.el workspaces, a task opened in two frames
+  while it connects shows its terminal in both, though one was in another
+  workspace when it connected. And the buffer that stood in for a terminal
+  you put another buffer over, before it connected or while a question was
+  open, goes once it does, rather than staying hidden.
 - A terminal that cannot attach its task's tmux session says so. When the
   session went as you opened the task, or the connection dropped as it
   attached, the window said "Connecting to" the session for good. It now

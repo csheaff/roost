@@ -1001,7 +1001,10 @@ def resize(qa, repo):
     qa.keys("C-c r c")
     qa.type("Say hello")
     qa.keys("C-c C-c")
-    qa.wait("its terminal", lambda s: any(w["mode"].startswith("tmux-control") and w["selected"]
+    # Its pane, not the buffer that stands in for it while a host's
+    # session attaches: Emacs waits on TRAMP inside the attach, and runs
+    # no window change hook, so the panel steps aside only once it is done.
+    qa.wait("its terminal", lambda s: any(w["mode"] == "tmux-control-mode" and w["selected"]
                                           for w in s["windows"]))
     # Heights a laptop's screen has room for: a frame is kept within it.
     for columns, lines in ((100, 30), (150, 40), (220, 40)):
