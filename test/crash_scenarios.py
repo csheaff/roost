@@ -581,6 +581,42 @@ class CreateFromOffer(Create):
             problems.append("its task was made, and its offer still waits")
 
 
+class CreateFromOfferFailing(CreateFromOffer):
+    """From an offer, in a repository whose post-checkout hook writes a file
+    and fails: the task doesn't start, and what is left is a failed record
+    to look at, made from no offer, so the offer waits, however the
+    creation was cut short. Asked again once the hook is put right, the
+    same draft makes its task, which takes the offer."""
+
+    def arrange(self, box):
+        super().arrange(box)
+        # Where Git looks unless told otherwise, as a kill inside a hook
+        # tells it: the creation then goes as `CreateFromOffer`'s.
+        self.hook = box.repo / ".git" / "hooks" / "post-checkout"
+        self.hook.parent.mkdir(exist_ok=True)
+        self.hook.write_text("#!/bin/sh\necho made > made-by-hook\nexit 1\n")
+        self.hook.chmod(0o755)
+        self.went = None
+
+    def again(self, box):
+        # After the listings that follow the request cut short.
+        records = [box.record(name[:-len(".json")]) for name in box.records() if name.endswith(".json")]
+        started = [record for record in records if record and record.get("parent") == self.parent["id"]
+                   and record.get("status") != "failed"]
+        waiting = [other.get("id") for other in (box.record(self.parent["id"]) or {}).get("offers") or []]
+        if not started and self.offer not in waiting:
+            self.went = "no task started from its offer, which waits no more"
+        # Asked more than once, as after a stale lock is cleared.
+        if self.hook.exists():
+            self.hook.unlink()
+        return super().again(box)
+
+    def holds(self, box, problems):
+        super().holds(box, problems)
+        if self.went:
+            problems.append(self.went)
+
+
 class CreateFork(Create):
     """A fork of a task, which starts where that task's work stands, read
     with its worktree held: however the fork's creation was cut short, its
@@ -624,4 +660,4 @@ ALL = [Merge, MergeSquash, MergeAway, SquashAway, MergeTeardown, MergeSubmodule,
        Forget, Rename,
        Retarget,
        Stop, Resume, Seen, Turn, Send, Leave, Tell, Shell, Attach, Inspect, Look, PullRequest, PullRequestPush, Create, CreateFromRemote,
-       Propose, Show, ShowSeveral, ShowPage, TakeOffer, CreateFromOffer, CreateFork, CreateConversation]
+       Propose, Show, ShowSeveral, ShowPage, TakeOffer, CreateFromOffer, CreateFromOfferFailing, CreateFork, CreateConversation]
