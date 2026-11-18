@@ -7069,10 +7069,13 @@ def same_as_primary(repo, path, file):
     """Whether the primary checkout REPO has, at PATH, what FILE is: the
     same link, or a file of the same bytes, as a setup command copies."""
     ours = Path(repo) / path
-    if file.is_symlink():
-        return ours.is_symlink() and os.readlink(ours) == os.readlink(file)
-    return (ours.is_file() and not ours.is_symlink() and ours.stat().st_size == file.stat().st_size
-            and filecmp.cmp(ours, file, shallow=False))
+    try:
+        if file.is_symlink():
+            return ours.is_symlink() and os.readlink(ours) == os.readlink(file)
+        return (ours.is_file() and not ours.is_symlink() and ours.stat().st_size == file.stat().st_size
+                and filecmp.cmp(ours, file, shallow=False))
+    except OSError:
+        return False  # Unread, it is no proof of a copy: keep the file.
 
 
 def ignored_to_keep(repo, worktree, total=0):

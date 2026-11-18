@@ -346,6 +346,16 @@ class Kept(unittest.TestCase):
         pruning.join(10)
         self.assertTrue(record.exists(), "pruning dropped a copy renewed meanwhile")
 
+    def test_a_primary_copy_that_cant_be_read_is_no_proof(self):
+        box = self.box
+        (box.repo / ".env").write_text("SHARED=1\n")
+        task = box.create()
+        (Path(task["worktree"]) / ".env").write_text("SHARED=1\n")
+        os.chmod(box.repo / ".env", 0)
+        self.addCleanup(os.chmod, box.repo / ".env", 0o600)
+        result = self.retire(task)
+        self.assertEqual(result["kept"]["files"], 1, "deleted a file it couldn't compare")
+
 
 if __name__ == "__main__":
     unittest.main()
