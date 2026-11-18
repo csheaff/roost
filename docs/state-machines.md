@@ -173,7 +173,6 @@ fails in its place.
 | VIEWS-15 | S3 | Several attempts at one prompt are made from two, when the draft's own request is lost or refused, you change the prompt, and ask again | [The creation ID](#the-creation-id) | Fixed: `roost-a-draft-changed-between-asks-makes-its-attempts-from-one-wording`, `test_the_attempts_of_one_draft_are_made_from_one_wording`, `test_attempts_asked_for_at_once_in_other_words_make_one_wording` |
 | LEFT-1 | S4 | An agent that took a turn Emacs had not heard of, as on a prompt from another terminal, is told of what stood before it, or of its own answer in a thread | [A pull request left to its agent](#a-pull-request-left-to-its-agent) | Fixed: `test_an_agent_that_did_something_since_emacs_judged_is_not_told`, `roost-judges-afresh-when-the-agent-did-something-since` |
 | LC-10 | S4 | An offer its agent makes after you were asked goes with a task you finish, unnamed | [Finishing a task](#finishing-a-task) | Fixed: `test_an_offer_made_since_you_were_asked_keeps_its_task`, `test_an_offer_made_while_git_merges_keeps_its_task`, `roost-finishing-a-task-tells-its-host-which-offers-its-question-named` |
-| VIEWS-16 | S3 | An offer's draft that got no reply, asked again and quit at the question about the setup command, reads as one you only looked at: `RET` on its offer starts it anew, and `C-c C-c` makes a second task | [The new task draft](#the-new-task-draft) | Fixed, `roost-an-offers-draft-that-asked-keeps-its-creation-id` |
 | STATUS-12 | S4 | Closing Codex's plan menu says nothing, so its task reads `permission` until your next prompt | [Agent status](#agent-status) | Accepted: `AgentStatus.PlanMenuClosed.cfg` |
 
 ### Found by the models, 2026-11-17
@@ -184,6 +183,7 @@ code before it was fixed.
 | Finding | Sev | What goes wrong | Machine | Status |
 | --- | --- | --- | --- | --- |
 | STATUS-13 | S3 | A relayed Claude that reports its work before its `SessionStart` hook, as 2.1.303 does on a task's prompt, reads `ready` through its first turn, so a send goes through unasked. Since #245 | [Who wins](#who-wins-hooks-reports-poll-runner) | Fixed, `test_a_claude_that_reports_its_work_before_its_session_start_hook_reads_running` |
+| VIEWS-16 | S3 | An offer's draft that got no reply, asked again and quit at the question about the setup command, reads as one you only looked at: `RET` on its offer starts it anew, and `C-c C-c` makes a second task | [The new task draft](#the-new-task-draft) | Fixed, `roost-an-offers-draft-that-asked-keeps-its-creation-id` |
 
 ## A task on its host
 
