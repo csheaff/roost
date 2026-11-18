@@ -1153,6 +1153,11 @@ ghostel-tmux 0.3.0 or newer; `M-x roost-doctor` checks both.
 - When the connection to a host drops, the terminal attaches again by
   itself once the host answers, trying for about two and a half minutes;
   after that, opening the task attaches it.
+- Until a session's pane arrives, its window says "Connecting to" the
+  session. If it cannot be attached, as when the session ended while you
+  opened its task, the window says "Could not attach to" it: `q` goes
+  back to what the window showed, and opening the task again tries once
+  more.
 - A tmux window of several panes, as a task's with a shell beside its
   agent, shows as a split. Magit, a diff or a file you open from one of
   its panes shows beside the split, not in it. A pane made narrower can
@@ -1674,7 +1679,11 @@ turn watching or the side windows off. Then it fails on:
 - the failure of a command you gave not said in words, once.
 
 Windows, buffers, timers and minibuffers are real, and a held reply says what
-its host knew when it was asked; `roost--run` is stubbed. One test takes each
+its host knew when it was asked; `roost--run` is stubbed. A terminal is
+tmux-control's, stubbed to show at once, except for the commands that open a
+task with `:backend ghostel-tmux`: those run `roost-ghostel-tmux.el` on a
+ghostel-tmux stubbed at its public functions, and hold back the session's
+pane, which then comes, or whose tmux client ends first. One test takes each
 way a reply can end through a real process, and another unloads Roost with
 requests under way, in an Emacs of its own. Each rule has a way to break Roost
 that it must catch, in `roost-sweep-late--breakages`. A new command that

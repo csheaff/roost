@@ -12493,6 +12493,208 @@ A test stubs the functions of ghostel-tmux it reaches."
      ;; Given up: opening the task is what attaches it now.
      (should-not (gethash place roost-ghostel-tmux--lost)))))
 
+;; ghostel-tmux's sentinel, for a tmux client that ends (no such session, a
+;; dropped ssh, a server that died), runs `ghostel-tmux-detach-hook' in the
+;; controller, which `ghostel-tmux-controllers' no longer lists, then kills
+;; the controller and says why in the echo area.
+(defun roost-test--ghostel-client-ends (controller)
+  "Do what ghostel-tmux's sentinel does when the tmux client of CONTROLLER ends."
+  (with-current-buffer controller (run-hooks 'ghostel-tmux-detach-hook))
+  (kill-buffer controller))
+
+(defun roost-test--kill-stand-ins ()
+  "Kill the buffers that stand in for a pane."
+  (dolist (buffer (buffer-list))
+    (when (string-prefix-p "*roost-terminal: " (buffer-name buffer)) (kill-buffer buffer))))
+
+(ert-deftest roost-ghostel-tmux-a-stand-in-says-its-session-could-not-be-attached ()
+  ;; The tmux client ends before any pane came: the session went since its
+  ;; host's inspect, or ssh dropped as it attached.
+  (roost-test--isolated
+   (roost-test--ghostel-backend)
+   (let ((before (generate-new-buffer "before"))
+         (message-log-max t)
+         controller live)
+     (unwind-protect
+         (cl-letf (((symbol-function 'ghostel-tmux-controller) #'ignore)
+                   ((symbol-function 'ghostel-tmux-controllers) (lambda () (and live (list controller))))
+                   ((symbol-function 'ghostel-tmux-active-pane) #'ignore)
+                   ((symbol-function 'ghostel-tmux-panes) #'ignore)
+                   ((symbol-function 'ghostel-tmux-window-split) #'ignore)
+                   ((symbol-function 'ghostel-tmux-attach)
+                    (lambda (&rest _)
+                      (setq live t controller (generate-new-buffer " controller")))))
+           (cl-flet ((shown () (with-current-buffer (window-buffer) (buffer-string))))
+             (delete-other-windows)
+             (switch-to-buffer before)
+             (roost-ghostel-tmux-connect-or-switch nil "main" "roost-gone-123456")
+             (should (string-match-p "Connecting to roost-gone-123456" (shown)))
+             ;; tmux: "can't find session".  The client ends.
+             (setq live nil)
+             (with-current-buffer (messages-buffer)
+               (let ((inhibit-read-only t)) (erase-buffer)))
+             (roost-test--ghostel-client-ends controller)
+             ;; Nothing is connecting any more: the window says what happened,
+             ;; as tmux-control's terminal does, the echo area too, once.
+             (should-not (string-match-p "Connecting to" (shown)))
+             (should (string-match-p "Could not attach to roost-gone-123456" (shown)))
+             (should (equal (with-current-buffer (messages-buffer) (buffer-string))
+                            "Could not attach to roost-gone-123456\n"))
+             ;; It names a key that takes you back to what the window showed.
+             (should (string-match-p "\\_<q\\_>" (shown)))
+             (let ((stand-in (window-buffer)))
+               (with-current-buffer stand-in
+                 (should (eq (key-binding "q") 'quit-window))
+                 (quit-window))
+               (should (eq (window-buffer) before))
+               ;; Opened again from it, it connects again, and says so.
+               (switch-to-buffer stand-in)
+               (roost-ghostel-tmux-connect-or-switch nil "main" "roost-gone-123456")
+               (should (eq (window-buffer) stand-in))
+               (should (string-match-p "\\`Connecting to roost-gone-123456" (shown)))
+               (should-not (string-match-p "Could not attach" (shown))))))
+       (when (buffer-live-p controller) (kill-buffer controller))
+       (kill-buffer before)
+       (roost-test--kill-stand-ins)))))
+
+(ert-deftest roost-ghostel-tmux-a-stand-in-says-when-no-pane-is-coming ()
+  ;; Once a host's session is tried no more, and when you or Roost detach
+  ;; it; while it is tried again, the stand-in waits on, and takes the
+  ;; pane of the try that attaches.
+  (roost-test--isolated
+   (roost-test--ghostel-backend)
+   (let ((roost-ghostel-tmux--lost (make-hash-table :test #'equal))
+         (place '("far" "main" "one"))
+         (pane (generate-new-buffer "pane"))
+         controller live arrived)
+     (unwind-protect
+         (save-window-excursion
+           (cl-letf (((symbol-function 'ghostel-tmux-controller) #'ignore)
+                     ((symbol-function 'ghostel-tmux-controllers) (lambda () (and live (list controller))))
+                     ((symbol-function 'ghostel-tmux-active-pane) (lambda (&rest _) (and arrived pane)))
+                     ((symbol-function 'ghostel-tmux-panes) #'ignore)
+                     ((symbol-function 'ghostel-tmux-window-id) #'ignore)
+                     ((symbol-function 'ghostel-tmux-session-name) #'ignore)
+                     ((symbol-function 'ghostel-tmux-window-split) #'ignore)
+                     ((symbol-function 'roost-ghostel-tmux--socket) (lambda (_host socket) socket))
+                     ((symbol-function 'ghostel-tmux-attach)
+                      (lambda (&rest _) (setq live t controller (generate-new-buffer " controller"))))
+                     ((symbol-function 'run-at-time) #'ignore))
+             (cl-flet ((shown () (with-current-buffer (window-buffer) (buffer-string)))
+                       (open () (apply #'roost-ghostel-tmux-connect-or-switch place))
+                       (ends (&optional detaching)
+                         (setq live nil)
+                         (with-current-buffer controller
+                           (set (make-local-variable 'ghostel-tmux--detaching) detaching))
+                         (roost-test--ghostel-client-ends controller)))
+               (delete-other-windows)
+               (open)
+               (let ((stand-in (window-buffer)))
+                 ;; The connection dropped again, in a row of tries: the next is due.
+                 (puthash place 2 roost-ghostel-tmux--lost)
+                 (ends)
+                 (should (string-match-p "Connecting to one" (shown)))
+                 ;; The try attaches, with a controller of its own.
+                 (setq arrived t)
+                 (with-current-buffer (roost-ghostel-tmux--attach place t)
+                   (run-hooks 'ghostel-tmux-attach-hook))
+                 (should (eq (window-buffer) pane))
+                 (should-not (buffer-live-p stand-in)))
+               ;; The last try done, nothing is connecting.
+               (setq arrived nil live nil)
+               (switch-to-buffer "*scratch*")
+               (open)
+               (puthash place 8 roost-ghostel-tmux--lost)
+               (ends)
+               (should (string-match-p "\\`Could not attach to one\\." (shown)))
+               (should-not (gethash place roost-ghostel-tmux--lost))
+               ;; Detached, as Roost does before it stops a task: it says that.
+               (open)
+               (ends t)
+               (should (string-match-p "\\`Detached from one\\." (shown))))))
+       (when (buffer-live-p controller) (kill-buffer controller))
+       (kill-buffer pane)
+       (roost-test--kill-stand-ins)))))
+
+(ert-deftest roost-ghostel-tmux-a-pane-that-came-while-you-were-away-shows-in-its-workspace ()
+  ;; You open a task, and go to another workspace by its tab before the
+  ;; pane comes.  Back by the tab, not through Roost, the workspace shows
+  ;; the pane: not some other buffer, in place of a stand-in that went.
+  (roost-test--isolated
+   (roost-test--ghostel-backend)
+   (let ((roost-workspace 'tab-bar)
+         (original-tab-bar-mode tab-bar-mode)
+         (before (generate-new-buffer "before"))
+         (pane (generate-new-buffer "pane"))
+         (controller (generate-new-buffer " controller"))
+         arrived)
+     (unwind-protect
+         (save-window-excursion
+           (cl-letf (((symbol-function 'ghostel-tmux-controller)
+                      (lambda (&optional buffer) (and (eq (or buffer (current-buffer)) pane) controller)))
+                     ((symbol-function 'ghostel-tmux-controllers) (lambda () (list controller)))
+                     ((symbol-function 'ghostel-tmux-active-pane) (lambda (&rest _) (and arrived pane)))
+                     ((symbol-function 'ghostel-tmux-panes) (lambda (&rest _) (and arrived (list pane))))
+                     ((symbol-function 'ghostel-tmux-window-id) #'ignore)
+                     ((symbol-function 'ghostel-tmux-session-name) #'ignore)
+                     ((symbol-function 'ghostel-tmux-window-split) #'ignore)
+                     ((symbol-function 'ghostel-tmux-attach) (lambda (&rest _) controller)))
+             (delete-other-windows)
+             (switch-to-buffer before)
+             (roost-ghostel-tmux-connect-or-switch nil "main" "roost-notes-123456")
+             (let ((stand-in (window-buffer)))
+               (should (string-match-p "Connecting to" (with-current-buffer stand-in (buffer-string))))
+               (tab-bar-new-tab)
+               (switch-to-buffer before)
+               (setq arrived t)
+               (with-current-buffer controller (run-hooks 'ghostel-tmux-attach-hook))
+               (tab-bar-select-tab 1)
+               ;; As redisplay does once the tab's windows are back, which
+               ;; batch Emacs leaves out.
+               (with-current-buffer (window-buffer)
+                 (run-hook-with-args 'window-buffer-change-functions (selected-window)))
+               (should (eq (window-buffer) pane))
+               (should-not (buffer-live-p stand-in)))))
+       (while (cdr (roost--tabs)) (tab-bar-close-tab))
+       (tab-bar-mode (if original-tab-bar-mode 1 -1))
+       (kill-buffer controller)
+       (kill-buffer pane)
+       (kill-buffer before)
+       (roost-test--kill-stand-ins)))))
+
+(ert-deftest roost-ghostel-tmux-a-stand-in-no-window-shows-goes-when-its-pane-comes ()
+  ;; Without workspaces nothing shows it again: you opened another task
+  ;; in its window.
+  (roost-test--isolated
+   (roost-test--ghostel-backend)
+   (let ((roost-workspace nil)
+         (before (generate-new-buffer "before"))
+         (pane (generate-new-buffer "pane"))
+         (controller (generate-new-buffer " controller"))
+         arrived)
+     (unwind-protect
+         (save-window-excursion
+           (cl-letf (((symbol-function 'ghostel-tmux-controller) #'ignore)
+                     ((symbol-function 'ghostel-tmux-controllers) (lambda () (list controller)))
+                     ((symbol-function 'ghostel-tmux-active-pane) (lambda (&rest _) (and arrived pane)))
+                     ((symbol-function 'ghostel-tmux-panes) #'ignore)
+                     ((symbol-function 'ghostel-tmux-session-name) #'ignore)
+                     ((symbol-function 'ghostel-tmux-window-split) #'ignore)
+                     ((symbol-function 'ghostel-tmux-attach) (lambda (&rest _) controller)))
+             (delete-other-windows)
+             (switch-to-buffer before)
+             (roost-ghostel-tmux-connect-or-switch nil "main" "roost-notes-123456")
+             (let ((stand-in (window-buffer)))
+               (switch-to-buffer before)
+               (setq arrived t)
+               (with-current-buffer controller (run-hooks 'ghostel-tmux-attach-hook))
+               (should (eq (window-buffer) before))
+               (should-not (buffer-live-p stand-in)))))
+       (kill-buffer controller)
+       (kill-buffer pane)
+       (kill-buffer before)
+       (roost-test--kill-stand-ins)))))
+
 (ert-deftest roost-terminal-images-are-what-the-terminal-package-draws ()
   ;; A task's host hears it when the task starts and when it resumes, so
   ;; an agent that sends images only when told, as Pi under tmux, is told.

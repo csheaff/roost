@@ -35,6 +35,11 @@
 ;;
 ;; The outside world is stubbed at `roost--run', so `roost--request' is
 ;; Roost's own, and windows, buffers, timers and minibuffers are real.
+;; A terminal is tmux-control's, stubbed to show at once, but for the
+;; commands that say `:backend ghostel-tmux': theirs is Roost's own
+;; roost-ghostel-tmux.el on a ghostel-tmux stubbed at its public
+;; functions, whose pane is one more reply held back: it comes, or its
+;; tmux client ends first, with no such session or a connection dropped.
 ;; Requests are read when they are made: a held reply says what its host
 ;; knew then.
 
@@ -330,6 +335,116 @@ Those that repeat are left: nothing comes of them that a command waits for."
   "Show a buffer called NAME in the selected window, as another package would."
   (switch-to-buffer (get-buffer-create name)))
 
+;;;; A terminal ghostel-tmux draws
+
+;; ghostel-tmux in its public functions, as roost-ghostel-tmux.el calls
+;; them, read from ghostel-tmux 0.4.0.  `ghostel-tmux-attach' returns a
+;; controller before any pane is there.  The pane is held back as a
+;; reply is: good, tmux lists the session's windows, and
+;; `ghostel-tmux-attach-hook' runs in the controller; otherwise the tmux
+;; client ends, and ghostel-tmux's sentinel runs
+;; `ghostel-tmux-detach-hook' in a controller it no longer lists, keeps
+;; or kills its panes, kills it, and says why in the echo area.
+
+(defvar roost-sweep-late--controllers nil
+  "The controllers of the tmux clients that run, newest first.")
+
+(defvar-local roost-sweep-late--session nil
+  "In a controller, the tmux session it is attached to.")
+
+(defvar-local roost-sweep-late--controller nil
+  "In a pane buffer, its controller, dead once its tmux client ended.")
+
+(defvar-local roost-sweep-late--ids nil
+  "In a pane buffer, the IDs of its tmux pane and window, as a cons.")
+
+(defvar ghostel-tmux-pane-mode)
+
+(defun roost-sweep-late--live-controllers ()
+  "The controllers there are, for `ghostel-tmux-controllers'."
+  (setq roost-sweep-late--controllers (seq-filter #'buffer-live-p roost-sweep-late--controllers)))
+
+(defun roost-sweep-late--controller-of (&optional buffer)
+  "The controller of BUFFER's session while its tmux client runs.
+For `ghostel-tmux-controller'.  BUFFER is a pane or a controller, by
+default the current buffer."
+  (let* ((buffer (or buffer (current-buffer)))
+         (controller (or (buffer-local-value 'roost-sweep-late--controller buffer) buffer)))
+    (car (memq controller (roost-sweep-late--live-controllers)))))
+
+(defun roost-sweep-late--panes (&optional controller)
+  "The pane buffers of CONTROLLER, for `ghostel-tmux-panes'."
+  (let ((controller (or controller (current-buffer))))
+    (seq-filter (lambda (buffer) (eq (buffer-local-value 'roost-sweep-late--controller buffer) controller))
+                (buffer-list))))
+
+(defun roost-sweep-late--attach (session &optional _socket _no-display)
+  "Start a tmux client for SESSION, for `ghostel-tmux-attach'.
+Return its controller, or the one SESSION has.  What comes of it is held
+back as the reply to \"tmux attach\"."
+  (or (seq-find (lambda (controller)
+                  (equal (buffer-local-value 'roost-sweep-late--session controller) session))
+                (roost-sweep-late--live-controllers))
+      (let ((controller (generate-new-buffer (format " *late control %s*" session))))
+        (with-current-buffer controller
+          (setq roost-sweep-late--session session))
+        ;; The controller holds the connection, which Roost looks for to
+        ;; detach it: a process that runs no program.
+        (make-pipe-process :name "roost-sweep-late-client" :buffer controller :noquery t
+                           :filter #'ignore :sentinel #'ignore)
+        (push controller roost-sweep-late--controllers)
+        (setq roost-sweep-late--requests
+              (append roost-sweep-late--requests
+                      (list (list :host roost-sweep-late--host :action "tmux attach"
+                                  :request `((id . ,(concat (string-remove-prefix "roost-" session) "0000000000")))
+                                  :success (lambda (_) (roost-sweep-late--pane-comes controller))
+                                  :failure (lambda (words) (roost-sweep-late--client-ends controller words))
+                                  :reply t))))
+        controller)))
+
+(defun roost-sweep-late--pane-comes (controller)
+  "Have tmux list the windows of CONTROLLER's session: its pane is there.
+A pane buffer its last client left is live again."
+  (when (memq controller (roost-sweep-late--live-controllers))
+    (let* ((session (buffer-local-value 'roost-sweep-late--session controller))
+           (mine (equal session (concat "roost-" (substring roost-sweep-late--mine 0 6))))
+           (pane (get-buffer-create (format "*late pane %s*" (string-remove-prefix "roost-" session)))))
+      (with-current-buffer pane
+        (setq roost-sweep-late--controller controller
+              roost-sweep-late--ids (if mine '("%1" . "@1") '("%2" . "@2")))
+        (setq-local ghostel-tmux-pane-mode t)
+        (run-hooks 'ghostel-tmux-pane-mode-hook))
+      (with-current-buffer controller
+        (run-hooks 'ghostel-tmux-attach-hook)))))
+
+(defun roost-sweep-late--client-ends (controller words &optional keep)
+  "End the tmux client of CONTROLLER as ghostel-tmux's sentinel does, saying WORDS.
+Its panes are killed, or with KEEP left as they were."
+  (when (memq controller (roost-sweep-late--live-controllers))
+    (setq roost-sweep-late--controllers (delq controller roost-sweep-late--controllers))
+    (with-current-buffer controller
+      (run-hooks 'ghostel-tmux-detach-hook))
+    (unless keep
+      (mapc #'kill-buffer (roost-sweep-late--panes controller)))
+    (when (buffer-live-p controller)
+      (when-let* ((client (get-buffer-process controller))) (delete-process client))
+      (kill-buffer controller))
+    (message "Ghostel-tmux: %s" words)))
+
+(defun roost-sweep-late--detach (&optional keep buffer)
+  "Detach the tmux client of BUFFER's session, for `ghostel-tmux-detach'.
+With KEEP, its panes stay as they were."
+  (when-let* ((controller (roost-sweep-late--controller-of buffer)))
+    (with-current-buffer controller
+      ;; What roost-ghostel-tmux.el tells a detach from a drop by.
+      (set (make-local-variable 'ghostel-tmux--detaching) (if keep 'keep t)))
+    (roost-sweep-late--client-ends controller "Detached" keep)))
+
+(defun roost-sweep-late--pane-buffer (pane &optional controller)
+  "The buffer of the tmux pane with the ID PANE, for `ghostel-tmux-pane-buffer'."
+  (seq-find (lambda (buffer) (equal (car (buffer-local-value 'roost-sweep-late--ids buffer)) pane))
+            (roost-sweep-late--panes controller)))
+
 (defconst roost-sweep-late--asking
   (mapcar (lambda (function) (cons function (symbol-function function)))
           '(y-or-n-p yes-or-no-p read-string completing-read))
@@ -365,6 +480,7 @@ but for a reply's question."
             (roost-sweep-late--answer-questions t)
             (roost-sweep-late--asked nil) (roost-sweep-late--delivering nil) (roost-sweep-late--pump nil)
             (roost-sweep-late--place nil) (roost-sweep-late--clock 0) (roost-sweep-late--newer nil)
+            (roost-sweep-late--controllers nil)
             (roost-sweep-late--timers (append timer-list timer-idle-list))
             (roost-hosts nil)
             (roost-workspace nil)
@@ -388,6 +504,32 @@ but for a reply's question."
                  ((symbol-function 'tmux-control-reconnect) #'ignore)
                  ((symbol-function 'tmux-control-query)
                   (lambda (_command callback) (funcall callback "")))
+                 ((symbol-function 'ghostel-tmux-attach) #'roost-sweep-late--attach)
+                 ((symbol-function 'ghostel-tmux-detach) #'roost-sweep-late--detach)
+                 ((symbol-function 'ghostel-tmux-controller) #'roost-sweep-late--controller-of)
+                 ((symbol-function 'ghostel-tmux-controllers) #'roost-sweep-late--live-controllers)
+                 ((symbol-function 'ghostel-tmux-panes) #'roost-sweep-late--panes)
+                 ((symbol-function 'ghostel-tmux-active-pane)
+                  (lambda (&optional controller) (car (roost-sweep-late--panes controller))))
+                 ((symbol-function 'ghostel-tmux-pane-buffer) #'roost-sweep-late--pane-buffer)
+                 ((symbol-function 'ghostel-tmux-pane-id)
+                  (lambda (&optional buffer)
+                    (car (buffer-local-value 'roost-sweep-late--ids (or buffer (current-buffer))))))
+                 ((symbol-function 'ghostel-tmux-window-id)
+                  (lambda (&optional buffer)
+                    (cdr (buffer-local-value 'roost-sweep-late--ids (or buffer (current-buffer))))))
+                 ((symbol-function 'ghostel-tmux-session-name)
+                  (lambda (&optional buffer)
+                    (when-let* ((controller (roost-sweep-late--controller-of buffer)))
+                      (buffer-local-value 'roost-sweep-late--session controller))))
+                 ((symbol-function 'ghostel-tmux-select-pane) #'pop-to-buffer-same-window)
+                 ((symbol-function 'ghostel-tmux-window-split) #'ignore)
+                 ((symbol-function 'ghostel-tmux-restore-split) #'ignore)
+                 ((symbol-function 'ghostel-tmux-command)
+                  (lambda (_command &optional callback _buffer)
+                    (when callback (funcall callback "" nil))))
+                 ;; A host's socket is asked of the host, by ssh and TRAMP.
+                 ((symbol-function 'roost-ghostel-tmux--socket) (lambda (_host socket) socket))
                  ((symbol-function 'dired) (lambda (&rest _) (roost-sweep-late--show "*late dired*")))
                  ((symbol-function 'magit-status) (lambda (&rest _) (roost-sweep-late--show "*late magit*")))
                  ((symbol-function 'magit-diff-working-tree) (lambda (&rest _) (roost-sweep-late--show "*late diff*")))
@@ -528,6 +670,7 @@ fixed time needn't be, and earlier than what its host does next.")
 (defun roost-sweep-late--note-place ()
   "Note where you are, as the reply comes."
   (setq roost-sweep-late--place (list :window (selected-window) :buffer (window-buffer (selected-window))
+                                :terminal (roost--terminal-place (window-buffer (selected-window)))
                                 :task roost--current-task
                                 :shown-tasks (seq-keep (lambda (window)
                                                          (when-let* ((task (roost--terminal-task (window-buffer window))))
@@ -718,6 +861,9 @@ with Emacs running only timers and other replies.")
 
 (defconst roost-sweep-late--no-window "The agent's tmux window is gone; resume the task")
 
+(defconst roost-sweep-late--no-session "exited abnormally with code 1: can't find session: roost-aaaaaa"
+  "What ghostel-tmux says of a tmux client that found no session to attach.")
+
 (defconst roost-sweep-late--offer
   '((id . "0a1b2c3d") (title . "Fix add") (brief . "add() subtracts.") (at . "2026-11-01T09:59:00+00:00"))
   "An offer the agent of the task each command acts on made.")
@@ -745,6 +891,22 @@ dashboard the command starts from."
      :start ,(lambda () (roost-open-task (roost-sweep-late--mine)))
      :action "inspect" :opens t :shows "*late terminal aaaaaa*"
      :refusals ((,roost-sweep-late--no-window . asks) (,roost-sweep-late--retired)))
+    ;; With ghostel-tmux, the default: the host has said the task is there,
+    ;; and what is held back is the pane, which a buffer stands in for.
+    ;; ghostel-tmux holds its attach hook while a minibuffer is open, and
+    ;; a task you stop has its tmux client detached, with no reply to come.
+    (open-with-ghostel-tmux
+     :backend ghostel-tmux
+     :start ,(lambda () (roost-open-task (roost-sweep-late--mine)))
+     :first ("inspect") :action "tmux attach" :opens t :shows "*late pane aaaaaa*"
+     :forms (good dropped (refused . ,roost-sweep-late--no-session))
+     :not (minibuffer minibuffer-quit same-task-stop))
+    (open-from-dashboard-with-ghostel-tmux
+     :backend ghostel-tmux :origin dashboard
+     :start ,(lambda () (roost-open-task (roost-sweep-late--mine)))
+     :first ("inspect") :action "tmux attach" :opens t :shows "*late pane aaaaaa*"
+     :forms (good dropped (refused . ,roost-sweep-late--no-session))
+     :not (minibuffer minibuffer-quit same-task-stop))
     (open-from-the-panel
      :origin panel
      :start ,(lambda () (roost-open-task (roost-sweep-late--mine)))
@@ -1059,7 +1221,10 @@ that it makes a task of its own, and uses its host, so remembers it.
 shows what a run of it found, so that a late reply to an older run must
 change nothing.  :list that it asks for the tasks.  :sides-only that it
 starts from the sidebar, so needs one.  :not names interrupters that
-can't follow it.")
+can't follow it.  :backend is the package that draws its terminals,
+tmux-control unless it says `ghostel-tmux', whose pane is held as the
+reply to \"tmux attach\"; and :forms the forms its reply can come in,
+when not those of a host's.")
 
 ;;;; Rules
 
@@ -1111,7 +1276,11 @@ can't follow it.")
     (unless (or may-open closing)
       (unless (eq (selected-window) (plist-get place :window))
         (roost-sweep-late--problem 'moved "the selected window moved"))
-      (unless (eq (window-buffer (selected-window)) (plist-get place :buffer))
+      (unless (or (eq (window-buffer (selected-window)) (plist-get place :buffer))
+                  ;; What stood in for a session's pane gave way to it.
+                  (and (plist-get place :terminal)
+                       (equal (roost--terminal-place (window-buffer (selected-window)))
+                              (plist-get place :terminal))))
         (roost-sweep-late--problem 'moved "the selected window shows %s, not %s"
                              (window-buffer (selected-window)) (plist-get place :buffer)))
       ;; Redrawing takes up the task whose terminal shows.
@@ -1179,7 +1348,11 @@ the reply came."
   (dolist (buffer (buffer-list))
     (with-current-buffer buffer
       (when (or roost--send-sending roost--pr-sending roost--compose-submitting)
-        (roost-sweep-late--problem 'left-behind "%s says it is still sending" (buffer-name buffer))))))
+        (roost-sweep-late--problem 'left-behind "%s says it is still sending" (buffer-name buffer)))
+      ;; Every tmux client has brought its pane, or ended.
+      (when (and (eq roost-terminal-backend 'ghostel-tmux) (roost--tmux-buffer-p)
+                 (string-search "Connecting to" (buffer-string)))
+        (roost-sweep-late--problem 'left-behind "%s says it is still connecting" (buffer-name buffer))))))
 
 (defun roost-sweep-late--check-said (spec interrupter form from)
   "Note what SPEC's command should have said of FORM since FROM in *Messages*.
@@ -1362,6 +1535,9 @@ for replies."
   "Run SPEC's command with its reply held, then INTERRUPTER, then its reply in FORM.
 ANSWER answers the questions asked after it.  Return what broke, a list
 of (RULE . TEXT), and whether a question was asked, as a cons."
+  ;; Loaded before the world, which forgets the features it gains.
+  (when (eq (plist-get spec :backend) 'ghostel-tmux)
+    (roost-test--ghostel-backend))
   (if (not (plist-get interrupter :frame))
       (roost-sweep-late--case-here spec interrupter form answer)
     (roost-sweep-late--in-frame
@@ -1375,6 +1551,7 @@ of (RULE . TEXT), and whether a question was asked, as a cons."
           (roost-sweep-late--origin-buffer nil)
           (roost-sweep-late--spec spec)
           (roost-sweep-late--view nil)
+          (roost-terminal-backend (or (plist-get spec :backend) roost-terminal-backend))
           (from nil) other)
       (roost-sweep-late--populate (plist-get spec :fields) (plist-get spec :others))
       (roost-watch-mode 1)
@@ -1430,8 +1607,9 @@ of (RULE . TEXT), and whether a question was asked, as a cons."
 
 (defun roost-sweep-late--forms (spec)
   "The forms SPEC's reply can come in."
-  (append '(good dropped no-reply)
-          (mapcar (lambda (refusal) (cons 'refused (car refusal))) (plist-get spec :refusals))))
+  (or (plist-get spec :forms)
+      (append '(good dropped no-reply)
+              (mapcar (lambda (refusal) (cons 'refused (car refusal))) (plist-get spec :refusals)))))
 
 (defun roost-sweep-late--form-name (form)
   "FORM as text."
@@ -1543,6 +1721,7 @@ Return their problems, each (TEXT PLACE...), as `roost-sweep--report' takes them
     (stale open newer-poll good roost--newer-events ,(lambda (task _old) task))
     (left-behind poll none good roost--task-list-p ,(lambda (_) (error "Broken")))
     (left-behind search none good roost--search-arrived ,(lambda (&rest _) (run-with-timer 60 60 (lambda ()))))
+    (left-behind open-with-ghostel-tmux none dropped roost-ghostel-tmux--not-attached ,#'ignore)
     (gone retire none good roost--redraw ,#'ignore)
     (question open minibuffer (refused . ,roost-sweep-late--no-window)
               roost--when-out-of-minibuffer ,#'funcall)

@@ -4,6 +4,16 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A terminal that cannot attach its task's tmux session says so. When the
+  session went as you opened the task, or the connection dropped as it
+  attached, the window said "Connecting to" the session for good. It now
+  says "Could not attach to" it, and that `q` goes back and opening the
+  task again tries once more.
+- A task's terminal shows in its workspace when you go back to it by its
+  tab or perspective. If you left the workspace before the terminal had
+  connected, it showed some other buffer in the terminal's place.
+- Nothing to do when upgrading.
+
 ## 0.13.0
 
 To upgrade from 0.12:
