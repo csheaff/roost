@@ -602,12 +602,12 @@ def owned_pane(task, inventory):
     return None
 
 
-def close_panes(task, inventory, check=True, fresh=False):
+def close_panes(task, inventory, check=True):
     """Close TASK's agent's pane, if it owns it, and its shell, where they are
     now: each one's window with it, unless something else is in that window,
     which stays. INVENTORY may be from before a slow step, as a merge, and a
-    read now says what is there, if tmux answers, unless it is FRESH."""
-    current = None if fresh else pane_inventory(task["socket"])
+    read now says what is there, if tmux answers."""
+    current = pane_inventory(task["socket"])
     inventory = inventory if current is None else current
     ours = {pane_id for pane_id in (task.get("paneId") if owned_pane(task, inventory) else None,
                                     task.get("shellPaneId"))
@@ -4542,11 +4542,18 @@ def pane_sessions(task, inventory):
     children = collections.defaultdict(list)
     for child, (parent, _) in table.items():
         children[parent].append(child)
+    # Only a session begun by a process of the panes' own sessions, as each
+    # command Claude Code runs: not one a command of its starts, as a build
+    # tool's daemon other tasks share does, which leads its own.
+    panes_own = set(sessions)
     pending = [pid for pid in sessions if pid in table]
     while pending:
-        for child in children.pop(pending.pop(), ()):
+        parent = pending.pop()
+        for child in children.pop(parent, ()):
             with contextlib.suppress(OSError):
-                sessions.add(os.getsid(child))
+                sid = os.getsid(child)
+                if sid == child and os.getsid(parent) in panes_own:
+                    sessions.add(sid)
             pending.append(child)
     return sessions
 
@@ -4693,7 +4700,10 @@ def stop(store, task, inventory=None):
     if checkpoint != task.get("leftRunning", []):
         task["leftRunning"] = checkpoint
         store.save(task)
-    close_panes(task, current, fresh=True)
+    # Read again, as the scans and the save above take a while: a pane
+    # joined to the agent's window meanwhile stays, and one respawned is
+    # no longer the agent's.
+    close_panes(task, current)
     left = end_left_running(task["id"], sessions, checkpoint)
     # Stopping says nothing new: an agent you had seen stays seen.
     was_seen = seen_since_last_event(task)
