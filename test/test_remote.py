@@ -3936,6 +3936,17 @@ class Lifecycle(unittest.TestCase):
         finally:
             pool.shutdown(wait=False)
 
+    def test_a_hook_nested_too_deep_to_read_fails_no_session(self):
+        # As a tool's input may be: the hook says nothing, and the agent goes on.
+        task = self.create()
+        record = roost.Store(str(self.state)).read(task["id"])
+        for mode in (["hook", str(self.state), task["id"], record["runId"]], ["hook-env"]):
+            ran = subprocess.run([sys.executable, str(SOURCE)] + mode, timeout=30, capture_output=True, text=True,
+                                 input='{"hook_event_name":"PreToolUse","tool_input":%s' % ("[" * 100000),
+                                 env=dict(os.environ, ROOST_STATE_DIRECTORY=str(self.state),
+                                          ROOST_TASK_ID=task["id"], ROOST_RUN_ID=record["runId"]))
+            self.assertEqual((ran.returncode, ran.stdout, ran.stderr), (0, "", ""))
+
     def hook_answered(self, task, payload):
         """Run the agent's hook with PAYLOAD as Codex runs it, which gives it three seconds."""
         record = roost.Store(str(self.state)).read(task["id"])
@@ -7243,6 +7254,12 @@ sys.exit(status)
             deep = dict(type="blockquote", content=[deep])
         self.assertEqual(roost.jira_body(dict(customfield_10004=dict(type="doc", content=[deep]),
                                               customfield_10005=doc("Readable."))), "Readable.")
+        # A reply too deep to read at all is no reply.
+        self.fake_twg('{"data":{"issues":[{"key":"PROJ-7","description":' + "[" * 100000)
+        for action, key in (("jira-issue", dict(key="PROJ-7")), ("jira-issues", dict(jql="project = PROJ"))):
+            self.assertIn("twg didn't list Jira work items as JSON", self.request(action, **key)["error"])
+        self.fake_twg("[" * 100000, status=77)
+        self.assertIn("as twg says it to people", self.request("jira-issue", key="PROJ-7")["error"])
         # Nothing Jira didn't give as a key reaches twg's command line.
         directory = self.fake_twg(dict(data=dict(issues=[])))
         calls = (directory / "log").read_text()
@@ -9230,6 +9247,51 @@ print(json.dumps(dict(data=data)))
         # No transcript: the request still succeeds, with no field.
         self.assertNotIn("lastMessage", self.request("list", full=True)["result"][0])
 
+    def test_a_line_nested_too_deep_to_read_in_a_transcript_does_not_end_the_listing(self):
+        # JSON, as a tool's input two thousand lists deep, which the
+        # agent's transcript records and Python refuses to read.
+        task = self.create()
+        other = self.create(name="other")
+        record = roost.Store(str(self.state)).read(task["id"])
+        home = self.root / "home"
+        folder = home / ".claude/projects" / claude_folder(task["worktree"])
+        folder.mkdir(parents=True)
+        (folder / (record["agentSession"] + ".jsonl")).write_text(
+            json.dumps({"message": {"role": "assistant", "content": [{"type": "text", "text": "Done."}]}}) + "\n"
+            + '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","input":%s}]}}\n'
+            % ("[" * 2000 + "]" * 2000))
+        with patch.dict(os.environ, HOME=str(home)):
+            listed = self.request("list", full=True)
+            inspected = self.request("inspect", id=task["id"])
+        self.assertTrue(listed["ok"], listed)
+        self.assertEqual({shown["id"] for shown in listed["result"]}, {task["id"], other["id"]})
+        self.assertTrue(inspected["ok"], inspected)
+        self.assertEqual(inspected["result"]["lastMessage"], "Done.")
+
+    def test_a_pi_session_that_is_a_fifo_does_not_hold_the_listing(self):
+        # As the record of an older helper may have it, which kept
+        # whatever Pi's hook named: opening it would wait for a writer.
+        task = self.create()
+        fifo = self.root / "session.jsonl"
+        os.mkfifo(fifo)
+        store = roost.Store(str(self.state))
+        record = store.read(task["id"])
+        record.update(agent="pi", agentSession=str(fifo))
+        record.pop("lastReply", None)
+        store.save(record)
+        replies = []
+        thread = threading.Thread(target=lambda: replies.append(self.request("list", full=True)), daemon=True)
+        thread.start()
+        thread.join(8)
+        held = thread.is_alive()
+        # Let it go, so the test ends.
+        with open(os.open(fifo, os.O_RDWR | os.O_NONBLOCK), "w") as out:
+            out.write("{}\n")
+        thread.join(10)
+        self.assertFalse(held, "the listing still waited on the session file after eight seconds")
+        self.assertTrue(replies[0]["ok"], replies)
+        self.assertNotIn("lastMessage", replies[0]["result"][0])
+
     def test_the_reply_claude_reports_is_the_latest_reply(self):
         # Claude's Stop event carries the turn's reply, so no transcript is read.
         task = self.create()
@@ -10975,6 +11037,19 @@ console.log(JSON.stringify(seen));
         self.assertEqual(replies[3]["error"]["message"], "Unknown tool: read_task")
         self.assertEqual(replies[4]["result"], {})
 
+    def test_a_line_nested_too_deep_to_read_does_not_end_the_mcp_server(self):
+        # "A bug answers its request rather than ending the server."
+        task = self.create(name="parent")
+        after = json.dumps(dict(jsonrpc="2.0", id="after", method="ping"))
+        reader, writer = io.StringIO("[" * 100000 + "\n" + after + "\n"), io.BytesIO()
+        roost.McpServer(roost.Store(str(self.state)), task["id"], reader, writer).serve()
+        self.assertEqual([json.loads(line)["id"] for line in writer.getvalue().splitlines()], ["after"])
+        # The same of the process an agent starts.
+        ran = subprocess.run([sys.executable, str(SOURCE), "mcp", str(self.state), task["id"]], timeout=30,
+                             input="[" * 100000 + "\n" + after + "\n", capture_output=True, text=True)
+        self.assertEqual((ran.returncode, ran.stderr), (0, ""))
+        self.assertEqual([json.loads(line)["id"] for line in ran.stdout.splitlines()], ["after"])
+
     def call(self, task, tool, **arguments):
         """What TASK's agent is told as it calls TOOL of Roost's with ARGUMENTS."""
         return self.serve(task, dict(id="call", method="tools/call", params=dict(
@@ -12345,8 +12420,15 @@ class Search(unittest.TestCase):
             return scan(path, *args)
 
         # Time runs out once reading has begun, so within the first conversation.
+        # The time is looked at as each line is read.
+        looked = []
+
+        def late_at_the_501st_line():
+            looked.extend([None] if begun else [])
+            return 1000 if len(looked) > 500 else 0
+
         with patch.object(roost, "search_transcript", reading_then_late), \
-             patch.object(roost.time, "monotonic", lambda: 1000 if begun else 0):
+             patch.object(roost.time, "monotonic", late_at_the_501st_line):
             result = self.search("heron")
         self.assertEqual(len(begun), 1)
         # The time covers finding conversations, on a slow disk say.
@@ -12360,7 +12442,7 @@ class Search(unittest.TestCase):
         with patch.object(roost.Path, "iterdir", slow_listing), patch.object(roost.time, "monotonic", lambda: now[0]):
             self.assertTrue(self.search("heron")["incomplete"])
         self.assertTrue(result["incomplete"])
-        self.assertEqual(len(result["tasks"][0]["hits"]) + result["tasks"][0]["more"], 1023)
+        self.assertEqual(len(result["tasks"][0]["hits"]) + result["tasks"][0]["more"], 500)
 
     def test_an_empty_query_is_refused(self):
         reply = roost.rpc(dict(root=str(self.state), action="search", query="  "))
@@ -12533,6 +12615,109 @@ class Search(unittest.TestCase):
                           ("assistant", "pi", "Done: the CSV writer now quotes commas.")])
         self.assertEqual((second["hits"][0]["session"], second["hits"][0]["line"]),
                          ("2026-10-01T10-00-00-000Z_s1", 3))
+
+    def pi_task(self):
+        """A live Pi task with one session that says "commas", and its worktree."""
+        live = self.state / "worktrees" / self.repo_hash / "fix-csv-quoting-0a1b2c"
+        self.store.save(dict(id="0a1b2c3d4e5f6a7b", name="fix CSV quoting", repo=self.repo, agent="pi",
+                             worktree=str(live), branch="roost/fix-csv-quoting-0a1b2c", status="ready"))
+        self.pi_session("0a1b2c3d4e5f6a7b", "good", live,
+                        [self.pi_said("user", [dict(type="text", text="Quote CSV commas")], 1)])
+        return live
+
+    def test_a_line_nested_too_deep_to_read_does_not_end_the_search(self):
+        live = self.pi_task()
+        # A session's first line, which says where it started.
+        self.pi_session("0a1b2c3d4e5f6a7b", "nested", live, [], first="[" * 100000)
+        # Any other line is read only if it holds the words.
+        deep = self.pi_session("0a1b2c3d4e5f6a7b", "deep", live, [])
+        with deep.open("a") as out:
+            out.write('{"type":"message","x":"commas","y":' + "[" * 100000 + "\n")
+            out.write(json.dumps(self.pi_said("user", [dict(type="text", text="commas after it")], 2)) + "\n")
+        task, = self.search("commas")["tasks"]
+        self.assertEqual([(hit["session"], hit["line"], hit["text"]) for hit in task["hits"]],
+                         [("good", 2, "Quote CSV commas"), ("deep", 3, "commas after it")])
+
+    def test_what_is_not_a_file_among_the_sessions_is_not_searched(self):
+        self.pi_task()
+        sessions = self.state / "sessions" / "0a1b2c3d4e5f6a7b"
+        # A FIFO waits for a writer, and a link may lead to one, or to a
+        # device with no end.
+        fifos = [sessions / "pipe.jsonl", self.state / "pipe"]
+        for fifo in fifos:
+            os.mkfifo(fifo)
+        (sessions / "link.jsonl").symlink_to(self.state / "pipe")
+        (sessions / "folder.jsonl").mkdir()
+        read, replies = [], []
+        scan = roost.search_transcript
+
+        def reading(path, *args):
+            read.append(path.name)
+            return scan(path, *args)
+
+        with patch.object(roost, "SEARCH_SECONDS", 1), patch.object(roost, "search_transcript", reading):
+            thread = threading.Thread(target=lambda: replies.append(self.search("commas")), daemon=True)
+            thread.start()
+            thread.join(6)
+            held = thread.is_alive()
+            # Let it go, so the test ends.
+            for fifo in fifos:
+                with open(os.open(fifo, os.O_RDWR | os.O_NONBLOCK), "w") as out:
+                    out.write("{}\n")
+                thread.join(5)
+        self.assertFalse(held, "the search was still reading five seconds past its one-second time")
+        self.assertEqual(read, ["good.jsonl"])
+        self.assertEqual((len(replies[0]["tasks"]), replies[0]["incomplete"]), (1, False))
+
+    def test_a_line_longer_than_any_message_is_passed_over_a_piece_at_a_time(self):
+        live = self.pi_task()
+        long = self.pi_session("0a1b2c3d4e5f6a7b", "long", live, [])
+        with long.open("a") as out:
+            out.write(json.dumps(self.pi_said("user", [dict(type="text", text="commas " + "x" * 5000)], 2)) + "\n")
+            out.write(json.dumps(self.pi_said("user", [dict(type="text", text="commas after it")], 3)) + "\n")
+        found = lambda: [(hit["session"], hit["line"], hit["text"][:15])
+                         for hit in self.search("commas")["tasks"][0]["hits"]]
+        self.assertEqual(found(), [("good", 2, "Quote CSV comma"), ("long", 2, "commas xxxxxxxx"),
+                                   ("long", 3, "commas after it")])
+        # No more of it is held than a piece, and the time is looked at
+        # for each: the lines after it keep their numbers.
+        looked = []
+        clock = time.monotonic
+        with patch.object(roost, "SEARCH_LINE_PIECE", 64), patch.object(roost, "SEARCH_LINE_LIMIT", 1024), \
+             patch.object(roost.time, "monotonic", lambda: looked.append(None) or clock()):
+            self.assertEqual(found(), [("good", 2, "Quote CSV comma"), ("long", 3, "commas after it")])
+        self.assertGreater(len(looked), 5000 // 64)
+        # Out of time within the one line, the search says so.
+        del looked[:]
+        with patch.object(roost, "SEARCH_LINE_PIECE", 64), \
+             patch.object(roost.time, "monotonic", lambda: looked.append(None) or (1000 if len(looked) > 20 else 0)):
+            self.assertTrue(self.search("commas")["incomplete"])
+
+    def test_transcripts_are_read_only_from_files(self):
+        # Whatever names one: a record, a hook, or a folder of them.
+        self.state.mkdir(parents=True, exist_ok=True)
+        fifo = self.state / "pipe.jsonl"
+        os.mkfifo(fifo)
+        for read in (roost.transcript_tail, lambda path: list(roost.lines_backwards(path, 1024)),
+                     lambda path: list(roost.search_transcript(path, ["x"], lambda cwd: None, None, "pi"))):
+            for path in (fifo, self.state):
+                ended = []
+
+                def reads():
+                    try:
+                        ended.append(read(path))
+                    except OSError as error:
+                        ended.append(error)
+
+                thread = threading.Thread(target=reads, daemon=True)
+                thread.start()
+                thread.join(5)
+                held = thread.is_alive()
+                with open(os.open(fifo, os.O_RDWR | os.O_NONBLOCK), "w") as out:
+                    out.write("{}\n")
+                thread.join(5)
+                self.assertFalse(held, "reading %s waited for a writer" % path)
+                self.assertIsInstance(ended[0], OSError)
 
     def test_each_agents_conversations_are_searched_newest_first_and_the_rest_named(self):
         tasks = {}
@@ -12843,6 +13028,92 @@ class LastMessage(unittest.TestCase):
                         hook(event="status", status="idle", reply="Done")
                         hook(event="status", status="busy")
                         self.assertEqual(task()["lastPrompt"], "Also the docs")
+
+    def test_a_line_nested_too_deep_to_read_is_passed_over_by_each_reader(self):
+        nested = "[" * 100000 + "\n"
+        message = lambda role, said: {"type": "response_item", "payload": {
+            "type": "message", "role": role,
+            "content": [{"type": "input_text" if role == "user" else "output_text", "text": said}]}}
+        # Codex's Stop hook reads its rollout for a plan, and the listing for its reply.
+        plan = "Here it is.\n<proposed_plan>\n# Plan\n</proposed_plan>"
+        self.write(".codex/sessions/2026/08/28/rollout-2026-08-28T18-33-42-abc-123.jsonl",
+                   [message("user", "Plan"), message("assistant", plan)], raw=nested)
+        stopped = roost.CodexAgent().observe(dict(hook_event_name="Stop", session_id="abc-123",
+                                                  last_assistant_message="Here it is."), "running")
+        self.assertEqual(stopped["status"], "permission")
+        self.assertIn("# Plan", roost.last_message(dict(agent="codex", worktree="/w", agentSession="abc-123")))
+        # Claude's transcript says what you sent, where an older helper's hook took a notice for it.
+        said = lambda role, content: dict(type=role, message=dict(role=role, content=content))
+        transcript = self.write("conversation.jsonl", [said("user", "Now add a test")], raw=nested)
+        task = dict(agent="claude", worktree="/w", prompt="Fix it", transcript=str(transcript),
+                    lastPrompt="<task-notification>\n<status>completed</status>\n</task-notification>")
+        self.assertEqual(roost.ClaudeAgent().your_prompt(task, task["lastPrompt"]), "Now add a test")
+        self.assertTrue(roost.put_right_prompt(task))
+        self.assertEqual(task["lastPrompt"], "Now add a test")
+        # Pi's session file.
+        session = self.write("pi/session.jsonl", [
+            {"type": "message", "message": {"role": "assistant", "content": [{"type": "text", "text": "pi says"}]}}],
+            raw=nested)
+        self.assertEqual(roost.last_message(dict(agent="pi", worktree="/w", agentSession=str(session))), "pi says")
+
+    def test_a_pi_session_that_is_no_file_name_is_not_kept_nor_read(self):
+        # Pi's hook says where its session is, and an agent can send a hook of its own.
+        for session in (5, True, ["a"], dict(a=1), 1.5):
+            with self.subTest(session=session):
+                self.assertNotIn("agentSession", roost.PiAgent().observe(dict(event="agent_start", session=session)))
+                # A record from an older helper may hold it: it is no reply.
+                self.assertIsNone(roost.last_message(dict(agent="pi", worktree="/w", agentSession=session)))
+                # Nor one for Pi to go back to.
+                argv = roost.PiAgent().launch(roost.Store(str(self.home / "state")), dict(
+                    id="0" * 16, command=["pi"], prompt=None, agentSession=session), True)
+                self.assertNotIn("--session", argv)
+        # A number would be read as a file this helper has open, and closed.
+        mine, other = os.pipe()
+        try:
+            self.assertIsNone(roost.last_message(dict(agent="pi", worktree="/w", agentSession=mine)))
+            os.fstat(mine)
+        finally:
+            for end in (mine, other):
+                with contextlib.suppress(OSError):
+                    os.close(end)
+
+    def test_pi_keeps_only_a_session_in_the_folder_roost_gave_it(self):
+        store = roost.Store(str(self.home / "state"))
+        store.save(dict(id="0" * 16, agent="pi", worktree="/w", status="ready", runId="run", updatedAt="then"))
+        sessions = self.home / "state/sessions" / ("0" * 16)
+        (sessions / "sub").mkdir(parents=True)
+        elsewhere = self.write("elsewhere.jsonl", [])
+        os.mkfifo(sessions / "pipe.jsonl")
+        (sessions / "link.jsonl").symlink_to(elsewhere)
+        (sessions / "own.jsonl").write_text("")
+        (sessions / "sub/own.jsonl").write_text("")
+        (sessions / "linked.jsonl").symlink_to(sessions / "own.jsonl")
+        other = self.home / "state/sessions" / ("1" * 16)
+        other.mkdir()
+        (other / "theirs.jsonl").write_text("")
+
+        def kept(session):
+            record = store.read("0" * 16)
+            record.pop("agentSession", None)
+            record.update(status="ready")
+            store.save(record)
+            roost.update_hook(store, "0" * 16, dict(event="agent_start", session=session), "run")
+            self.assertEqual(store.read("0" * 16)["status"], "running")
+            return store.read("0" * 16).get("agentSession")
+
+        for session in (str(elsewhere), str(sessions / "pipe.jsonl"), str(sessions / "link.jsonl"), str(sessions),
+                        str(sessions / "sub"), str(other / "theirs.jsonl"), str(sessions / ".." / "x.jsonl"),
+                        "own.jsonl", "/dev/zero", "", "a\0b", 5):
+            with self.subTest(session=session):
+                self.assertIsNone(kept(session))
+        # Its own, wherever in the folder, and one Pi has yet to write.
+        for session in (sessions / "own.jsonl", sessions / "sub/own.jsonl", sessions / "linked.jsonl",
+                        sessions / "new.jsonl"):
+            with self.subTest(session=session):
+                self.assertEqual(kept(str(session)), str(session))
+        # One refused leaves the one before.
+        roost.update_hook(store, "0" * 16, dict(event="agent_end", session=str(elsewhere)), "run")
+        self.assertEqual(store.read("0" * 16)["agentSession"], str(sessions / "new.jsonl"))
 
     def test_missing_or_malformed_transcripts_give_none(self):
         for agent in ("claude", "codex", "pi", "opencode"):
@@ -13463,7 +13734,8 @@ class ProgramStatus(unittest.TestCase):
     def pi_says_its_reply(self, root):
         # Pi's session file may not hold the reply yet when its turn ends,
         # so a reader of the file would show the reply before.
-        stale = root / "session.jsonl"
+        stale = root / "state/sessions" / ("0" * 16) / "session.jsonl"
+        stale.parent.mkdir(parents=True)
         stale.write_text(json.dumps({"type": "message", "message": {
             "role": "assistant", "content": [{"type": "text", "text": "before"}]}}) + "\n")
         store = roost.Store(str(root / "state"))
@@ -13489,7 +13761,7 @@ class ProgramStatus(unittest.TestCase):
                          "x" * (roost.LAST_MESSAGE_LIMIT + 1))
         # A session that starts, as after /new, leaves the one before's reply behind.
         hook(event="agent_end", pending=False, reply="in the session before")
-        fresh = root / "fresh.jsonl"
+        fresh = stale.with_name("fresh.jsonl")
         fresh.write_text("")
         roost.update_hook(store, "0" * 16, dict(event="session_start", session=str(fresh)), "run")
         self.assertIsNone(store.read("0" * 16)["lastReply"])
