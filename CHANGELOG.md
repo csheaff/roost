@@ -4,6 +4,19 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A retire that Git cut short, as when something wrote into the worktree
+  as Git deleted it, can be finished. Git forgot the worktree with half its
+  files gone, and Roost said "Git can't read the task's worktree ... bring
+  back what is missing" for good. Now Roost makes it a worktree again with
+  its files back, names what was written there meanwhile, and retiring
+  again once you have dealt with that finishes.
+- A teardown command that leaves a file in the worktree no longer just
+  blocks retiring: the refusal names the file and says to have the command
+  clean up after itself or to ignore what it leaves, as it runs again on
+  each retire.
+- A project or state folder named under a user this host doesn't have
+  (`~someone/project`) is refused with a plain message, rather than an
+  internal error.
 - Retiring or discarding a task no longer deletes a file that something its
   agent left running wrote as the worktree went, as a dev server started
   with `nohup` does. Stopping a task now ends what its agent and its shell

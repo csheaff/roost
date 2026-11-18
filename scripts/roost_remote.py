@@ -78,6 +78,20 @@ def parse_time(value):
     return parsed if parsed.tzinfo else None
 
 
+def expand_home(path):
+    """PATH, a string, with ~ or ~user at its start made that home folder,
+    as a Path. A user this host has none of is refused plainly."""
+    try:
+        return Path(path).expanduser()
+    except RuntimeError:
+        user = str(path)[1:].split("/", 1)[0]
+        if not user:
+            raise RoostError("This host can't say where your home folder is, for %s; give the folder by its "
+                             "whole path" % path) from None
+        raise RoostError("This host has no user %s, so no folder %s; give the folder by its whole path"
+                         % (user, path)) from None
+
+
 def text(value):
     """An optional nonempty string from a request, else None.
     Older Emacs clients encoded nil as an empty JSON object."""
@@ -407,7 +421,7 @@ def own_record(record, task_id):
 
 class Store:
     def __init__(self, root):
-        self.root = Path(root).expanduser().absolute()
+        self.root = expand_home(root).absolute()
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.tasks_dir = self.root / "tasks"
         self.tasks_dir.mkdir(mode=0o700, exist_ok=True)
@@ -2600,7 +2614,7 @@ def make_task(store, request, create_id):
             return dict(other, alreadyMade=True)
     if conversation:
         request = dict(request, directory=str(conversation_repository(store)), base=None)
-    directory = str(Path(request["directory"]).expanduser().resolve())
+    directory = str(expand_home(request["directory"]).resolve())
     # A folder's name may end in a space, or hold a newline.
     checkout = git(directory, "rev-parse", "--show-toplevel").stdout.removesuffix("\n")
     # Git lists the main worktree first. Creating from an existing task must
@@ -2841,7 +2855,7 @@ ISSUE_BODY_LIMIT = 6000
 def issues(request):
     """Open issues of the repository holding DIRECTORY, newest first, on
     the forge its origin is on, as gh or glab on this host sees them."""
-    directory = str(Path(text(request.get("directory")) or ".").expanduser())
+    directory = str(expand_home(text(request.get("directory")) or "."))
     checkout = git(directory, "rev-parse", "--show-toplevel").stdout.removesuffix("\n")
     forge = forge_for(checkout)
     result = []
@@ -6295,28 +6309,121 @@ def require_nothing_kept(repo, worktree, unlinked=False, removing=False):
                          % (" and ".join(held), shlex.quote(str(worktree))))
 
 
-def put_back_removed(store, task):
+RELINK_PREFIX = ".relink-"
+
+
+def forgotten(repo, worktree):
+    """Whether WORKTREE, a folder, is no worktree of REPO any more, though
+    it is there: Git stopped partway through removing it, as when something
+    wrote there meanwhile, and forgot it all the same, deleting what it
+    keeps of it, and maybe the folder's .git file. Or a relink of it was
+    cut short (`relink_removed`)."""
+    worktree = Path(worktree)
+    return (worktree.is_dir() and Path(repo).is_dir()
+            and not any(Path(path).resolve() == worktree.resolve() for _, path in linked_worktrees(repo)))
+
+
+def drop_spares(repo, worktree):
+    """Have Git forget the spare worktrees a relink of WORKTREE that was cut
+    short left (`relink_removed`), and delete their folders, which hold no
+    file of anyone's: only Git's link, if that."""
+    prefix = RELINK_PREFIX + worktree.name + "-"
+    for gitdir, path in linked_worktrees(repo):
+        if Path(path).parent.name.startswith(prefix) and Path(path).parent.parent == worktree.parent:
+            shutil.rmtree(gitdir, ignore_errors=True)
+    for spare in worktree.parent.iterdir():
+        if spare.name.startswith(prefix):
+            shutil.rmtree(spare, ignore_errors=True)
+
+
+def restore_deleted(worktree):
+    """Check out again the tracked files missing from WORKTREE."""
+    gone = git_fields(worktree, *measuring(worktree), "ls-files", "--deleted", "-z")
+    if gone:
+        git_fields(worktree, *measuring(worktree), "checkout-index", "-f", "-z", "--stdin",
+                   input=b"".join(os.fsencode(path) + b"\0" for path in gone))
+
+
+def relink_removed(task, worktree):
+    """Make WORKTREE, which Git forgot as it removed it (`forgotten`), TASK's
+    worktree again, on its branch, with the tracked files Git deleted put
+    back. What else is there, as what was written as Git deleted, stays,
+    and reads as changes, as in any worktree. Each step can be cut short
+    and done again: until the last link is made, the spare is all Git has."""
+    repo = task["repo"]
+    drop_spares(repo, worktree)
+    # A worktree with no files, named as the task's, so that what Git keeps
+    # of it is too, whose link takes the place of the forgotten one's: Git
+    # won't make one in a folder with files. Detached, so that one left by
+    # a relink cut short holds no branch; then on the branch, with its index
+    # as the branch has it.
+    spare = worktree.parent / (RELINK_PREFIX + worktree.name + "-" + uuid.uuid4().hex[:12]) / worktree.name
+    spare.parent.mkdir()
+    try:
+        git(repo, "worktree", "add", "-q", "--no-checkout", "--detach", str(spare), "refs/heads/" + task["branch"])
+        git(spare, "symbolic-ref", "HEAD", "refs/heads/" + task["branch"])
+        git(spare, "reset", "-q")
+        os.replace(spare / ".git", worktree / ".git")
+        git(repo, "worktree", "repair", str(worktree))
+    except OSError as exc:
+        raise RoostError("Could not make the task's worktree a worktree again (%s)" % exc) from None
+    finally:
+        with contextlib.suppress(OSError):
+            os.rmdir(spare)
+            os.rmdir(spare.parent)
+    restore_deleted(worktree)
+
+
+def changed_paths(worktree):
+    """The paths `git status` names in WORKTREE, untracked ones too, or
+    None when Git can't read it."""
+    try:
+        fields = git_fields(worktree, *measuring(worktree), "status", "--porcelain", "-z",
+                            "--untracked-files=normal")
+    except RoostError:
+        return None
+    paths, renamed = [], False
+    for field in fields:
+        if not renamed:
+            paths.append(field[3:])
+        # A renamed or copied file's old path comes next.
+        renamed = not renamed and bool(set(field[:2]) & set("RC"))
+    return paths
+
+
+def named(paths):
+    return ", ".join(paths[:3]) + (" and %d more" % (len(paths) - 3) if len(paths) > 3 else "")
+
+
+def put_back_removed(store, task, relink=True):
     """Put back what a removal cut short took from TASK's worktree: Git
     deletes a worktree file by file, and its link to the repository may go
     among them. Otherwise it looks like changes of yours, which committing
     would make real, or isn't a worktree at all. Roost began that removal
     with nothing uncommitted there, and with its tracked files back,
-    Git says what is there since, as for any task, and nothing is forced."""
+    Git says what is there since, as for any task, and nothing is forced.
+    One Git forgot partway is made a worktree again, with RELINK; else,
+    for a discard, which deletes it all, only what a relink left goes."""
     if not task.get("removing"):
         return
     # Its own folder, and no other checkout a link in its place leads to.
     worktree = check_worktree(store, task, branch=False)
     if not (worktree.is_dir() and Path(task["repo"]).is_dir()):
         return
+    if forgotten(task["repo"], worktree):
+        # Git forgot it before it was done: Roost's removal began with
+        # nothing uncommitted there, so its branch has the rest.
+        if relink and ref_exists(task["repo"], task["branch"]):
+            relink_removed(task, worktree)
+        else:
+            drop_spares(task["repo"], worktree)
+        return
     if not os.path.lexists(worktree / ".git"):
         gitdir = next((gitdir for gitdir, path in linked_worktrees(task["repo"]) if Path(path).resolve() == worktree), None)
         if gitdir is None:
             return
         atomic_text(worktree / ".git", "gitdir: %s\n" % gitdir)
-    gone = git_fields(worktree, *measuring(worktree), "ls-files", "--deleted", "-z")
-    if gone:
-        git_fields(worktree, *measuring(worktree), "checkout-index", "-f", "-z", "--stdin",
-                   input=b"".join(os.fsencode(path) + b"\0" for path in gone))
+    restore_deleted(worktree)
 
 
 def unregister_gone(repo, worktree):
@@ -7095,7 +7202,7 @@ def discard(store, task, expect=None, dry_run=False, teardown=None, told=None, o
     is removed."""
     repo = task["repo"]
     branch = task["branch"]
-    put_back_removed(store, task)
+    put_back_removed(store, task, relink=False)
     # Whatever branch its agent left the worktree on: that goes too.
     worktree = check_worktree(store, task, branch=False)
     worktree_exists = worktree.exists()
@@ -8070,6 +8177,7 @@ def remove_worktrees(store, task, worktree, agents, force=False, teardown=None):
         marker = uuid.uuid4().hex
         task["removing"] = marker
         store.save(task)
+        cut_short = False
         try:
             with store.released():
                 failure = run_teardown(task, worktree, teardown) if worktree and teardown else None
@@ -8095,12 +8203,18 @@ def remove_worktrees(store, task, worktree, agents, force=False, teardown=None):
                         try:
                             require_clean(str(worktree))
                         except RoostError:
-                            # Said apart from your own files, which x offers to discard.
-                            if teardown:
-                                raise RoostError("After the teardown command ran, the worktree has uncommitted "
-                                                 "or untracked files, which it may have left; look at them in "
-                                                 "Magit, then retire or discard the task")
-                            raise
+                            if not teardown:
+                                raise
+                            # Said apart from your own files, which x offers
+                            # to discard. It runs again on each retire, and
+                            # would only leave them again.
+                            raise RoostError("After the teardown command ran, the worktree holds changes to %s, "
+                                             "which it may have left, and leaves again each time. Have the "
+                                             "command leave the worktree as it found it, or ignore new files "
+                                             "it makes in .gitignore or the primary checkout's "
+                                             ".git/info/exclude, then retire again; "
+                                             "or discard the task"
+                                             % (named(changed_paths(worktree) or []) or "files"))
                     # First, as what the submodules' check reads as theirs may be your changes.
                     clean()
                     # Git won't remove submodules without --force, which
@@ -8112,13 +8226,33 @@ def remove_worktrees(store, task, worktree, agents, force=False, teardown=None):
                         # something else may have written there since.
                         require_clean(str(worktree))
                         require_submodules_kept(worktree)
-                    git(task["repo"], "worktree", "remove", *force, str(worktree))
+                    try:
+                        git(task["repo"], "worktree", "remove", *force, str(worktree))
+                    except RoostError as exc:
+                        # Git stopped partway, as at a file written as it
+                        # deleted, and forgot the worktree all the same.
+                        # Kept marked until it is a worktree again, so that
+                        # asking again puts it back first.
+                        if not forgotten(task["repo"], worktree):
+                            raise
+                        cut_short = True
+                        relink_removed(task, worktree)
+                        cut_short = False
+                        left = changed_paths(worktree)
+                        raise RoostError("Git stopped partway through removing the task's worktree (%s). Roost "
+                                         "put its files back%s. Then retire again"
+                                         % (exc, "" if left == [] else
+                                            ", but Git can't read it now; look at it, as its submodules may "
+                                            "need git submodule update" if left is None else
+                                            ", with what was written there meanwhile: %s; look at it in "
+                                            "Magit" % named(left)))
         finally:
-            # The record may have changed meanwhile: clear only this mark.
+            # The record may have changed meanwhile: clear only this mark,
+            # unless Git forgot the worktree, which isn't one again yet.
             task.pop("removing", None)
             with contextlib.suppress(RoostError):
                 current = store.read(task["id"])
-                if current.get("removing") == marker:
+                if current.get("removing") == marker and not cut_short:
                     del current["removing"]
                     store.save(current)
 

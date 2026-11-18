@@ -213,7 +213,12 @@ its own, and what has the task's `ROOST_TASK_ID` in a session whose first
 process has ended, as a server started with nohup there. Not a daemon,
 which leads its own session, and other tasks may share. Only a process it
 can't find that way, or yours outside the task, writes into those
-milliseconds. And what you delete by hand is yours:
+milliseconds. When such a write stops Git partway, Git forgets the
+worktree all the same: `remove_worktrees` makes it one again, on its
+branch, with the files Git deleted put back (`relink_removed`), and keeps
+its `removing` mark until it has, so that the next request's
+`put_back_removed` does it: the model's `PutBack` of a removal cut short,
+with what was written there kept, as changes. And what you delete by hand is yours:
 a branch you delete with Git while a request counts on it for the task's
 commits, as the agent's worktree's once its agent switched it to another.
 
