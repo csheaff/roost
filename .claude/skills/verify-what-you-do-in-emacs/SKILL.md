@@ -61,7 +61,9 @@ Each variant config's first lines say what it breaks.
 ## 1. Does your change touch this?
 
 The models were last checked against the code at the sync commit, `047486f`:
-each covered definition was read there against its step. This lists each
+each covered definition was read there against its step, with the change to
+`roost--compose-looked-p` that came with this line, which takes no draft
+that has asked for its task. This lists each
 covered definition that differs from it in your working tree:
 
     python3 test/formal/what_you_do_in_emacs/changed.py
@@ -75,13 +77,14 @@ its `SYNC`; keep both in step with this table.
 | --- | --- | --- |
 | `roost-compose-submit` | NewTaskDraft `DoSubmit`, `Submit` | ID kept while the project is the same (`KeepIdForProject`); `first` kept from the ID's first ask, and Unknown once the ID asks for something else (`ForgetMixedFirst`); refuses while submitting; quits a question left open, then submits from a timer queued before the question's held closures |
 | `roost-compose-submit`, `roost--compose-agents`, `roost--attempt-field` | `Request`, `Others`, `DoSubmitCutShort`, `SubmitCutShort` | one request for each attempt (`Attempts`), the others first and the draft's own last, each other with the ID and its number, and each with the name of what the draft says then; a quit or error once one went leaves the flag clear and the ID as it asked (`KeepAskedOnceSent`); before any went, the ID is put back, which changes nothing |
+| the `(quit error)` handler in `roost-compose-submit`, before any request went | `SubmitQuit` | clears the flag and the note, and puts the ID back as it was, one that asked before too |
 | `roost--compose-what`, `roost--compose-continues` | `Says`, `Now` | what the draft says, prompt and fields: every field a request is made from, a fork's conversation and an offer's task too (`WhatSaysAll`) |
 | `roost--compose-words` | `SeenOf` of a request's `what`, in `OtherWords` | a name for what `roost--compose-what` tells: the same for what is `equal`, as `roost--compose-made` compares it, and another for anything else. Only a draft that makes several attempts sends it |
 | `roost--compose-made` | `ComposeMade` | closes only if the draft still says WHAT (`CompareBeforeClose`); else clears the flag and the ID, but for a poll's news while a request of its own is out (`KeepOwnInFlight`) |
 | `roost--compose-listed` | `Poll` | only when not submitting and the ID is listed, which is the draft's own task's; compares with what the ID first asked |
 | `roost--task-made`, `roost--create-task` | `TaskMade`, `Reply` | says "Roost created" at once; the rest waits for the minibuffer; `alreadyMade` compares with `first`, whichever task comes back: another attempt's, made from other words, comes only to an ID that asked for different things, whose `first` is Unknown, so the draft stays and names it. The reply to another attempt changes nothing of the draft, made, found or failed, so it is no step |
 | failure lambda in `roost-compose-submit` | `Reply` (refused), `NoReply` | clears the flag (`FailureClearsFlag`) |
-| `roost--compose-offer`, `roost--compose-looked-p`, `roost--compose-offer-waiting` | `OpenOffer`, `Looked`, `Init` | leaves a draft that holds a prompt, a note or a request, and the offer waits (`OfferKeepsDraft`). One you only looked at, its own offer's or another's (`Looked`: its offer waits, it says what it did as it opened, it is not being created and its header says nothing of a request, `LookedSaysNothing`), gives way to a new buffer with no ID, flag or note; a request or a held closure of the old buffer's finds it dead. Its own draft, changed, shows again as it is, which is no step. A draft that holds no prompt gives way too, which no step has: here a draft always holds one |
+| `roost--compose-offer`, `roost--compose-looked-p`, `roost--compose-offer-waiting` | `OpenOffer`, `Looked`, `Init` | leaves a draft that holds a prompt, a note or a request, and the offer waits (`OfferKeepsDraft`). One you only looked at, its own offer's or another's (`Looked`: its offer waits, it says what it did as it opened, it is not being created, its header says nothing of a request, and it has asked for no task, `LookedHasNoId`), gives way to a new buffer with no ID, flag or note; a request or a held closure of the old buffer's finds it dead. Its own draft, changed, shows again as it is, which is no step. A draft that holds no prompt gives way too, which no step has: here a draft always holds one |
 | `roost--when-out-of-minibuffer`, `roost--close-buffer` | `held`, `EndQuestion`, `Timer` | held closures run in order, from `run-at-time 0` timers, all before the next input or reply |
 | `roost--quit-questions-left-open`, `roost--quit-questions-here` | `Submit` with `mini` | the THEN timer is queued before quitting |
 | helper `create`, `asking_for`, `made_for`, `make_task`, `attempt_of` | `HostTake` | one ID's look and make are one step under its lock (`HostLock`), and an attempt's ID is its own; a failure records nothing, as a wrong `attempt`, or a fork whose task's conversation can't go on |
@@ -152,7 +155,7 @@ run, and see `PromptDraft.cfg` fail on `PromptOnce`. Then drop both.
 
 Bounds. NewTaskDraft: one attempt, two projects, three versions of what the
 draft says, three asks, two closures held at once, one host, one draft at a
-time, your own or an offer's that gives way to another (4.5 million states).
+time, your own or an offer's that gives way to another (6.9 million states).
 NewTaskAttempts: two attempts, two projects, two versions, two asks, two
 held. PromptDraft: three pieces written, three asks, one send from
 elsewhere, `IdsKept` 4, so the window never fills within the bound. Each
@@ -178,7 +181,7 @@ second since finding 3 was fixed; `Drops` (a dropped connection, after
 which the helper goes on) and `KillAfterPaste` (a helper killed between
 paste and record), off in `PromptDraft.cfg`; `QuitBeforeAsking` (C-c C-c
 quit before any request goes, as at the question about the setup command:
-`SubmitQuit`), off in the base configs until finding 6 is fixed.
+`SubmitQuit`), on in the base configs since finding 6 was fixed.
 
 What the draft says is one value, a version of its prompt and fields. So
 `C-c C-x`, `C-c C-f` and the task an offer's draft shows under are edits
@@ -253,25 +256,14 @@ Each is a config here that fails as named.
       P and the line. Rests on sshd leaving the helper running, which
       Checked and found sound lists as not proved.
 
-6. **An offer's draft that asked, then quit asking again, starts anew and
-   makes a second task** (`NewTaskDraft.finding-quit-then-offer.cfg`,
-   `AtMostOnce`). Turn on `QuitBeforeAsking` in the base configs once fixed.
-   1. You open an agent's offer and C-c C-c: `roost-compose-submit`, ID1.
-      No reply comes; the draft keeps ID1 and says "No reply…". Its host
-      makes the task later, or has.
-   2. C-c C-c again, and you quit the question about the project's setup
-      command: the handler in `roost-compose-submit` clears the flag and
-      the note, and puts `roost--compose-asked` back, with ID1.
-   3. The draft says what the offer did, the offer waits, and nothing says
-      a request went: `roost--compose-looked-p` holds. RET on the offer
-      (`roost--compose-offer`) kills the draft and opens a new one, with
-      no ID. C-c C-k and Dismiss offer close it unasked, too.
-   4. C-c C-c: ID2, and a second task from the same words.
-
-Not a finding, a check added at 047486f: `NewTaskDraft.looked-with-a-note.cfg`
-breaks `roost--compose-looked-p` to take a draft that got no reply for one
-you only looked at, and fails on `AtMostOnce`: RET on its offer starts it
-anew with no ID, and C-c C-c makes a second task.
+6. Fixed: **an offer's draft that asked, then quit asking again, started
+   anew and made a second task**. After no reply, C-c C-c quit at the
+   question about the setup command cleared the note and kept the ID, so
+   the draft read as one you only looked at: RET on its offer opened it
+   anew with no ID, and C-c C-k and Dismiss offer closed it unasked.
+   `roost--compose-looked-p` now takes no draft that has asked.
+   `NewTaskDraft.looked-with-an-id.cfg` undoes the fix, and
+   `roost-an-offers-draft-that-asked-keeps-its-creation-id` replays it.
 
 Known and kept as a config: `PromptDraft.known-kill-after-paste.cfg`, the
 send ID's I1 ("a kill between the two pastes again"); and

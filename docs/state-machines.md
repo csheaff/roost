@@ -189,6 +189,7 @@ code before it was fixed.
 | Finding | Sev | What goes wrong | Machine | Status |
 | --- | --- | --- | --- | --- |
 | STATUS-13 | S3 | A relayed Claude that reports its work before its `SessionStart` hook, as 2.1.303 does on a task's prompt, reads `ready` through its first turn, so a send goes through unasked. Since #245 | [Who wins](#who-wins-hooks-reports-poll-runner) | Fixed, `test_a_claude_that_reports_its_work_before_its_session_start_hook_reads_running` |
+| VIEWS-16 | S3 | An offer's draft that got no reply, asked again and quit at the question about the setup command, reads as one you only looked at: `RET` on its offer starts it anew, and `C-c C-c` makes a second task | [The new task draft](#the-new-task-draft) | Fixed, `roost-an-offers-draft-that-asked-keeps-its-creation-id` |
 
 ## A task on its host
 
@@ -546,7 +547,7 @@ What each step leaves if it stops there, and what asking again does.
 | 8 | `stop` | registry | task stopped; agent's window gone |
 | 9 | `remove_worktrees` | released | worktree partly gone; `put_back_removed` restores it |
 | 10 | staging folder, `unregister_gone`, `delete_branch` | registry | branch still there, `check_worktree` finds no folder and goes on |
-| 11 | `Store.remove` | registry | record gone; attachments first, so a kill between keeps the record |
+| 11 | `Store.remove` | registry | record gone; attachments, what its agent showed and a page it was writing first, so a kill between keeps the record |
 | 12 | `delete_remote_branch` | none | remote branch stays; nothing else depends on it |
 
 `discard`: steps 2, 4, then `check_worktree(branch=False)`; the dry run stops
@@ -2607,8 +2608,11 @@ Invariants:
   its own, a new buffer, only where the draft holds no prompt, or the brief of an offer
   that waits still, as it came, and says nothing of a request and waits on none.
   Opening an offer takes nothing: it waits until its task is made. (`roost--compose-offer`,
-  `roost--compose-looked-p`; `NewTaskDraft.looked-with-a-note.cfg` breaks the second,
-  and a draft that got no reply then asks again under a new ID.)
+  `roost--compose-looked-p`.) Nor is one that has asked for its task one you only
+  looked at, though its header no longer says so, as once you quit asking again at
+  the question about the setup command: its ID is what finds the task its host may
+  have made. (`roost-an-offers-draft-that-asked-keeps-its-creation-id`;
+  `NewTaskDraft.looked-with-an-id.cfg` undoes it.)
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
@@ -2616,11 +2620,11 @@ Invariants:
 | Editing | `roost--compose` | prompt empty, or fork | Editing | fields replaced | `roost--compose` |
 | Editing | `roost--compose` | prompt written | Editing | fields kept; a seed is dropped, and a DIRECTORY with it | `roost--compose` |
 | Editing | `roost--compose`, a DIRECTORY and no seed, as a click on a project | prompt written | Editing | moves there, or says why it stays | `roost--compose`, `roost--compose-tied` |
-| Absent, Editing | `RET` on an offer | no prompt, or another waiting offer's brief as it came; no note, not submitting | Editing | a new buffer, with the offer's title, brief and task; the offer waits | `roost--compose-offer`, `roost--compose-looked-p` |
-| Editing | `RET` on the offer the draft opened | you changed the draft | Editing | the draft shows as you left it | `roost--compose-offer` |
-| Editing | `RET` on the offer the draft opened | the draft is as it opened | Editing | a new buffer, from the offer as it is now: its agent may have offered it again, with another brief or project | `roost--compose-offer`, `roost--compose-looked-p` |
+| Absent, Editing | `RET` on an offer | no prompt, or another waiting offer's brief as it came and no ID asked with; no note, not submitting | Editing | a new buffer, with the offer's title, brief and task; the offer waits | `roost--compose-offer`, `roost--compose-looked-p` |
+| Editing | `RET` on the offer the draft opened | you changed the draft, or it has asked for its task | Editing | the draft shows as you left it | `roost--compose-offer` |
+| Editing | `RET` on the offer the draft opened | the draft is as it opened, and has asked for nothing | Editing | a new buffer, from the offer as it is now: its agent may have offered it again, with another brief or project | `roost--compose-offer`, `roost--compose-looked-p` |
 | any but Absent | `RET` on another offer | a prompt of yours, a note, or submitting | same | user-error; the offer waits | `roost--compose-offer` |
-| Editing | Dismiss offer | its offer waits; its brief as it came, or yes | Absent | `quit-window t`; the offer is taken | `roost-compose-dismiss-offer`, `roost--take-offer` |
+| Editing | Dismiss offer | its offer waits; its brief as it came with no ID asked with, or yes | Absent | `quit-window t`; the offer is taken | `roost-compose-dismiss-offer`, `roost--take-offer` |
 | Editing | edit | | Editing | idle timer redraws fields | `roost--compose-changed` |
 | Editing | `C-c C-x` | | Editing | how many tasks it makes, and by which agents | `roost-compose-set-attempts` |
 | Editing | `C-c C-f` | a fork | Editing | goes on with its task's conversation, or starts a new one | `roost-compose-set-conversation` |
@@ -2632,7 +2636,7 @@ Invariants:
 | Editing | `C-c C-c` | | Creating | ID kept or made, request | `roost-compose-submit` |
 | Editing | `C-c C-c` | several attempts | Creating | a request for each, the draft's own last, each other with the ID and its number | `roost-compose-submit` |
 | Asking | answered | | Creating | request | `roost--create-task` |
-| Asking | `C-g` or error | | Editing | flag and note cleared; the ID as it was | `condition-case` in `roost-compose-submit` |
+| Asking | `C-g` or error | | Editing | flag and note cleared; the ID as it was, one that asked before too | `condition-case` in `roost-compose-submit` |
 | Creating | `C-g` or error between its requests | an attempt went | Editing | flag and note cleared; the ID as it asked | `condition-case` in `roost-compose-submit` |
 | Creating | another attempt's reply | | Creating | says it was made, or why not; nothing opens, and the draft is as it was | `roost--task-made`, `roost--create-task` |
 | Creating | `C-c C-c` | | Creating | user-error "Already creating" | `roost-compose-submit` |
@@ -2650,7 +2654,7 @@ Invariants:
 | Refused, NoReply | `C-c C-c` | project changed | Creating | new ID | `roost-compose-submit` |
 | Refused, NoReply | poll lists the ID | says what it asked each time with that ID | Absent | closes; opens if you are in it | `roost--compose-listed` |
 | Refused, NoReply | poll lists the ID | says otherwise now, its project too | Editing | note says what was made; ID forgotten | `roost--compose-listed`, `roost--compose-made` |
-| any | `C-c C-k` | prompt empty, a waiting offer's brief as it came, or yes | Absent | `quit-window t` | `roost-compose-cancel` |
+| any | `C-c C-k` | prompt empty, a waiting offer's brief as it came with no ID asked with, or yes | Absent | `quit-window t` | `roost-compose-cancel` |
 
 Illegal or refused: `C-c C-c` in Creating, and an offer opened over a draft that holds
 anything of yours. While busy the header has no buttons, so a
@@ -2660,11 +2664,7 @@ Creating and text typed there; neither is refused.
 A conversation (`roost-new-conversation`) has no draft and no creation ID: each `C`
 asks for one, so `C` again after no reply can start a second.
 
-Open: an offer's draft that got no reply, asked again and quit before any request
-went (as at the question about the setup command) has no note and keeps its ID, so it
-reads as one you only looked at (I7): `RET` on its offer starts it anew with no ID, and
-`C-c C-c` then makes a second task beside the one the first request made
-(`NewTaskDraft.finding-quit-then-offer.cfg`). [The creation ID](#the-creation-id) has one, of a draft that named
+Open: none here. [The creation ID](#the-creation-id) has one, of a draft that named
 another attempt.
 
 ### The creation ID
@@ -3041,16 +3041,23 @@ Invariants:
 - I6. A reply read before the image a buffer holds was shown doesn't replace it
   (`roost--shown-image-at`), and a task's image buffer is found by the task, not
   its name (`roost--shown-buffer`).
-- I5. A frame shows only the image of the task whose terminal it shows
-  (`roost--put-away-shown`), and an image goes with its task (`Store.remove`,
-  `roost--forget-shown`). One put away for another task's terminal comes back
-  with its own; one you closed does not.
+- I5. A frame shows only the image of the task whose terminal it shows, or
+  whose view took it without one, as the files of a task stopped
+  (`roost--put-away-shown`, from `roost--display-task` and `roost--take-frame`),
+  and an image goes with its task (`Store.remove`, `roost--forget-shown`), as
+  does what a Pi task kept of a page it was writing. One put away for another
+  task comes back with its own; one you closed does not. The only window
+  between the frame's sides stays, with nothing to close it into.
 - I7. Roost resizes an image's window only while it is as Roost left it, beside
   its terminal: one you resized, and one that fills the frame, stay as they are
   (`roost-shown-fit`, `roost--refit-shown`). The terminal keeps half its space.
+  A page, and an image this Emacs can't measure, get four tenths of what the
+  window and its terminal have, in a window made for one and in one resized.
 - I8. An image that fills the frame has a way back to the windows as they were,
   by a click or `q`, and to where you were (the window's `roost-shown-back`,
-  `roost-enlarge-image`).
+  `roost-enlarge-image`). The windows come back too when it goes: with its
+  task, when you kill its buffer (`roost--shown-killed`, on `kill-buffer-hook`),
+  and when a view of another task takes the frame (`roost--take-frame`).
 - I9. A page shown while it is written reaches no further than one shown whole.
   Its view loads a page of the helper's that holds nothing of the agent's
   (`live_page`), and what the agent has written is handed to the same frame,
@@ -3069,17 +3076,19 @@ Invariants:
 | Shown, not taken up | a list or reply names it | task known to this Emacs, or its host listed before | On screen or Waiting | `shown` requested; beside the terminal if on screen | `roost--note-shown`, `roost--take-shown` |
 | Shown, not taken up | a list names it | task new to this Emacs, in its host's first list | Closed | noted, not fetched | `roost--note-shown` |
 | Waiting | you open the task | | On screen | beside its terminal | `roost--show-waiting` |
-| On screen | another task's terminal takes the frame | | Waiting | its window deleted | `roost--put-away-shown` |
-| On screen | the next image comes | its window as Roost left it | On screen | window resized for it, on the side it is on | `roost--refit-shown` |
+| On screen | another task's terminal takes the frame, or a view of another task without one | | Waiting | its window deleted | `roost--put-away-shown` |
+| On screen | the next image or page comes | its window as Roost left it | On screen | window resized for it, on the side it is on: four tenths for a page | `roost--refit-shown` |
 | On screen | a click on it, `z` | | Filling the frame | the windows as they were kept; other windows but the sides' deleted | `roost-enlarge-image` |
 | On screen, several together | a click on one, `RET`, `z` | | Filling the frame, that one alone | the windows as they were kept | `roost-enlarge-image` |
 | Filling the frame, one of several | `n`, `p`, the arrows above it | | Filling the frame, the next or the one before | | `roost-next-image`, `roost-previous-image` |
 | Filling the frame, one of several | a click on it, `z`, `q` | | On screen, several together | the windows put back | `roost-enlarge-image`, `roost-quit-image` |
 | Filling the frame | another task's terminal takes its window | | Waiting | the way back dropped | `roost--put-away-shown` |
+| Filling the frame | a view of another task takes the frame without a terminal | | Waiting | the windows put back, its own deleted | `roost--take-frame` |
+| Filling the frame | you kill its buffer | | None | the windows put back, its own deleted | `roost--shown-killed` |
 | Filling the frame | a click on it, `z`, `q` | | On screen | the windows put back | `roost-enlarge-image`, `roost-quit-image` |
 | On screen | `q` | | Closed | | `roost-quit-image` |
 | Closed, Waiting | the panel's Image line, `roost-show-image` | you stayed | On screen | fetched again, beside the window you are in | `roost-show-image` |
-| any | task retired, discarded, forgotten or gone from a list | | None | copy, buffer and both tables' entries go | `Store.remove`, `roost--forget-shown` |
+| any | task retired, discarded, forgotten or gone from a list | | None | copy, buffer and both tables' entries go, and what it kept of a page it was writing; the windows one that filled the frame took are put back | `Store.remove`, `roost--forget-shown`, `roost--shown-killed` |
 | any | Pi's model starts a `show_widget` call | a Pi task on this machine, known to this Emacs, which has a web view and watches | Being written | its buffer shows the page so far: beside the terminal if on screen, waiting otherwise | `roost--read-live`, `roost--take-live` |
 | Being written | the model writes more of the page | the same call | Being written | the view is handed the page so far, once it has loaded the page that takes it | `roost--hand-live`, `roost--page-event` |
 | Being written | its host sends the page whole | its frame holds just the code the view, loaded, was handed, all of it | On screen, Waiting or Closed, as it was | the view stays as it is, and one you closed meanwhile stays closed | `roost--take-shown`, `roost--live-shows-p` |
@@ -3094,8 +3103,8 @@ copy and saving the record leaves the copy until the next image or the task's en
 A `show_widget` call the helper refuses, as for a page too large, leaves the page
 shown as it was written with no record of it: the panel's Image line and
 `roost-show-image` know nothing of it. The file of a page being written goes
-with its task when an Emacs on its machine that watches for such pages sees the
-task go (`roost--forget-shown`), and stays in `live` otherwise.
+with its task (`Store.remove`), and when an Emacs on its machine that watches
+for such pages sees the task go (`roost--forget-shown`).
 A fetch that fails is not tried again by itself: the panel's line brings it up.
 
 ### Opening a task

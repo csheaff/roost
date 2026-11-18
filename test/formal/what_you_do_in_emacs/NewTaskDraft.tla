@@ -50,8 +50,8 @@ CONSTANTS
                       \* or a request, and the offer waits
   GroupKeepsItsWords, \* `make_task` makes no attempt beside one of its group, its draft's
                       \* ID, made from other words (`made_from_other_words`)
-  LookedSaysNothing,  \* `roost--compose-looked-p` is of no draft whose header says what
-                      \* became of a request (`roost--draft-note`)
+  LookedHasNoId,      \* `roost--compose-looked-p` is of no draft that has asked for its
+                      \* task (`roost--compose-asked`)
   \* Scope: what you may do.  A base config turns each on, but for one a
   \* finding's config turns on, until it is fixed.
   SubmitQuitsQuestion, \* C-c C-c with a question left open (`roost--quit-questions-here`)
@@ -262,8 +262,10 @@ EndQuestion ==
                  reqs, tasks, told, closedWhat, asks>>
 
 \* `roost--compose-looked-p`: the draft is of an offer that waits still,
-\* and says what it did as it opened, its fields too, is not being created
-\* and says nothing of a request.  How many tasks a draft makes is among
+\* and says what it did as it opened, its fields too, is not being created,
+\* says nothing of a request and has asked for no task: a C-c C-c quit
+\* before any request goes clears the note of one that got no reply, and
+\* its ID is then all that finds the task its host may have made.  How many tasks a draft makes is among
 \* what it says, and an offer's opens making one, so a draft that makes
 \* several, as these steps have it from the start, is never one.  An
 \* offer that waits no more (taken, as for a task made from it, or
@@ -273,7 +275,8 @@ Looked ==
   /\ offered # Unknown
   /\ Says = SeenOf(offered)
   /\ ~submitting
-  /\ LookedSaysNothing => ~note
+  /\ ~note
+  /\ LookedHasNoId => asked.id = None
 
 \* RET on an agent's offer, with a draft open: `roost--compose-offer`.
 \* A draft you only looked at gives way, to its own offer as it is now or

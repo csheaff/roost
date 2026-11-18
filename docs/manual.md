@@ -1617,7 +1617,11 @@ and fails on:
 - a button or key that ends in a Lisp error, rather than doing its job, asking,
   or saying why it can't (`user-error`);
 - a button or key that changes only the view, when a redraw undoes the change
-  or nothing changes it back;
+  or nothing changes it back; for an image, several images or a page an
+  agent showed beside its terminal, the frame's windows count as the view,
+  so one that fills the frame must have a way back to them;
+- an image or page that takes a window of yours with it when its task goes
+  or you kill its buffer, as it came or after any key or click in it;
 - a click on a task's row, from that window or the one beside it, and with
   the task still listed or gone since, that asks in the minibuffer rather
   than opening the task, showing a menu, or saying why it can't: a
