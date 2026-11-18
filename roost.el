@@ -5013,9 +5013,12 @@ this doesn't return, as for `roost--quit-questions-left-open'."
 (defun roost--compose-looked-p ()
   "Whether this draft is of an offer that waits still, and says what it did
 as it opened, its fields too.  Closing it loses nothing: the offer opens
-again as it was."
+again as it was.  Not one that has asked for its task, though its header
+no longer says so, as once you quit asking again: its host may have made
+the task, which only its creation ID finds."
   (and (roost--compose-offer-waiting)
        (not roost--compose-submitting) (not roost--draft-note)
+       (not roost--compose-asked)
        (equal (roost--compose-what) roost--compose-offered)))
 
 (defun roost-compose-dismiss-offer (&optional event)

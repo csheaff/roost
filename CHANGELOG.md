@@ -15,6 +15,12 @@ What each release changes, and what to do when upgrading. Newest first.
   keeps to its time within one long line too. When upgrading: a search
   passes over a conversation file that is a symbolic link, so keep the
   files themselves where the agent writes them.
+- An offer's draft that has asked for its task stays yours until the task is
+  made. Before, one that got no reply, asked again and quit at the question
+  about the project's setup command read as an offer you had only looked at:
+  `RET` on the offer opened it anew, and Create then made a second task
+  beside the first; `C-c C-k` and Dismiss offer closed it without asking.
+  Nothing to do when upgrading.
 
 ## 0.13.0
 
