@@ -15992,6 +15992,7 @@ it of the same ID's, or nil for the first."
   ;; agent do the work and a new task do it too.
   (roost-test--isolated
    (let ((default-directory "/tmp/") (roost--current-task nil) made sent
+         (roost--offers-being-created nil)
          (offer '((id . "0a1b2c3d") (title . "Fix add") (brief . "add() subtracts."))))
      (save-window-excursion
        (delete-other-windows)
@@ -16025,6 +16026,11 @@ it of the same ID's, or nil for the first."
                  (with-current-buffer roost--compose-buffer
                    (roost--compose-move "/tmp/roost-elsewhere/")
                    (should-not (plist-get roost--compose-fields :offer)))
+                 (should (string-match-p "Already creating Fix add"
+                                         (cadr (should-error (roost-offer-here) :type 'user-error))))
+                 (should-not sent)
+                 ;; Nor once the draft is cancelled, which stops no request.
+                 (kill-buffer roost--compose-buffer)
                  (should (string-match-p "Already creating Fix add"
                                          (cadr (should-error (roost-offer-here) :type 'user-error))))
                  (should-not sent)

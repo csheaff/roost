@@ -3904,9 +3904,13 @@ Nil too on another host, where reading it would hold up the draft."
           (cons directory (and directory (roost--checkout-branch directory)))))
   (cdr roost--compose-checkout-branch))
 (defvar-local roost--compose-submitting nil
-  "Non-nil while the drafted task is being created.
-(PARENT OFFER) while that makes a task of an agent's offer: the key of
-the task that offered it and the offer's ID, as the request went.")
+  "Non-nil while the drafted task is being created.")
+
+(defvar roost--offers-being-created nil
+  "The offers a request is making a task of now, each as (PARENT OFFER).
+The key of the task that offered it and the offer's ID, as the request
+went: the draft may be moved to another project meanwhile, or cancelled.
+`roost-offer-here' refuses one of these.")
 
 (defvar-local roost--compose-asked nil
   "The project directory and the ID the draft last asked to create its task with.
@@ -5082,11 +5086,9 @@ One of the others that fails says so, and the draft goes on."
            (sent nil)
            ;; The project's setup command is read for each, and asked about once.
            (roost--project-values (list t)))
-      ;; With the offer it makes a task of, which changing the draft's
-      ;; project meanwhile takes from its fields: `roost-offer-here'.
-      (setq roost--compose-submitting (or (and (plist-get fields :parent) (plist-get fields :offer)
-                                               (list (plist-get fields :parent) (plist-get fields :offer)))
-                                          t)
+            (when-let* ((creating (roost--compose-offer-created fields)))
+        (cl-pushnew creating roost--offers-being-created :test #'equal))
+      (setq roost--compose-submitting t
             roost--draft-note (if others
                                   (format " Creating %s and %d more…" name (length others))
                                 (format " Creating %s…" name)))
@@ -5119,6 +5121,7 @@ One of the others that fails says so, and the draft goes on."
              (plist-get fields :directory) name (plist-get fields :base) prompt
              (plist-get fields :agent)
              (lambda (task &optional found)
+               (setq roost--offers-being-created (delete (roost--compose-offer-created fields) roost--offers-being-created))
                ;; Its host took the offer it was made from: list it again,
                ;; so the offer's row goes now.  Not quietly, which a poll
                ;; in flight, read before the task was made, would drop.
@@ -5129,6 +5132,7 @@ One of the others that fails says so, and the draft goes on."
                    ;; offer came while you were busy there.
                    (and (plist-get fields :parent) t)))
              (lambda (err)
+               (setq roost--offers-being-created (delete (roost--compose-offer-created fields) roost--offers-being-created))
                (when (buffer-live-p buffer)
                  (with-current-buffer buffer
                    (setq roost--compose-submitting nil)
@@ -5161,6 +5165,7 @@ One of the others that fails says so, and the draft goes on."
         ;; Nothing reached the host, as when you quit the question about
         ;; the project's setup command: the draft is ready to create again.
         ((quit error)
+         (setq roost--offers-being-created (delete (roost--compose-offer-created fields) roost--offers-being-created))
          (setq roost--compose-submitting nil
                roost--draft-note nil)
          ;; Nor was it asked for what it says now; unless an attempt went,
@@ -5168,6 +5173,12 @@ One of the others that fails says so, and the draft goes on."
          (unless sent
            (setq roost--compose-asked asked))
          (signal (car err) (cdr err)))))))
+
+(defun roost--compose-offer-created (fields)
+  "The offer a draft with FIELDS makes a task of, as (PARENT OFFER), or nil.
+As `roost--offers-being-created' holds it."
+  (and (plist-get fields :parent) (plist-get fields :offer)
+       (list (plist-get fields :parent) (plist-get fields :offer))))
 
 (defun roost--attempt-field (group n total words)
   "What a request to create attempt N of TOTAL at one prompt says of it.
@@ -13323,11 +13334,9 @@ title is all it needs.  Not while its draft is creating its task."
                   (roost--field task 'name)))
     (unless (roost--agent-running-p task)
       (user-error "%s's agent isn't running; resume it first" (roost--field task 'name)))
-    ;; Its draft's Create is on its way, and makes a task of it.
-    (when-let* ((draft (get-buffer roost--compose-buffer))
-                ((with-current-buffer draft
-                   (equal roost--compose-submitting
-                          (list (roost--key task) (alist-get 'id offer))))))
+    ;; A draft's Create is on its way, and makes a task of it: though the
+    ;; draft was moved to another project since, or cancelled.
+    (when (member (list (roost--key task) (alist-get 'id offer)) roost--offers-being-created)
       (user-error "Already creating %s as a task of its own" (alist-get 'title offer)))
     (roost--send-text task (format "Do this task here: “%s”" (alist-get 'title offer))
                       (lambda (_task) (roost--take-offer task offer))
