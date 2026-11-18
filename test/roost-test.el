@@ -17263,3 +17263,34 @@ report.py, and the third alone changes src/totals.py."
                (should (equal (buffer-string) "other")))
              (roost--forget-shown '("dev" "4444444444444444"))))
        (when (get-buffer "*roost image: budget*") (kill-buffer "*roost image: budget*"))))))
+
+(ert-deftest roost-a-reply-from-before-an-image-was-shown-keeps-what-the-task-shows ()
+  ;; Showing an image or a page is no event of the agent's: the task's
+  ;; updatedAt stays, as for an offer, and only `shown's own `at' says
+  ;; which reply knows it better.  A reply its host read before the agent
+  ;; showed it, as one to opening the task, can come after the list that
+  ;; read it since.
+  (roost-test--isolated
+   (let ((shown '((id . "0a1b2c3d") (name . "plot.png") (kind . "png") (at . "2026-11-17T10:00:01+00:00")))
+         (before '((id . "99999999") (name . "old.png") (kind . "png") (at . "2026-11-17T09:00:00+00:00"))))
+     (cl-letf (((symbol-function 'roost--request) #'ignore))
+       ;; Emacs lists the task, which has shown nothing yet.
+       (roost--apply-snapshot "dev" (list (roost-test--task "a" "ready")))
+       (let ((listed (gethash '("dev" "a") roost--tasks)))
+         ;; Its host answers a request to open it (inspect), read now; the
+         ;; reply is on its way.  The agent shows plot.png, and a poll,
+         ;; read after that, lands first.
+         (roost--apply-snapshot "dev" (list (append `((shown . ,shown)) (roost-test--task "a" "ready"))))
+         (should (equal (roost--field (gethash '("dev" "a") roost--tasks) 'shown) shown))
+         ;; Then the reply read before it.
+         (roost--cache-reply "dev" (roost-test--task "a" "ready") listed)
+         ;; The task still shows what it showed: the panel names it, and
+         ;; `roost-show-image' doesn't say it has shown no image.
+         (should (equal (roost--field (gethash '("dev" "a") roost--tasks) 'shown) shown))
+         ;; Nor does a reply read while it showed an older one bring that back.
+         (roost--cache-reply "dev" (append `((shown . ,before)) (roost-test--task "a" "ready")) listed)
+         (should (equal (roost--field (gethash '("dev" "a") roost--tasks) 'shown) shown))
+         ;; The next it shows takes its place, from a reply as from a list.
+         (let ((next '((id . "4e5f6a7b") (name . "a page") (kind . "html") (at . "2026-11-17T10:00:02+00:00"))))
+           (roost--cache-reply "dev" (append `((shown . ,next)) (roost-test--task "a" "ready")) listed)
+           (should (equal (roost--field (gethash '("dev" "a") roost--tasks) 'shown) next))))))))
