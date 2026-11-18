@@ -175,6 +175,15 @@ fails in its place.
 | LC-10 | S4 | An offer its agent makes after you were asked goes with a task you finish, unnamed | [Finishing a task](#finishing-a-task) | Fixed: `test_an_offer_made_since_you_were_asked_keeps_its_task`, `test_an_offer_made_while_git_merges_keeps_its_task`, `roost-finishing-a-task-tells-its-host-which-offers-its-question-named` |
 | STATUS-12 | S4 | Closing Codex's plan menu says nothing, so its task reads `permission` until your next prompt | [Agent status](#agent-status) | Accepted: `AgentStatus.PlanMenuClosed.cfg` |
 
+### Found by the models, 2026-11-17
+
+Found as the models were brought in line with 0.13.0, and replayed on the real
+code before it was fixed.
+
+| Finding | Sev | What goes wrong | Machine | Status |
+| --- | --- | --- | --- | --- |
+| STATUS-13 | S3 | A relayed Claude that reports its work before its `SessionStart` hook, as 2.1.303 does on a task's prompt, reads `ready` through its first turn, so a send goes through unasked. Since #245 | [Who wins](#who-wins-hooks-reports-poll-runner) | Fixed, `test_a_claude_that_reports_its_work_before_its_session_start_hook_reads_running` |
+
 ## A task on its host
 
 The helper's records and what it does to Git, from a task being asked for to its
@@ -792,7 +801,8 @@ How the helper knows, and the process that runs the agent. `roost-program-status
 is off by default, so **unrelayed is what most tasks run**: hooks alone set the
 status, and the poll fills in what hooks can't say. Relayed means the runner's
 `relay` reads OSC 7501 reports, and the task's `programStatusRun` equals its `runId`,
-set by the run's first report.
+set by the run's first report that counts: one read after the last hook that
+recorded a status.
 
 ### Agent status
 
@@ -993,10 +1003,10 @@ plugin folds into these.
 
 `T` = the adapter's `reports_turns` (Claude, Pi, OpenCode true; Codex false).
 A report with an `id` is a subagent's, and left out. A report read before `hookAt`
-is dropped first; every hook of an agent that waits for its hooks (Claude, Codex:
+is dropped first, and makes no run a relayed one; every hook of an agent that waits for its hooks (Claude, Codex:
 `waits_for_hooks`) that records a status sets that: any of Codex's, a relayed
 Claude's `failed` or `background`, its `SessionStart` with `source=clear`, and
-any of Claude's before its run's first report is recorded. Pi
+any of Claude's before a report of its run counts. Pi
 and OpenCode may send a hook late, so theirs set none. Conditions are tried in this order:
 
 | From | State | Guard | To | `lastEvent` |
@@ -1040,7 +1050,10 @@ Four sources write one field. This says which counts when they disagree.
 | Relayed, turns (Claude, Pi) | `programStatusRun` == `runId`, `reports_turns` | Reports. Hooks keep their other fields, and their status only if `failed`, `background` (for Pi, only from `running`/`ready`, as its hooks may come late), or Claude's `SessionStart` with `source=clear`, as reports can't say that a new conversation started; such a hook sets `hookAt`, so a report read before it, of the turn it ended, is older news |
 | Relayed, hooks (Codex) | same, not `reports_turns` | Hooks, but for `running` from `permission`. Reports for what hooks miss: a request, its approval, `idle` after a failed request, `error`. A report read before `hookAt` is older news |
 
-Before a relayed run's first report it counts as unrelayed. The poll's guesses
+Before a relayed run's first report it counts as unrelayed, and so until one
+is recorded that was read after the last hook to record a status: an older one
+is dropped, and with no report to say what the agent does, its hooks go on
+saying it. The poll's guesses
 (`was_interrupted`, `approved_command_running`) run only when unrelayed. The
 crash check runs in every mode. The runner's end is last in every mode, as
 `finish()` records what is queued first.
@@ -1067,7 +1080,7 @@ Is the outcome the same in any order? Replayed: each capture in
 | --- | --- | --- |
 | Report later than following hooks (the queue waits for the lock) | Yes | Same end, each step, for all relayed captures: Claude's hooks hold only other fields, and `hookAt` drops the old report, from Codex's hooks and from Claude's `StopFailure` or `Stop` with work left |
 | Report later than another report | No: one queue | |
-| Report read before a hook that says less than it: `working`, then `SessionStart`, on a task's prompt | Yes: Claude 2.1.303 and Codex 0.163.0, relayed, in their captures | Codex: same end. Claude: `ready` for its first turn, if that hook has the lock before the recorder. STATUS-13 |
+| Report read before a hook that says less than it: `working`, then `SessionStart`, on a task's prompt | Yes: Claude 2.1.303 and Codex 0.163.0, relayed, in their captures | Same end: if that hook has the lock before the recorder, the reports are dropped, the run stays unrelayed, and the `UserPromptSubmit` that follows counts (STATUS-13) |
 | Hook later than the agent's next event | Not for an awaited hook of one agent | Different, and stays so until the next event, for `Stop`, `PermissionRequest` |
 | `PermissionRequest` and another agent's tool event, unrelayed | Yes, with subagents | `permission`, either way |
 
@@ -1084,13 +1097,11 @@ Disagreements, and who wins:
 | `SessionEnd` as tmux goes, relayed or not | Poll: `crashed` | Yes |
 | Hook after the runner's end | Runner: the hook keeps only what it says beside the status | Yes |
 | Claude's `SessionStart` with `source=clear`, report `idle`, either order | Hook: `ready`, `SessionStart` | Yes |
-| Claude's `SessionStart` before its run's first report is recorded, then a `working` read before that hook | Hook: `ready`, as `hookAt` drops the report; once that is recorded the run is relayed, so its `UserPromptSubmit` counts for nothing | No: it works, and reads `ready` until its next report. STATUS-13, `AgentStatus.WorkBeforeStart.cfg` |
+| Claude's `SessionStart` before its run's first report is recorded, then a `working` read before that hook | Hook: `ready`, as `hookAt` drops the report, which leaves the run unrelayed; its `UserPromptSubmit` then counts, as `running` | Yes. Before STATUS-13's fix the dropped report made the run relayed, and it read `ready` while it worked: `AgentStatus.NoStaleUnrelayed.cfg` |
 | Poll `crashed`, then a hook of a live agent | Hook, and `statusBeforeCrash` goes stale, unused | Yes |
 | Poll `crashed`, then relayed `done` | Neither: the report changes nothing, and recovery brings back `running` | Would be wrong, but needs a false `crashed`, and none is known since the C locale fix |
 
-Open: STATUS-3. STATUS-13, found by `AgentStatus.tla` on 2026-11-17: since #245
-a relayed Claude that reports its work before its `SessionStart` hook reads
-`ready` through its first turn.
+Open: STATUS-3.
 
 ### A task's request
 
