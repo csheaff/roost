@@ -3313,6 +3313,10 @@ Open, each a suspected race, none reproduced:
 - The controller is switched to another session by ghostel-tmux's own command before
   its first pane came: the stand-in keeps the old place, and no pane of that place
   comes.
+- A workspace that is not current can name a stand-in that another window shows.
+  When that window's pane comes the stand-in goes, and the other workspace shows
+  some other buffer when you are back. It needs the same task opened in two
+  workspaces while it connects; Roost cannot see what a saved workspace names.
 - With workspaces, a stand-in kept for a workspace that is closed, or whose task is
   retired, stays until its controller ends and another task is opened.
 - The host's `inspect` and the attach are two steps: the session can end between
