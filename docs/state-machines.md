@@ -164,7 +164,6 @@ fails in its place.
 | LC-8 | S1 | A fork and the task it was made from, finished at once, each count on the other's branch, and the commit only they have goes with both | [Finishing a task](#finishing-a-task) | Fixed, `test_two_tasks_that_share_a_commit_never_both_go_on_the_others_word` |
 | FORGE-13 | S1 | `B` naming what has all the task's commits, as a tag at its tip, makes it read as a task that never committed: `x` retires it with its commit merged nowhere, and one merged there reads as not merged | [Landed](#landed) | Fixed, `test_retargeting_onto_a_branch_that_has_the_tasks_commits_leaves_them_merged` |
 | REQUESTS-9 | S3 | A reply read before `B` and arriving after brings back the old branch: `m` asks about one branch, and the host merges into the other | [Cached task](#cached-task) | Fixed, `roost-a-reply-read-before-the-branch-changed-keeps-the-new-one`, `test_retargeting_is_no_event_of_the_agents_and_says_when_it_was` |
-| REQUESTS-10 | S4 | A reply read before the task's agent showed an image or a page, as one to opening the task, and arriving after the list that read it since takes the task back to what it showed before, or to nothing: the panel drops or misnames its Image or Page line, and `roost-show-image` says it has shown none, until the next list (found 2026-11-17) | [Cached task](#cached-task) | Fixed, `roost-a-reply-from-before-an-image-was-shown-keeps-what-the-task-shows` |
 | STATUS-10 | S3 | Codex at "Implement this plan?" reads `ready`: a prompt sent is dropped, and the Enter after it implements the plan | [Agent status](#agent-status) | Fixed, [#239](https://github.com/csheaff/roost/issues/239), `test_codex_asks_about_its_plan_once_a_plan_mode_turn_ends` |
 | STATUS-11 | S3 | A subagent's request, with the main agent's beside it, is hidden once the main agent's is answered and its turn ends | [A task's request](#a-tasks-request) | Fixed, `test_a_subagents_request_among_several_outlasts_the_main_agents_turn` |
 | LC-9 | S3 | A fork made as its source is retired or discarded starts from a worktree half removed | [Worktree lock](#worktree-lock) | Fixed, `test_a_task_stays_while_a_fork_reads_where_its_work_stands` |
@@ -184,6 +183,7 @@ code before it was fixed.
 | Finding | Sev | What goes wrong | Machine | Status |
 | --- | --- | --- | --- | --- |
 | STATUS-13 | S3 | A relayed Claude that reports its work before its `SessionStart` hook, as 2.1.303 does on a task's prompt, reads `ready` through its first turn, so a send goes through unasked. Since #245 | [Who wins](#who-wins-hooks-reports-poll-runner) | Fixed, `test_a_claude_that_reports_its_work_before_its_session_start_hook_reads_running` |
+| REQUESTS-10 | S4 | A reply read before the task's agent showed an image or a page, as one to opening the task, and arriving after the list that read it since takes the task back to what it showed before, or to nothing: the panel drops or misnames its Image or Page line, and `roost-show-image` says it has shown none, until the next list (found 2026-11-17) | [Cached task](#cached-task) | Fixed, `roost-a-reply-from-before-an-image-was-shown-keeps-what-the-task-shows` |
 
 ## A task on its host
 
