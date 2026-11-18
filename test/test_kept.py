@@ -226,12 +226,7 @@ class Kept(unittest.TestCase):
     def test_an_agent_worktrees_ignored_files_are_kept_apart(self):
         box = self.box
         task = box.create()
-        path = box.repo / ".claude" / "worktrees" / "agent"
-        box.git("worktree", "add", "-q", "-b", "worktree-agent", str(path), task["branch"])
-        record = box.record(task["id"])
-        record["agentWorktrees"] = record["agentMade"] = [str(path)]
-        record["agentMadeAt"] = {str(path): (box.repo / ".git/worktrees/agent/commondir").stat().st_mtime_ns}
-        (box.state / "tasks" / (task["id"] + ".json")).write_text(json.dumps(record))
+        path = self.agent_worktree(task)
         (path / ".env.local").write_text("agent's\n")
         (Path(task["worktree"]) / ".env.local").write_text("task's\n")
         result = self.retire(task)
@@ -262,6 +257,76 @@ class Kept(unittest.TestCase):
         result = self.retire(task)
         self.assertEqual(result["kept"]["files"], 1)
         self.assertEqual((Path(result["kept"]["folder"]) / "worktree" / name).read_text(), "bytes\n")
+
+    def agent_worktree(self, task):
+        box = self.box
+        path = box.repo / ".claude" / "worktrees" / "agent"
+        box.git("worktree", "add", "-q", "-b", "worktree-agent", str(path), task["branch"])
+        record = box.record(task["id"])
+        record["agentWorktrees"] = record["agentMade"] = [str(path)]
+        record["agentMadeAt"] = {str(path): (box.repo / ".git/worktrees/agent/commondir").stat().st_mtime_ns}
+        (box.state / "tasks" / (task["id"] + ".json")).write_text(json.dumps(record))
+        return path
+
+    def test_another_tasks_kept_ref_is_no_proof_either(self):
+        box = self.box
+        first = box.create("first")
+        commit = box.commit(first, "draft")
+        box.git("reset", "-q", "--hard", "HEAD~1", cwd=first["worktree"])
+        self.retire(first)
+        # The second began at that commit, then reset back past it.
+        second = box.create("second", base=commit)
+        box.git("reset", "-q", "--hard", "HEAD~1", cwd=second["worktree"])
+        result = self.retire(second)
+        self.assertEqual(result["kept"]["commits"], 1)
+        self.assertIn("refs/roost/kept/%s/%s %s" % (second["id"], commit, commit), self.kept_refs())
+
+    def test_asking_again_counts_the_days_again(self):
+        box = self.box
+        task = box.create()
+        worktree = Path(task["worktree"])
+        box.commit(task, "draft")
+        box.git("reset", "-q", "--hard", "HEAD~1", cwd=worktree)
+        store = roost.Store(box.state)
+        record = store.read(task["id"])
+        kept = store.kept(task["id"]).with_suffix(".json")
+        with patch.dict(os.environ, box.env, clear=True):
+            roost.keep_before_removing(store, record, worktree, None)
+            past = time.time() - (roost.KEPT_DAYS - 1) * 86400
+            os.utime(kept, (past, past))
+            again = roost.keep_before_removing(store, record, worktree, None)
+        self.assertEqual(again["commits"], 1)
+        self.assertGreater(kept.stat().st_mtime, time.time() - 3600, "a retry left a day of the 30")
+
+    def test_an_agents_worktree_is_kept_when_the_tasks_is_missing(self):
+        box = self.box
+        task = box.create()
+        path = self.agent_worktree(task)
+        (path / ".env.local").write_text("agent's\n")
+        worktree = Path(task["worktree"])
+        worktree.rename(worktree.with_name(worktree.name + ".away"))
+        result = self.retire(task)
+        self.assertFalse(path.exists(), "the agent's worktree stayed")
+        self.assertEqual((Path(result["kept"]["folder"]) / "agents" / "agent" / ".env.local").read_text(),
+                         "agent's\n")
+
+    def test_a_submodules_ignored_file_is_kept(self):
+        box = self.box
+        library = box.root / "library"
+        box.git("init", "-q", "-b", "main", str(library))
+        (library / ".gitignore").write_text(".env*\n")
+        (library / "lib").write_text("lib\n")
+        box.git("add", ".", cwd=library)
+        box.git("commit", "-qm", "Library", cwd=library)
+        box.git("config", "--global", "protocol.file.allow", "always")
+        box.git("submodule", "add", "-q", str(library), "library")
+        box.git("commit", "-qm", "Add the library")
+        task = box.create()
+        box.git("submodule", "update", "--init", "-q", cwd=task["worktree"])
+        (Path(task["worktree"]) / "library" / ".env.local").write_text("module's\n")
+        result = self.retire(task)
+        self.assertEqual((Path(result["kept"]["folder"]) / "worktree" / "library" / ".env.local").read_text(),
+                         "module's\n")
 
 
 if __name__ == "__main__":

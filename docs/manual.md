@@ -671,6 +671,8 @@ retiring keeps that for 30 days first:
   command makes again, and a file past 16 MB, or past 256 MB in all. It
   names what it left out for its size. A worktree the task's agent made
   goes with the task too, and its ignored files go in `kept/<id>/agents`.
+  A submodule's ignored files are kept with the worktree's; a commit only
+  a submodule's reflog holds is not.
 
 The message after `x` or `m` says what was kept and where. Discarding a task
 keeps nothing, and drops what a retire that was then refused had kept: you

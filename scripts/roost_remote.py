@@ -7029,9 +7029,11 @@ def reflog_only(repo, logs, branches, tip, going=(), named=()):
                     named.append(commit)
     if not named:
         return []
-    # Every worktree's HEAD counts too, and what was kept before.
+    # Every worktree's HEAD counts too, but not what retiring kept, which
+    # goes in time: this task keeps a ref of its own, for as long.
     elsewhere = read_git(repo, "rev-list", "--ignore-missing", *named, "--not", *([tip] if tip else []),
-                         *("--exclude=refs/heads/" + name for name in (*branches, *going) if name), "--all")
+                         *("--exclude=refs/heads/" + name for name in (*branches, *going) if name),
+                         "--exclude=refs/roost/kept/*", "--all")
     if elsewhere.returncode:
         raise RoostError("Git can't tell which commits only the task's reflogs hold: "
                          + (elsewhere.stderr.strip() or "rev-list failed"))
@@ -7100,6 +7102,23 @@ def ignored_to_keep(repo, worktree, total=0):
             continue  # Gone since.
         keep.append(path)
     return keep, large, total
+
+
+def submodules_in(worktree, under):
+    """The submodules checked out in WORKTREE, nested ones too, each as
+    (FOLDER, UNDER/PATH): repositories of their own, whose ignored files
+    its `ls-files` doesn't name."""
+    found, folders = [], [(worktree, under)]
+    while folders:
+        where, name = folders.pop()
+        for line in git_fields(where, *measuring(where), "ls-files", "-z", "--stage", succeed=(0, 128)):
+            mode, _, rest = line.partition(" ")
+            path = rest.partition("\t")[2]
+            if mode == "160000" and path and os.path.lexists(Path(where) / path / ".git"):
+                module = (str(Path(where) / path), name + "/" + path)
+                found.append(module)
+                folders.append(module)
+    return found
 
 
 def said_path(path):
@@ -7177,6 +7196,7 @@ def keep_before_removing(store, task, worktree, commit=None, going=(), prune=Tru
     repo, branch = task["repo"], task["branch"]
     here = str(worktree) if worktree is not None and worktree.is_dir() else None
     places = [(here, "worktree")] + [(path, "agents/" + Path(path).name) for path in agents if Path(path).is_dir()]
+    places += [module for where, under in places if where for module in submodules_in(where, under)]
     agent_branches = [agent_branch(task, path) for path in agents]
     commits = reflog_only(repo, [(repo, "refs/heads/" + branch)]
                           + [(where, "HEAD") for where, _ in places if where]
@@ -7186,7 +7206,9 @@ def keep_before_removing(store, task, worktree, commit=None, going=(), prune=Tru
     files, large, total = [], [], 0
     for where, under in places:
         if where:
-            keep, too_large, total = ignored_to_keep(repo, where, total)
+            # A submodule's files, against the primary checkout's own.
+            primary = Path(repo, under.partition("/")[2]) if under.startswith("worktree/") else repo
+            keep, too_large, total = ignored_to_keep(primary, where, total)
             files += [(where, under, path) for path in keep]
             large += [under + "/" + path for path in too_large]
     folder = store.kept(task["id"])
@@ -7200,9 +7222,10 @@ def keep_before_removing(store, task, worktree, commit=None, going=(), prune=Tru
     refs = dict(before.get("refs") or {})
     refs.update(("refs/roost/kept/%s/%s" % (task["id"], commit), commit) for commit in commits)
     names = sorted(set(before.get("files") or []) | {said_path(under + "/" + path) for _, under, path in files})
-    if commits or files:
+    if refs or names:
         # First what it will keep, so that pruning finds what a request cut
-        # short left.
+        # short left; written again when nothing is new, so the days count
+        # from the retire that says so.
         atomic_json(record, dict(name=task["name"], repo=repo, branch=branch, refs=refs, files=names,
                                  large=[said_path(path) for path in large], keptAt=now()))
     for commit in commits:
@@ -7309,20 +7332,19 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
     # registry lock, as copying files may take a while.
     keep = functools.partial(keep_before_removing, store, task, commit=commit if branch_exists else None,
                              going=branches_going(store, task))
-    if not worktree_exists:
-        # Under the registry lock, which pruning old copies would hold too long.
+    # With worktrees its agent made that hold nothing beyond the task's
+    # branch, nor a file Git doesn't have, nor anything in its submodules,
+    # as one read says now.
+    agents = [entry for entry in agent_work(task, seen=True)
+              if entry["made"] and entry["ahead"] == 0 and not entry["dirty"]
+              and entry["seen"] and not entry["seen"][0] and not entry["seen"][1]
+              and all(module["commits"] == 0 and not module["stashes"] and not module["changes"]
+                      for module in entry["seen"][3])]
+    if not worktree_exists and not agents:
+        # Under the registry lock, which pruning old copies would hold too
+        # long: `remove_worktrees` has nothing to remove.
         task["kept"] = keep(None, prune=False)
-    # With worktrees its agent made that hold nothing beyond the task's branch.
-    remove_worktrees(store, task, worktree if worktree_exists else None,
-                     # As one read says: with nothing past the task's
-                     # branch, nor a file Git doesn't have, nor anything
-                     # in its submodules, as it reads now.
-                     [entry for entry in agent_work(task, seen=True)
-                      if entry["made"] and entry["ahead"] == 0 and not entry["dirty"]
-                      and entry["seen"] and not entry["seen"][0] and not entry["seen"][1]
-                      and all(module["commits"] == 0 and not module["stashes"] and not module["changes"]
-                              for module in entry["seen"][3])],
-                     teardown=teardown, keep=keep if worktree_exists else None)
+    remove_worktrees(store, task, worktree if worktree_exists else None, agents, teardown=teardown, keep=keep)
     # What a copy stopped partway left, which may hold a secret.
     shutil.rmtree(copy_staging(task["worktree"]), ignore_errors=True)
     if branch_exists:
@@ -8679,7 +8701,8 @@ def remove_worktrees(store, task, worktree, agents, force=False, teardown=None, 
     Without FORCE, changes there are refused. TEARDOWN,
     the project's teardown command, runs in WORKTREE first; if it fails,
     the task says how, and the removal goes on. KEEP, if given, is called
-    with WORKTREE after that, and what it says is the task's `kept`."""
+    with WORKTREE, None for a missing one, and the paths of AGENTS after
+    that, and what it says is the task's `kept`."""
     if not worktree and not agents:
         return
     with holding_worktree(store, task, fcntl.LOCK_EX,
@@ -8693,7 +8716,7 @@ def remove_worktrees(store, task, worktree, agents, force=False, teardown=None, 
                 failure = run_teardown(task, worktree, teardown) if worktree and teardown else None
                 if failure:
                     task["teardownFailure"], task["teardownOutput"] = failure
-                if keep and worktree:
+                if keep:
                     task["kept"] = keep(worktree, agents=[entry["path"] for entry in agents])
                 remove_agent_worktrees(task, agents)
                 if worktree and not os.path.lexists(worktree):
