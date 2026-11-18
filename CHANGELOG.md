@@ -4,6 +4,13 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Retiring a task keeps, for 30 days, what removing its worktree and branch
+  would delete without counting: a commit only a reflog held, as after the
+  agent reset back past it, by a ref under `refs/roost/kept/`, and ignored
+  files, such as `.env.local`, copied into the state folder's `kept/`. The
+  message after `x` or `m` says what was kept and where. A folder Git
+  ignores whole, as `node_modules/`, and files past 16 MB are left out.
+  Nothing to do when upgrading.
 - A retire that Git cut short, as when something wrote into the worktree
   as Git deleted it, can be finished. Git forgot the worktree with half its
   files gone, and Roost said "Git can't read the task's worktree ... bring

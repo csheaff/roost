@@ -1,0 +1,180 @@
+"""What retiring a task keeps that removing its worktree and branch would
+otherwise delete: commits only a reflog names, as after an agent's `git
+reset`, and ignored files the primary checkout has no copy of. Real Git,
+and the fake agent in a tmux socket of its own."""
+import importlib.util
+import json
+import os
+from pathlib import Path
+import time
+import unittest
+from unittest.mock import patch
+
+from crash_harness import Box, HELPER
+
+spec = importlib.util.spec_from_file_location("roost_remote", HELPER)
+roost = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(roost)
+
+
+class Kept(unittest.TestCase):
+    def setUp(self):
+        self.box = Box()
+        self.addCleanup(self.box.close)
+        box = self.box
+        (box.repo / ".gitignore").write_text(".env*\nnode_modules/\n*.db\n")
+        box.git("add", ".gitignore")
+        box.git("commit", "-qm", "Ignore local files")
+
+    def retire(self, task):
+        reply = self.box.helper("retire", id=task["id"])
+        self.assertTrue(reply and reply["ok"], reply)
+        return reply["result"]
+
+    def kept_refs(self):
+        return self.box.git("for-each-ref", "--format=%(refname) %(objectname)", "refs/roost/kept").splitlines()
+
+    def test_a_commit_the_agent_reset_away_from_is_kept(self):
+        box = self.box
+        task = box.create()
+        worktree = Path(task["worktree"])
+        commit = box.commit(task, "draft", "first try\n")
+        box.git("reset", "-q", "--hard", "HEAD~1", cwd=worktree)
+        result = self.retire(task)
+        self.assertEqual(result["status"], "retired")
+        self.assertEqual(result["kept"]["commits"], 1)
+        self.assertEqual(self.kept_refs(), ["refs/roost/kept/%s/%s %s" % (task["id"], commit, commit)])
+        self.assertTrue(box.reachable(commit), "retiring lost a commit only the reflog held")
+
+    def test_an_ignored_file_is_kept_out_of_git(self):
+        box = self.box
+        task = box.create()
+        worktree = Path(task["worktree"])
+        (worktree / ".env.local").write_text("TOKEN=secret\n")
+        (worktree / "node_modules").mkdir()
+        (worktree / "node_modules" / "left-pad.js").write_text("module.exports = 0\n")
+        result = self.retire(task)
+        kept = result["kept"]
+        self.assertEqual((kept["files"], kept["commits"]), (1, 0))
+        folder = Path(kept["folder"])
+        self.assertEqual((folder / ".env.local").read_text(), "TOKEN=secret\n")
+        self.assertFalse((folder / "node_modules").exists(), "kept a folder Git ignores whole")
+        self.assertEqual(self.kept_refs(), [], "put an ignored file in Git")
+        self.assertEqual(os.stat(folder.parent).st_mode & 0o077, 0, "the kept folder is open to others")
+
+    def test_a_copy_of_the_primary_checkouts_file_is_not_kept(self):
+        box = self.box
+        (box.repo / ".env").write_text("SHARED=1\n")
+        task = box.create()
+        (Path(task["worktree"]) / ".env").write_text("SHARED=1\n")
+        result = self.retire(task)
+        self.assertIsNone(result.get("kept"))
+        self.assertFalse((box.state / "kept").exists())
+
+    def test_a_large_ignored_file_is_named(self):
+        box = self.box
+        task = box.create()
+        with open(Path(task["worktree"]) / "local.db", "wb") as out:
+            out.truncate(roost.KEPT_FILE_LIMIT + 1)
+        result = self.retire(task)
+        self.assertEqual(result["kept"]["large"], ["local.db"])
+        self.assertEqual(result["kept"]["files"], 0)
+
+    def test_a_task_with_nothing_to_keep_keeps_nothing(self):
+        box = self.box
+        task = box.create()
+        commit = box.commit(task)
+        box.git("merge", "-q", "--ff-only", commit)
+        result = self.retire(task)
+        self.assertIsNone(result.get("kept"))
+        self.assertEqual(self.kept_refs(), [])
+
+    def test_what_was_kept_long_ago_goes(self):
+        box = self.box
+        old = box.create("old")
+        commit = box.commit(old, "draft")
+        box.git("reset", "-q", "--hard", "HEAD~1", cwd=old["worktree"])
+        (Path(old["worktree"]) / ".env.local").write_text("old\n")
+        kept = self.retire(old)["kept"]
+        record = box.state / "kept" / (old["id"] + ".json")
+        past = time.time() - (roost.KEPT_DAYS + 1) * 86400
+        os.utime(record, (past, past))
+        task = box.create("new")
+        (Path(task["worktree"]) / ".env.local").write_text("new\n")
+        self.retire(task)
+        self.assertFalse(record.exists())
+        self.assertFalse(Path(kept["folder"]).exists())
+        self.assertFalse(any(old["id"] in ref for ref in self.kept_refs()))
+        self.assertTrue((box.state / "kept" / (task["id"] + ".json")).exists())
+        self.assertFalse(box.reachable(commit))
+
+    def test_a_kept_ref_moved_since_is_not_pruned(self):
+        box = self.box
+        old = box.create("old")
+        box.commit(old, "draft")
+        box.git("reset", "-q", "--hard", "HEAD~1", cwd=old["worktree"])
+        self.retire(old)
+        record = box.state / "kept" / (old["id"] + ".json")
+        ref = json.loads(record.read_text())["refs"]
+        [name] = ref
+        box.git("update-ref", name, "HEAD")
+        past = time.time() - (roost.KEPT_DAYS + 1) * 86400
+        os.utime(record, (past, past))
+        with patch.dict(os.environ, box.env, clear=True):
+            roost.prune_kept(roost.Store(box.state))
+        self.assertIn(name, " ".join(self.kept_refs()), "pruned a ref you moved")
+
+    def test_keeping_again_adds_to_what_was_kept(self):
+        box = self.box
+        task = box.create()
+        worktree = Path(task["worktree"])
+        first = box.commit(task, "one")
+        box.git("reset", "-q", "--hard", "HEAD~1", cwd=worktree)
+        store = roost.Store(box.state)
+        record = store.read(task["id"])
+        # As the helper runs Git, in the box's environment, not yours.
+        with patch.dict(os.environ, box.env, clear=True):
+            roost.keep_before_removing(store, record, worktree, None)
+            second = box.commit(task, "two")
+            box.git("reset", "-q", "--hard", "HEAD~1", cwd=worktree)
+            (worktree / ".env.local").write_text("later\n")
+            again = roost.keep_before_removing(store, record, worktree, None)
+        # What it keeps for the task in all, the first commit too.
+        self.assertEqual((again["commits"], again["files"]), (2, 1))
+        refs = json.loads(store.kept(task["id"]).with_suffix(".json").read_text())["refs"]
+        self.assertEqual(sorted(refs.values()), sorted([first, second]))
+
+    def test_the_old_copies_a_rebase_leaves_are_not_kept(self):
+        box = self.box
+        task = box.create()
+        worktree = Path(task["worktree"])
+        box.commit(task, "draft")
+        (box.repo / "elsewhere").write_text("main moved\n")
+        box.git("add", "elsewhere")
+        box.git("commit", "-qm", "Move main")
+        box.git("rebase", "-q", "main", cwd=worktree)
+        box.git("merge", "-q", "--ff-only", task["branch"])
+        result = self.retire(task)
+        self.assertIsNone(result.get("kept"), "kept a commit whose patch is on the branch")
+        self.assertEqual(self.kept_refs(), [])
+
+    def test_a_discard_drops_what_a_refused_retire_kept(self):
+        box = self.box
+        task = box.create()
+        worktree = Path(task["worktree"])
+        (worktree / ".env.local").write_text("TOKEN=secret\n")
+        # The teardown command leaves a file, which the retire then refuses.
+        reply = box.helper("retire", id=task["id"], teardown="touch left-behind")
+        self.assertFalse(reply["ok"], reply)
+        folder = box.state / "kept" / task["id"]
+        self.assertTrue((folder / ".env.local").exists(), "the retire kept nothing before it was refused")
+        (worktree / "left-behind").unlink()
+        told = box.helper("discard", id=task["id"], dryRun=True)["result"]["discard"]
+        reply = box.helper("discard", id=task["id"], told=told, expect=told["commit"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertFalse(folder.exists(), "a discard left the secret a retire had kept")
+        self.assertFalse(folder.with_suffix(".json").exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

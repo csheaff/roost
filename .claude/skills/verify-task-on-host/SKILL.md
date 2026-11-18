@@ -87,6 +87,7 @@ or `discard` calls them, needs the model checked against it.
 | `GitMerge`, `AfterMerge`, `MergeFailed` | `integrating`, `merge_task`, `retire` after the merge, `require_offers_named` again among its checks |
 | `Checkpoint` | `safe_to_delete`, `branches_going`, `retiringCommit` in `retire` |
 | `Stop` | `stop`, the list of agent worktrees `retire` passes to `remove_worktrees`, with `seen` |
+| none: `test/formal/git_work` | `keep_before_removing`, `reflog_only`, `ignored_to_keep`, `prune_kept`, `drop_kept` (also in `discard`), called in `retire` after `stop` for a missing worktree, else by `remove_worktrees` after the teardown command, without the registry lock |
 | `RemoveBegin` … `RemoveEnd` | `remove_worktrees`, `holding_worktree`, `remove_agent_worktrees`, `agent_worktree_seen`, `run_teardown` |
 | `DeleteBranch`, `RemoveRecord` | `delete_branch`, `Store.remove` |
 | `AsMade`, `Ahead`, `Losses`, `Going` | `is_as_made`, `made_since`, `agent_work`, `discard_losses`, `branches_going` |
@@ -139,6 +140,21 @@ plan menu, and a branch that is going keeping no commit (`safe_to_delete`,
 `git log 047486f..HEAD -- scripts/roost_remote.py` shows changes to
 anything above, or a new writer of the task's record, worktree or branch, check the model against them before you trust a pass, and
 move this commit forward only once you have.
+
+What retire keeps before it removes (`keep_before_removing`) has no step
+here: it takes nothing, and what it keeps, commits only a reflog names and
+ignored files, is what this model's units leave out. `test/formal/git_work`
+has them: `GitWork.tla` is Git cut down to units with both, and
+`GitToolRoost.cfg` is `retire` as it keeps them, `GitTool.roost-before.cfg`
+as it didn't. Run it beside this one:
+
+```
+python3 test/formal/check.py git_work
+```
+
+A change to what `keep_before_removing` keeps, or to where `retire`
+calls it, is checked there, and by `test/test_kept.py` and `make crash`'s
+`RetireResetAway`.
 
 ## Reading a failure
 

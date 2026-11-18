@@ -108,6 +108,28 @@ class RetireDead(RetireMerged):
         box.tmux("kill-server")
 
 
+class RetireResetAway(Scenario):
+    """A task whose agent reset away from its commit, with an ignored file
+    of its own: retiring keeps both, the commit by a ref."""
+    action = "retire"
+
+    def arrange(self, box):
+        (box.repo / ".gitignore").write_text(".env*\n")
+        box.git("add", ".gitignore")
+        box.git("commit", "-qm", "Ignore local files")
+        super().arrange(box)
+        worktree = Path(self.task["worktree"])
+        box.git("reset", "-q", "--hard", "HEAD~1", cwd=worktree)
+        (worktree / ".env.local").write_text("TOKEN=secret\n")
+
+    def holds(self, box, problems):
+        super().holds(box, problems)
+        there = Path(self.task["worktree"]) / ".env.local"
+        kept = box.state / "kept" / self.task["id"] / ".env.local"
+        if not there.exists() and not kept.exists():
+            problems.append("the ignored file is neither in the worktree nor kept")
+
+
 class RetireSquashedOnGitHub(Scenario):
     """A pull request GitHub squashed, with its branch still on the remote."""
     action = "retire"
@@ -655,7 +677,7 @@ class CreateConversation(Create):
             problems.append("asked again, and what was made is no conversation")
 
 
-ALL = [Merge, MergeSquash, MergeAway, SquashAway, MergeTeardown, MergeSubmodule, MergeAgentWorktree, Retire, RetireMerged,
+ALL = [Merge, MergeSquash, MergeAway, SquashAway, MergeTeardown, MergeSubmodule, MergeAgentWorktree, Retire, RetireMerged, RetireResetAway,
        RetireDead, RetireSquashedOnGitHub, Update, UpdateConflict, Discard, DiscardDirty, DiscardTeardown, DiscardWritingPage,
        Forget, Rename,
        Retarget,

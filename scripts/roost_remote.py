@@ -11,6 +11,7 @@ import contextlib
 import datetime
 import errno
 import fcntl
+import filecmp
 import functools
 import hashlib
 import heapq
@@ -56,7 +57,7 @@ ENDED = ("stopped", "exited", "failed", "crashed")
 TRANSIENT = ("live", "diff", "dirty", "files", "size", "ahead", "behind", "update", "worktreeMissing",
              "prStatus", "unpushed", "lastMessage", "gitStamp", "agentWork", "merging", "landed", "conflicts",
              "sinceLooked", "teardownFailure", "teardownOutput", "worktreePr", "worktreeHead", "branchTip",
-             "leftBehind", "note")
+             "leftBehind", "note", "kept")
 LAST_MESSAGE_TAIL = 256 * 1024
 LAST_MESSAGE_LIMIT = 2000
 INTERRUPT_TAIL = 64 * 1024
@@ -463,6 +464,13 @@ class Store:
         """The folder of the files attached to the task's prompts."""
         self.path(task_id)
         return self.root / "attachments" / task_id
+
+    def kept(self, task_id):
+        """Where retiring the task keeps what removing it would delete
+        (`keep_before_removing`): KEPT/<id>.json says what, and KEPT/<id>
+        holds its ignored files."""
+        self.path(task_id)
+        return self.root / "kept" / task_id
 
     def shown(self, task_id):
         """The folder of the image the task's agent last showed you."""
@@ -6994,6 +7002,173 @@ def merge_task(task, integration, here, squash, tip):
     return None
 
 
+# What retiring keeps of what removing a task's worktree and branch would
+# delete (`keep_before_removing`): for so many days, and ignored files no
+# larger than this, up to so much in all.
+KEPT_DAYS = 30
+KEPT_FILE_LIMIT = 16 * 1024 * 1024
+KEPT_TOTAL_LIMIT = 256 * 1024 * 1024
+
+
+def reflog_only(repo, worktree, branch, tip, going=()):
+    """The commits that the task's BRANCH, or WORKTREE's HEAD, held once
+    and no longer do, as after an agent's `git reset`, and that no other
+    ref, nor TIP, has: only the reflogs that removing them deletes name
+    them. The newest of each line, newest first, and only one whose line
+    has a change TIP has no patch of: a rebase leaves its commits' old
+    copies behind. GOING are branches of other tasks, which their requests
+    delete."""
+    named = []
+    for where, ref in ((repo, "refs/heads/" + branch), (worktree, "HEAD")):
+        if where is not None:
+            for commit in read_git(where, "log", "-g", "--format=%H", ref).stdout.split():
+                if commit not in named:
+                    named.append(commit)
+    if not named:
+        return []
+    # Every worktree's HEAD counts too, and what was kept before.
+    elsewhere = read_git(repo, "rev-list", "--ignore-missing", *named, "--not", *([tip] if tip else []),
+                         *("--exclude=refs/heads/" + name for name in (branch, *going) if name), "--all")
+    if elsewhere.returncode:
+        raise RoostError("Git can't tell which commits only the task's reflogs hold: "
+                         + (elsewhere.stderr.strip() or "rev-list failed"))
+    lost = set(elsewhere.stdout.split())
+    tips = [commit for commit in named if commit in lost]
+    if len(tips) > 1:
+        newest = set(git(repo, *measuring(repo), "merge-base", "--independent", *tips).stdout.split())
+        tips = [commit for commit in tips if commit in newest]
+    if tip:
+        # As `git cherry` has it: what is on the line and not, by its patch,
+        # on TIP. Unknown, it is kept.
+        tips = [commit for commit in tips
+                if read_git(repo, "rev-list", "--cherry-pick", "--right-only", "--no-merges", "-n", "1",
+                            "%s...%s" % (tip, commit)).stdout.strip()
+                or read_git(repo, "rev-list", "-n", "1", "%s..%s" % (tip, commit)).returncode]
+    return tips
+
+
+def same_as_primary(repo, path, file):
+    """Whether the primary checkout REPO has, at PATH, what FILE is: the
+    same link, or a file of the same bytes, as a setup command copies."""
+    ours = Path(repo) / path
+    if file.is_symlink():
+        return ours.is_symlink() and os.readlink(ours) == os.readlink(file)
+    return (ours.is_file() and not ours.is_symlink() and ours.stat().st_size == file.stat().st_size
+            and filecmp.cmp(ours, file, shallow=False))
+
+
+def ignored_to_keep(repo, worktree):
+    """The ignored files in WORKTREE that removing it deletes, and that the
+    primary checkout REPO has no copy of, as (KEEP, LARGE): those Git names
+    one by one, and of those, the ones past KEPT_FILE_LIMIT, or past
+    KEPT_TOTAL_LIMIT with those before. Not those in a folder a pattern
+    ignores whole, as dependencies and builds are (node_modules/, .venv/,
+    dist/), which Git names as one: a setup command makes them again. Git
+    names an untracked folder too, before what it holds, one by one."""
+    listed = read_git(worktree, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory")
+    if listed.returncode:
+        raise RoostError("Git can't list the task's ignored files: " + (listed.stderr.strip() or "ls-files failed"))
+    keep, large, total = [], [], 0
+    for path in listed.stdout.split("\0"):
+        if not path or path.endswith("/"):
+            continue
+        file = Path(worktree) / path
+        try:
+            if not (file.is_symlink() or file.is_file()) or same_as_primary(repo, path, file):
+                continue
+            size = 0 if file.is_symlink() else file.stat().st_size
+            if size > KEPT_FILE_LIMIT or total + size > KEPT_TOTAL_LIMIT:
+                large.append(path)
+                continue
+            total += size
+        except OSError:
+            continue  # Gone since, or a name that is not UTF-8.
+        keep.append(path)
+    return keep, large
+
+
+def drop_kept(store, task_id):
+    """Forget what retiring TASK_ID kept: its refs, only where they still
+    point where they did, and its files."""
+    folder = store.kept(task_id)
+    record = folder.with_suffix(".json")
+    try:
+        kept = json.loads(record.read_text())
+    except (OSError, ValueError):
+        kept = None
+    repo = kept.get("repo") if isinstance(kept, dict) else None
+    for ref, commit in (kept.get("refs") or {}).items() if repo and Path(repo).is_dir() else ():
+        if isinstance(ref, str) and ref.startswith("refs/roost/kept/%s/" % task_id) and isinstance(commit, str):
+            git(repo, "update-ref", "-d", ref, commit, check=False)
+    shutil.rmtree(folder, ignore_errors=True)
+    with contextlib.suppress(OSError):
+        record.unlink()
+
+
+def prune_kept(store):
+    """Forget what retiring kept more than KEPT_DAYS ago."""
+    folder = store.root / "kept"
+    for record in sorted(folder.glob("*.json")) if folder.is_dir() else ():
+        try:
+            if time.time() - record.stat().st_mtime < KEPT_DAYS * 86400:
+                continue
+            drop_kept(store, record.stem)
+        except (OSError, RoostError):
+            continue  # A name of no task's.
+
+
+# Paths of what was too large to keep that a reply names.
+KEPT_LARGE_NAMED = 10
+
+
+def keep_before_removing(store, task, worktree, commit=None, going=(), prune=True):
+    """Keep what retiring TASK would delete with WORKTREE, if it is there,
+    and its branch at COMMIT, and what it holds is the task's own: commits only
+    their reflogs name, by refs/roost/kept/<id>/<commit>, and ignored files
+    the primary checkout has no copy of, under the store's `kept` folder,
+    out of Git, as they may hold a secret that a `git push --mirror` would
+    otherwise send. For KEPT_DAYS; with PRUNE, what was kept longer ago
+    goes first. What it keeps for the task in all, for its reply, or None.
+    Asked again, it keeps what it kept before and adds what is new."""
+    if prune:
+        prune_kept(store)
+    repo, branch = task["repo"], task["branch"]
+    here = str(worktree) if worktree is not None and worktree.is_dir() else None
+    commits = reflog_only(repo, here, branch, commit, going)
+    files, large = ignored_to_keep(repo, here) if here else ([], [])
+    folder = store.kept(task["id"])
+    record = folder.with_suffix(".json")
+    try:
+        before = json.loads(record.read_text())
+    except (OSError, ValueError):
+        before = {}
+    if not isinstance(before, dict):
+        before = {}
+    refs = dict(before.get("refs") or {})
+    refs.update(("refs/roost/kept/%s/%s" % (task["id"], commit), commit) for commit in commits)
+    names = sorted(set(before.get("files") or []) | set(files))
+    if commits or files:
+        # First what it will keep, so that pruning finds what a request cut
+        # short left.
+        atomic_json(record, dict(name=task["name"], repo=repo, branch=branch, refs=refs, files=names,
+                                 large=large, keptAt=now()))
+    for commit in commits:
+        git(repo, "update-ref", "refs/roost/kept/%s/%s" % (task["id"], commit), commit)
+    for path in files:
+        target = folder / path
+        if within(os.path.normpath(target), str(folder)) is None:
+            continue
+        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with contextlib.suppress(FileNotFoundError):
+            target.unlink()
+        shutil.copy2(Path(here) / path, target, follow_symlinks=False)
+    if not refs and not names and not large:
+        return None
+    return dict(commits=len(refs), files=len(names), large=large[:KEPT_LARGE_NAMED],
+                largeMore=max(0, len(large) - KEPT_LARGE_NAMED), folder=str(folder) if names else None,
+                refs="refs/roost/kept/%s/" % task["id"] if refs else None, days=KEPT_DAYS)
+
+
 def retire(store, task, merge=False, merged_head=None, squash=False, teardown=None, still_open=False, expect=None,
            offers=None):
     """Remove a finished task's worktree, branch, window and record.
@@ -7082,6 +7257,14 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
         task["retiringCommit"] = commit
         store.save(task)
     stop(store, task, inventory)
+    # With the agent stopped, so nothing it writes goes uncounted, and,
+    # for a worktree, once its teardown command has run, without the
+    # registry lock, as copying files may take a while.
+    keep = functools.partial(keep_before_removing, store, task, commit=commit if branch_exists else None,
+                             going=branches_going(store, task))
+    if not worktree_exists:
+        # Under the registry lock, which pruning old copies would hold too long.
+        task["kept"] = keep(None, prune=False)
     # With worktrees its agent made that hold nothing beyond the task's branch.
     remove_worktrees(store, task, worktree if worktree_exists else None,
                      # As one read says: with nothing past the task's
@@ -7092,7 +7275,7 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
                       and entry["seen"] and not entry["seen"][0] and not entry["seen"][1]
                       and all(module["commits"] == 0 and not module["stashes"] and not module["changes"]
                               for module in entry["seen"][3])],
-                     teardown=teardown)
+                     teardown=teardown, keep=keep if worktree_exists else None)
     # What a copy stopped partway left, which may hold a secret.
     shutil.rmtree(copy_staging(task["worktree"]), ignore_errors=True)
     if branch_exists:
@@ -7519,6 +7702,8 @@ def discard(store, task, expect=None, dry_run=False, teardown=None, told=None, o
             unregister_gone(repo, worktree)
         delete_branch(repo, branch, commit)
     left = agent_left(task)
+    # What a retire refused after it kept them had kept: you chose to lose it.
+    drop_kept(store, task["id"])
     store.remove(task["id"])
     task.update(status="discarded", updatedAt=now(), live=False, leftBehind=left)
     return task
@@ -8438,7 +8623,7 @@ def uncommitted_files(worktree):
     return files_in(worktree) if status.returncode else len(status.stdout.splitlines())
 
 
-def remove_worktrees(store, task, worktree, agents, force=False, teardown=None):
+def remove_worktrees(store, task, worktree, agents, force=False, teardown=None, keep=None):
     """Remove TASK's WORKTREE, if any, and AGENTS, entries of `agent_work`.
     Without the registry lock: a worktree with dependencies installed can
     hold hundreds of thousands of files, and every agent's hooks wait on
@@ -8446,7 +8631,8 @@ def remove_worktrees(store, task, worktree, agents, force=False, teardown=None):
     of its own says it is still going, so nothing else acts on the task.
     Without FORCE, changes there are refused. TEARDOWN,
     the project's teardown command, runs in WORKTREE first; if it fails,
-    the task says how, and the removal goes on."""
+    the task says how, and the removal goes on. KEEP, if given, is called
+    with WORKTREE after that, and what it says is the task's `kept`."""
     if not worktree and not agents:
         return
     with holding_worktree(store, task, fcntl.LOCK_EX,
@@ -8460,6 +8646,8 @@ def remove_worktrees(store, task, worktree, agents, force=False, teardown=None):
                 failure = run_teardown(task, worktree, teardown) if worktree and teardown else None
                 if failure:
                     task["teardownFailure"], task["teardownOutput"] = failure
+                if keep and worktree:
+                    task["kept"] = keep(worktree)
                 remove_agent_worktrees(task, agents)
                 if worktree and not os.path.lexists(worktree):
                     # The teardown command took it, as it may: Git may yet
