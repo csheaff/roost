@@ -8,8 +8,8 @@ description: >
   keep a stand-in for later, and ghostel-tmux switching a controller to
   another session, with the minibuffer, timers and ssh probes in every
   order. Use before committing a change to roost-ghostel-tmux.el's
-  connect-or-switch, --attached, --detached, --attach-again, --try-again,
-  --give-way, --stand-in-shown, --stand-in-gives-way, --sweep-stand-ins,
+  connect-or-switch, --attach, --attached, --detached, --attach-again,
+  --try-again, --pane-made, --give-way, --kept-p, --stand-in-shown, --stand-in-gives-way, --sweep-stand-ins,
   --not-attached, --stand-in-for or disconnect, or to
   roost--when-out-of-minibuffer, roost--open or roost--display-task in
   roost.el; when ghostel-tmux changes how it runs its hooks, holds calls for
@@ -51,8 +51,8 @@ as the section's invariants in `docs/state-machines.md`:
 - **HandoffOutside** (I6). The pane takes its stand-in's window only when no
   question is open, and not from `window-buffer-change-functions` itself.
 - **KeptForItsWorkspace** (I6). A stand-in a workspace you left still shows
-  is not killed once its pane has come. Harm if broken: that workspace
-  shows some other buffer when you are back.
+  is not killed, its pane come or not, its client live or not. Harm if
+  broken: that workspace shows some other buffer when you are back.
 - **NoStrayStandIn** (I6). No stand-in is kept once its pane has come that
   no window, in any workspace, shows. Harm if broken: hidden buffers pile
   up.
@@ -94,11 +94,12 @@ ghostel-tmux, check those again.
 python3 test/formal/check.py terminal_seam
 ```
 
-About a minute and a quarter on a laptop's cores. Every line must say `ok`.
-`TerminalSeam.cfg`, `TerminalSeamPlain.cfg` and `TerminalSeamLocal.cfg` must
-pass; each `TerminalSeam.VARIANT.cfg` must fail as its first line says,
-which proves the rule can still fail, or, for a finding, that the bug is
-still there. `make formal` runs every model.
+About eight to twelve minutes on a laptop's cores. Every line must say `ok`.
+`TerminalSeam.cfg` and the other bases below must pass; each
+`TerminalSeam.VARIANT.cfg`, `TerminalSeamFrames.VARIANT.cfg` and
+`TerminalSeamClosed.VARIANT.cfg` must fail as its first line says, which
+proves the rule can still fail, or, for a finding, that the bug is still
+there. `make formal` runs every model.
 
 Read each result with the pstack `/statechart` skill: a violation as its
 shortest path in plain words, a pass as a chart of the states.
@@ -115,7 +116,7 @@ microsecond can.
 
 | Model | Code |
 | --- | --- |
-| `ctl[c]` | a controller: `p` its `--place`, `s` ghostel-tmux's session name, `sid` once `%session-changed` came, `rows` its panes, `ever` they came once, `closing`, `was` `--was-attached`, `sin` `--stand-in`, `row` started while tries were due |
+| `ctl[c]` | a controller: `p` its `--place`, `s` ghostel-tmux's session name, `sid` once `%session-changed` came, `rows` its panes, `ever` they came once, `closing`, `was` `--was-attached`, set by `--pane-made` as `Rows` makes the panes, after `--follow-session` moves `p` to a session the controller was switched to, `sin` `--stand-in`, `row` started while tries were due |
 | `si[i]` | a stand-in: its place, `f` `--stands-in-for`, `t` what it says |
 | `win`, `live`, `closed` | what each window shows; the windows on screen; those of a workspace you closed |
 | `snaps` | pane buffers a client left, by `--place` and session (`--snapshots`) |
@@ -126,27 +127,34 @@ microsecond can.
 | `Hello`, `Rows`, `Switch`, `SessionEnds` | ghostel-tmux: `%session-changed` (or tmux's "can't find session" and `%exit`), `--receive-window-rows`, `ghostel-tmux-switch-session` or tmux moving the client, `%exit` to each client of an ended session |
 | `End(c, how)` | `ghostel-tmux--sentinel` and `roost-ghostel-tmux--detached`: a drop (no `%exit`), an exit (`closing`), or `roost-ghostel-tmux-disconnect` |
 | `Attached(c)`, `RunHook` | `roost-ghostel-tmux--attached` on `ghostel-tmux-attach-hook`, with its switch branch |
-| `GivesWay`, `RunHandoff`, `Enter` | `--stand-in-shown` from `window-buffer-change-functions` as a workspace comes back, then `--stand-in-gives-way` from its timer, out of the minibuffer |
+| `GivesWay`, `RunHandoff`, `Enter` | `--stand-in-shown` from `window-buffer-change-functions` as a workspace comes back, then `--stand-in-gives-way` from its timer, out of the minibuffer, for the stand-in the window showed (`rDue`, `rHeld`: the window and that stand-in) |
 | `AttachAgain`, `Fire`, `Probe` | `--attach-again`, `--try-again` and its probe's sentinel |
 | `NA` | `--not-attached` |
+| `Waits` | `--attach`: every stand-in of the place says "Connecting to", and waits for the new controller |
+| `Hidden` | `--kept-p`: a workspace not on screen shows the stand-in; with tab-bar, a tab's window state names it; with perspective.el, another perspective has it |
 | `MiniOpen`, `MiniClose`, `Leave`, `Close`, `ShowOther` | you: a question, a workspace left or closed, another buffer in the window |
 
-Three bases:
+Five bases:
 
 - `TerminalSeam.cfg`: a host, workspaces, one frame; three opens, two drops,
-  one release by Roost, the session ending, one switch to B, one attach that
-  signals, two questions, three tries a row (9.7 million states, about 40
-  seconds).
+  also while a question holds the attach hook (`HeldEnds`), one release by
+  Roost, the session ending, one switch to B, one attach that signals, also
+  in a row of tries (`FailsInARow`), a window you give another buffer, two
+  questions, three tries a row (56 million states, about six minutes).
 - `TerminalSeamPlain.cfg`: the same without workspaces, and a window you
   give another buffer (4.2 million, about 20 seconds).
 - `TerminalSeamLocal.cfg`: a session on this machine, with workspaces.
+- `TerminalSeamFrames.cfg`: the task opened in two frames, with workspaces
+  you can close; one drop, no release and no switch, for size.
+- `TerminalSeamClosed.cfg`: the base with workspaces you close (`Closes`) and
+  no window you give another buffer, for size (20 million, two to six minutes).
 
 Variants, each a guard of the code turned off, the first seven what
 Copilot's review of #291 found:
 
 | Config | Constant | Guard | Rule |
 | --- | --- | --- | --- |
-| `own-session-unchecked` | `OwnSession` | `--stand-in-gives-way` checks the controller's place and session | OwnPane |
+| `own-session-unchecked` | `OwnSession` | `--stand-in-gives-way` checks the controller's place and session (with `PanesSay` off, whose `--follow-session` covers it too) | OwnPane |
 | `gives-up-first` | `LookFirst` | `--attach-again` looks for a controller attaching before it counts | EndIsTrue |
 | `count-cleared-while-attaching` | `KeepCount` | `--attach-again` keeps the count while one attaches | DropIsTried |
 | `detached-if-closing` | `DetachedIfAttached` | "Detached" for a closing client only if it had attached | WordIsTrue |
@@ -156,6 +164,14 @@ Copilot's review of #291 found:
 | `probe-no-recheck` | `ProbeRechecks` | the probe's sentinel looks again before it attaches | RetryOnlyDropped |
 | `sweep-takes-kept` | `SweepKeeps` | the sweep keeps, with workspaces, a stand-in whose pane came | KeptForItsWorkspace |
 | `give-way-kills-kept` | `GiveWayKeeps` | `--give-way` keeps, with workspaces, one no window shows | KeptForItsWorkspace |
+| `panes-unmarked` | `PanesSay` | `--pane-made` marks the controller `--was-attached` (VIEWS-17) | WordIsTrue |
+| `attach-silent` | `AttachSays` | `--attach` has every stand-in of its place say it connects (VIEWS-18, 19) | EndIsTrue |
+| `give-way-keeps-unseen` | `HiddenOnly` | `--give-way` and the sweep keep only a stand-in a workspace not on screen shows (VIEWS-21) | NoStrayStandIn |
+| `handoff-needs-window` | `ByStandIn` | `--stand-in-gives-way` takes the stand-in its window showed, whether or not it shows it still | NoStrayStandIn |
+| `TerminalSeamClosed.close-leaves-kept` | `SweepOnClose` | `--workspace-closed` sweeps the stand-ins as a tab or perspective closes (VIEWS-23) | NoStrayStandIn |
+| `TerminalSeamClosed.sweep-needs-controller` | `KeepsDead` | the sweep keeps a stand-in a workspace not on screen shows though its client failed or waits for a try | KeptForItsWorkspace |
+| `TerminalSeamFrames.close-sweeps-kept` | `SweepKeeps` | as `sweep-takes-kept`, as another frame's workspace closes | KeptForItsWorkspace |
+| `TerminalSeamFrames.open-kills-hidden` | `OpenKeepsHidden` | an open where the pane has come keeps the stand-in a workspace not on screen shows (VIEWS-20) | KeptForItsWorkspace |
 
 `gives-up-first` breaks DropIsTried as well, and leaves it out: TLC's
 workers would report either first.
@@ -171,7 +187,9 @@ reply even while a minibuffer is open; tiled splits
 ghostel-tmux's own window it fills on an attach that displays (the
 snapshot branch), which shows the session's pane where the snapshot was;
 TRAMP's own failures beyond an attach that signals; the sessions of other
-tasks, but for the sweep their opens run; and takeovers, which Roost never
+tasks, but for the sweep their opens run, and so any stand-in of B, which
+`--follow-session` has wait for a controller switched to B
+(`roost-ghostel-tmux-a-session-switched-to-while-a-question-holds-its-hook-is-the-one-tried`); and takeovers, which Roost never
 makes.
 
 ## A failure: bug or model?
@@ -190,38 +208,26 @@ rules the step out.
 
 ### Findings
 
-Each is a config that fails on purpose, and a patch under `findings/` that
-adds its replay to `test/roost-test.el`, which fails on the code at `SYNC`
-(`git apply test/formal/terminal_seam/findings/NAME.patch`). To fix one,
-follow `.claude/skills/fix-a-finding`; once fixed, delete the config and
-the patch, and turn on the scope it needed in the base.
+None open. Each is a config that fails on purpose, and a patch
+under `findings/` that adds its replay to `test/roost-test.el`, which fails
+on the code at `SYNC`. To fix one, follow `.claude/skills/fix-a-finding`;
+once fixed, delete the config and the patch, and turn on the scope it
+needed in the base.
 
-- `finding-ends-while-held` (VIEWS-17, scope `HeldEnds`, rule WordIsTrue,
-  `findings/ends-while-held.patch`). A host's session attaches while you
-  answer a question, so ghostel-tmux holds the attach hook; ssh drops
-  before you are done, and the held hook is dropped with its controller.
-  `--was-attached` was never set: the stand-in says "Could not attach",
-  and nothing tries it again.
-- `finding-fails-in-a-row` (VIEWS-18, scope `FailsInARow`, rule EndIsTrue,
-  `findings/fails-in-a-row.patch`). While a host whose connection dropped
-  is tried again, you open the task from its stand-in and the attach
-  signals, as TRAMP does for a host still away. The stand-in says "Could
-  not attach", but the row goes on, and its next try attaches.
-- `finding-two-frames-could-not` (VIEWS-19, scope `Frames = 2`, rule
-  EndIsTrue, `findings/two-frames-could-not.patch`). A frame shows the
-  task's stand-in saying "Could not attach"; opened in another frame, the
-  task gets a new stand-in and attaches, and the first still says it
-  could not, until the pane comes.
-- `finding-two-frames-workspace` (VIEWS-20, scope `Frames = 2`, rule
-  KeptForItsWorkspace, `findings/two-frames-workspace.patch`). Opened in two
-  frames while it connects, the task shows one stand-in in both; its pane
-  comes while one frame is in another workspace, the stand-in goes, and
-  that workspace shows some other buffer when you are back.
-- `finding-stray-stand-in` (VIEWS-21, scope `MaxOthers = 1` with
-  workspaces, rule NoStrayStandIn, `findings/stray-stand-in.patch`). With
-  workspaces, you give the task's window another buffer before its pane
-  comes: the stand-in is kept, unseen, until the session's client ends and
-  another task opens. Closing the workspace does the same.
+VIEWS-17 to 21, the five this model found first, are fixed: their replays
+are `roost-ghostel-tmux-a-connection-that-drops-while-a-question-holds-its-hook-is-tried-again`,
+`roost-ghostel-tmux-a-stand-in-says-nothing-of-not-attaching-while-a-try-is-due`,
+`roost-ghostel-tmux-a-stand-in-elsewhere-says-nothing-of-not-attaching-while-the-task-connects`,
+`roost-ghostel-tmux-a-pane-that-came-shows-in-each-workspace-that-waited-for-it`
+and `roost-ghostel-tmux-a-stand-in-you-gave-way-yourself-goes-once-its-pane-comes`.
+VIEWS-22 and 23, found as those were folded in, are fixed too:
+`roost-ghostel-tmux-a-stand-in-you-cover-while-a-question-holds-its-pane-goes`
+and `roost-ghostel-tmux-a-stand-in-kept-for-a-tab-you-close-goes`. `Close`
+takes `--workspace-closed`'s sweep, from a timer at 0 and out of the
+minibuffer, as one step, and only with no question open.
+
+Roost cannot tell when a perspective that has a
+stand-in no longer shows it: that one goes at the next open made there.
 
 ## When the code changes on purpose
 
@@ -235,4 +241,7 @@ from goes in as an action.
 Once the model describes the code at a new commit and every line is `ok`,
 move `SYNC` in `covered.py` to that commit. Only then.
 
-Last confirmed at `951ce59`.
+Last confirmed at `951ce59`, with the fixes of VIEWS-17 to 21 that came
+with this line: `--pane-made`, `--follow-session`, `--attach`, `--kept-p`, `--give-way`,
+`--stand-in-shown`, `--stand-in-gives-way`, `--workspace-closed`, the sweep and connect-or-switch's
+pane branch.

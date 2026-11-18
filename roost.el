@@ -15418,6 +15418,9 @@ Beside a terminal, that turns off `roost-task-panel-mode'."
 (defun roost-unload-function ()
   "Remove Roost's hooks, advice and side windows for `unload-feature'.
 Requests under way go too, as their replies would find no Roost to take them."
+  ;; The terminal backend first: its hooks call Roost's functions.
+  (when (featurep 'roost-ghostel-tmux)
+    (unload-feature 'roost-ghostel-tmux t))
   (dolist (process (copy-sequence roost--requests))
     (process-put process 'roost-dropped t)
     (delete-process process))

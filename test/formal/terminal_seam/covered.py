@@ -33,6 +33,11 @@ COVERED = {
         # The handoff: Attached, GivesWay, Enter.
         "roost-ghostel-tmux--give-way", "roost-ghostel-tmux--stand-in-shown",
         "roost-ghostel-tmux--stand-in-gives-way", "roost-ghostel-tmux--attached",
+        "roost-ghostel-tmux--kept-p",
+        # What a stand-in says; panes made, which mark their controller attached.
+        "roost-ghostel-tmux--say", "roost-ghostel-tmux--connecting", "roost-ghostel-tmux--pane-made",
+        "roost-ghostel-tmux--follow-session", "roost-ghostel-tmux--workspace-closed",
+        "roost-ghostel-tmux--perspective-killed", "roost-ghostel-tmux--tab-shows-p",
         # A connection that drops: End, Fire, Probe.
         "roost-ghostel-tmux--detached", "roost-ghostel-tmux--attach-again",
         "roost-ghostel-tmux--try-again", "roost-ghostel-tmux-disconnect",
