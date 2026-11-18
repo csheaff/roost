@@ -4393,6 +4393,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
                                                                    (line-end-position))))
              (should (equal (buffer-substring (line-beginning-position) (point)) "Line 30 ")))
          (kill-buffer buffer))))))
+
 (ert-deftest roost-opens-a-file-under-a-folder-named-tilde-in-the-worktree ()
   ;; An agent can leave a folder named ~: its files aren't yours.
   (roost-test--isolated
@@ -8314,6 +8315,7 @@ the host records, and the host what each sends."
 (ert-deftest roost-two-emacs-that-both-saw-a-stopped-task-agree ()
   (roost-test--isolated
    (should (= (roost-test--turns-of-two-emacs t) 1))))
+
 (ert-deftest roost-a-turn-you-quit-as-it-went-is-sent-again ()
   ;; A quit is no error, and it stayed marked as sent for good.
   (roost-test--isolated
@@ -12423,11 +12425,12 @@ nil), it is discarded."
                  ((symbol-function 'process-file)
                   (lambda (_program _in out _display &rest _)
                     (roost-test--stderr-too out answer) 0)))
-         (setq answer "/home/me/.tmux/tmux-1000/roost\n")
+         (setq answer "roost-socket /home/me/.tmux/tmux-1000/roost\n")
          (should (equal (roost-ghostel-tmux--socket "away" "roost") "/home/me/.tmux/tmux-1000/roost"))
          (should (equal (roost-test--host-setting "away" 'ghostel-tmux-program) "/usr/bin/tmux"))
-         ;; A login script that prints on stdout, before the answer or after.
-         (setq answer "Welcome to the host\n/home/me/.tmux/tmux-1000/roost\nbye\n")
+         ;; A login script that prints on stdout, before the answer or after,
+         ;; a path too.
+         (setq answer "Welcome to the host\nroost-socket /home/me/.tmux/tmux-1000/roost\n/etc/motd: read\n")
          (should (equal (roost-ghostel-tmux--socket "chatty" "roost") "/home/me/.tmux/tmux-1000/roost"))
          ;; A host that answers with something else than a path is asked again.
          (setq answer "sh: printf: not found\n")
@@ -12779,11 +12782,12 @@ nil), it is discarded."
                      ((symbol-function 'persp-curr) (lambda (&optional _) (gethash "current" perspectives))))
              (unless real
                (fset 'persp-buffers #'cdr))
-             (perspective "current" (list stand-in))
-             (perspective "other" nil)
-             (should-not (roost-ghostel-tmux--kept-p stand-in))
-             (perspective "other" (list stand-in))
-             (should (roost-ghostel-tmux--kept-p stand-in)))
+             (cl-progv '(persp-mode) '(t)
+               (perspective "current" (list stand-in))
+               (perspective "other" nil)
+               (should-not (roost-ghostel-tmux--kept-p stand-in))
+               (perspective "other" (list stand-in))
+               (should (roost-ghostel-tmux--kept-p stand-in))))
          (unless real (fmakunbound 'persp-buffers))
          (kill-buffer stand-in))))))
 
@@ -12876,7 +12880,7 @@ nil), it is discarded."
        (roost-test--kill-stand-ins)))))
 
 (ert-deftest roost-ghostel-tmux-a-connection-that-drops-while-a-question-holds-its-hook-is-tried-again ()
-  ;; TerminalSeam.finding-ends-while-held.cfg.  ghostel-tmux holds
+  ;; VIEWS-17, found by TerminalSeam.tla.  ghostel-tmux holds
   ;; `ghostel-tmux-attach-hook' while a minibuffer is open
   ;; (`ghostel-tmux--hold'), and drops what it held for a controller that
   ;; is gone (`ghostel-tmux--run-held-calls').  The session's panes came
@@ -12922,8 +12926,55 @@ nil), it is discarded."
        (when (buffer-live-p controller) (kill-buffer controller))
        (kill-buffer pane)
        (roost-test--kill-stand-ins)))))
+
+(ert-deftest roost-ghostel-tmux-a-session-switched-to-while-a-question-holds-its-hook-is-the-one-tried ()
+  ;; ghostel-tmux's own command switches the controller to another
+  ;; session before its first pane, and that session's panes come while
+  ;; you answer a question: ssh drops before the held attach hook runs.
+  ;; The session it shows is the one tried again, not the one it left.
+  (roost-test--isolated
+   (roost-test--ghostel-backend)
+   (let ((roost-ghostel-tmux--lost (make-hash-table :test #'equal))
+         (place '("far" "main" "one"))
+         (pane (generate-new-buffer "pane"))
+         controller live arrived session)
+     (unwind-protect
+         (save-window-excursion
+           (cl-letf (((symbol-function 'ghostel-tmux-controller)
+                      (lambda (&optional buffer) (and (eq (or buffer (current-buffer)) pane) controller)))
+                     ((symbol-function 'ghostel-tmux-controllers) (lambda () (and live (list controller))))
+                     ((symbol-function 'ghostel-tmux-active-pane) (lambda (&rest _) (and arrived pane)))
+                     ((symbol-function 'ghostel-tmux-panes) #'ignore)
+                     ((symbol-function 'ghostel-tmux-window-id) #'ignore)
+                     ((symbol-function 'ghostel-tmux-session-name) (lambda (&rest _) session))
+                     ((symbol-function 'ghostel-tmux-window-split) #'ignore)
+                     ((symbol-function 'roost-ghostel-tmux--socket) (lambda (_host socket) socket))
+                     ((symbol-function 'ghostel-tmux-attach)
+                      (lambda (&rest _) (setq live t controller (generate-new-buffer " controller"))))
+                     ((symbol-function 'run-at-time) #'ignore))
+             (delete-other-windows)
+             (apply #'roost-ghostel-tmux-connect-or-switch place)
+             (let ((stand-in (window-buffer)))
+               ;; Switched to two, whose panes come; the attach hook waits
+               ;; for the question to close.
+               (setq session "two" arrived t)
+               (with-current-buffer pane
+                 (setq-local ghostel-tmux-pane-mode t)
+                 (run-hooks 'ghostel-tmux-pane-mode-hook))
+               ;; ssh drops: the sentinel runs the detach hook and kills the
+               ;; controller, and the attach hook held for it never runs.
+               (setq live nil)
+               (roost-test--ghostel-client-ends controller)
+               ;; The session it left is let go of, and it is not tried.
+               (should (string-match-p "\\`Detached from one" (with-current-buffer stand-in (buffer-string))))
+               (should-not (gethash place roost-ghostel-tmux--lost))
+               (should (gethash '("far" "main" "two") roost-ghostel-tmux--lost)))))
+       (when (buffer-live-p controller) (kill-buffer controller))
+       (kill-buffer pane)
+       (roost-test--kill-stand-ins)))))
+
 (ert-deftest roost-ghostel-tmux-a-stand-in-says-nothing-of-not-attaching-while-a-try-is-due ()
-  ;; TerminalSeam.finding-fails-in-a-row.cfg.  A host's connection dropped,
+  ;; VIEWS-18, found by TerminalSeam.tla.  A host's connection dropped,
   ;; and is tried again.  You open the task meanwhile, and the attach
   ;; signals, as TRAMP does for a host still away: the stand-in says "Could
   ;; not attach", but the row of tries goes on, and its next try attaches.
@@ -12980,8 +13031,9 @@ nil), it is discarded."
        (when (buffer-live-p controller) (kill-buffer controller))
        (kill-buffer left)
        (roost-test--kill-stand-ins)))))
+
 (ert-deftest roost-ghostel-tmux-a-stand-in-elsewhere-says-nothing-of-not-attaching-while-the-task-connects ()
-  ;; TerminalSeam.finding-two-frames-could-not.cfg.  A frame shows the
+  ;; VIEWS-19, found by TerminalSeam.tla.  A frame shows the
   ;; task's stand-in, which says "Could not attach".  You open the task in
   ;; another frame, whose window shows another buffer: it gets a stand-in
   ;; of its own.  Roost opens a task in the window of the selected frame
@@ -13027,8 +13079,9 @@ nil), it is discarded."
        (when (buffer-live-p controller) (kill-buffer controller))
        (kill-buffer before)
        (roost-test--kill-stand-ins)))))
+
 (ert-deftest roost-ghostel-tmux-a-pane-that-came-shows-in-each-workspace-that-waited-for-it ()
-  ;; TerminalSeam.finding-two-frames-workspace.cfg.  The task opened in two
+  ;; VIEWS-20, found by TerminalSeam.tla.  The task opened in two
   ;; frames while it connects: both show its one stand-in.  The pane comes
   ;; while one frame is in another workspace, and that workspace shows some
   ;; other buffer when you are back.  Roost opens a task in its own tab of
@@ -13080,8 +13133,9 @@ nil), it is discarded."
        (kill-buffer pane)
        (kill-buffer before)
        (roost-test--kill-stand-ins)))))
+
 (ert-deftest roost-ghostel-tmux-a-stand-in-you-gave-way-yourself-goes-once-its-pane-comes ()
-  ;; TerminalSeam.finding-stray-stand-in.cfg.  With workspaces, you open a
+  ;; VIEWS-21, found by TerminalSeam.tla.  With workspaces, you open a
   ;; task and give its window another buffer before the pane comes.  No
   ;; window, in any workspace, shows the stand-in, yet it is kept, and the
   ;; next open keeps it too, until the session's client ends.
@@ -13118,6 +13172,7 @@ nil), it is discarded."
        (kill-buffer pane)
        (kill-buffer before)
        (roost-test--kill-stand-ins)))))
+
 (ert-deftest roost-terminal-images-are-what-the-terminal-package-draws ()
   ;; A task's host hears it when the task starts and when it resumes, so
   ;; an agent that sends images only when told, as Pi under tmux, is told.

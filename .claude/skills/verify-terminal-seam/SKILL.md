@@ -94,7 +94,7 @@ ghostel-tmux, check those again.
 python3 test/formal/check.py terminal_seam
 ```
 
-About five minutes on a laptop's cores. Every line must say `ok`.
+About five to seven minutes on a laptop's cores. Every line must say `ok`.
 `TerminalSeam.cfg`, `TerminalSeamPlain.cfg`, `TerminalSeamLocal.cfg` and
 `TerminalSeamFrames.cfg` must pass; each `TerminalSeam.VARIANT.cfg` and
 `TerminalSeamFrames.VARIANT.cfg` must fail as its first line says, which
@@ -116,7 +116,7 @@ microsecond can.
 
 | Model | Code |
 | --- | --- |
-| `ctl[c]` | a controller: `p` its `--place`, `s` ghostel-tmux's session name, `sid` once `%session-changed` came, `rows` its panes, `ever` they came once, `closing`, `was` `--was-attached`, set by `--pane-made` as `Rows` makes the panes, `sin` `--stand-in`, `row` started while tries were due |
+| `ctl[c]` | a controller: `p` its `--place`, `s` ghostel-tmux's session name, `sid` once `%session-changed` came, `rows` its panes, `ever` they came once, `closing`, `was` `--was-attached`, set by `--pane-made` as `Rows` makes the panes, after `--follow-session` moves `p` to a session the controller was switched to, `sin` `--stand-in`, `row` started while tries were due |
 | `si[i]` | a stand-in: its place, `f` `--stands-in-for`, `t` what it says |
 | `win`, `live`, `closed` | what each window shows; the windows on screen; those of a workspace you closed |
 | `snaps` | pane buffers a client left, by `--place` and session (`--snapshots`) |
@@ -140,7 +140,7 @@ Four bases:
   also while a question holds the attach hook (`HeldEnds`), one release by
   Roost, the session ending, one switch to B, one attach that signals, also
   in a row of tries (`FailsInARow`), a window you give another buffer, two
-  questions, three tries a row (68 million states, about four minutes).
+  questions, three tries a row (60 million states, four to six minutes).
 - `TerminalSeamPlain.cfg`: the same without workspaces, and a window you
   give another buffer (4.2 million, about 20 seconds).
 - `TerminalSeamLocal.cfg`: a session on this machine, with workspaces.
@@ -152,7 +152,7 @@ Copilot's review of #291 found:
 
 | Config | Constant | Guard | Rule |
 | --- | --- | --- | --- |
-| `own-session-unchecked` | `OwnSession` | `--stand-in-gives-way` checks the controller's place and session | OwnPane |
+| `own-session-unchecked` | `OwnSession` | `--stand-in-gives-way` checks the controller's place and session (with `PanesSay` off, whose `--follow-session` covers it too) | OwnPane |
 | `gives-up-first` | `LookFirst` | `--attach-again` looks for a controller attaching before it counts | EndIsTrue |
 | `count-cleared-while-attaching` | `KeepCount` | `--attach-again` keeps the count while one attaches | DropIsTried |
 | `detached-if-closing` | `DetachedIfAttached` | "Detached" for a closing client only if it had attached | WordIsTrue |
@@ -231,6 +231,6 @@ Once the model describes the code at a new commit and every line is `ok`,
 move `SYNC` in `covered.py` to that commit. Only then.
 
 Last confirmed at `951ce59`, with the fixes of VIEWS-17 to 21 that came
-with this line: `--pane-made`, `--attach`, `--kept-p`, `--give-way`,
+with this line: `--pane-made`, `--follow-session`, `--attach`, `--kept-p`, `--give-way`,
 `--stand-in-shown`, `--stand-in-gives-way`, the sweep and connect-or-switch's
 pane branch.

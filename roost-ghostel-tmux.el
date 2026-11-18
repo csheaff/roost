@@ -212,16 +212,17 @@ tmux, and ghostel-tmux has no command to run first."
     (or (gethash (cons host socket) roost-ghostel-tmux--socket-paths)
         (let ((default-directory (format "/ssh:%s:" host)))
           (with-temp-buffer
-            ;; stdout alone, its last line that is a path: what a login
-            ;; script or the host writes besides is no part of the path,
-            ;; which is kept for as long as Emacs runs.
+            ;; stdout alone, the line it marks: what a login script or
+            ;; the host writes besides is no part of the path, which is
+            ;; kept for as long as Emacs runs.
             (and (eql 0 (process-file
                          "sh" nil '(t nil) nil "-c"
                          (concat roost--remote-tmux-socket-setup
-                                 " && printf '%s\\n' \"$TMUX_TMPDIR/tmux-$(id -u)/$1\"")
+                                 " && printf 'roost-socket %s\\n' \"$TMUX_TMPDIR/tmux-$(id -u)/$1\"")
                          "sh" socket))
-                 (when-let* ((path (seq-find #'file-name-absolute-p
-                                             (reverse (split-string (buffer-string) "\n" t "[ \t\r]+")))))
+                 (when-let* ((line (seq-find (lambda (line) (string-prefix-p "roost-socket /" line))
+                                             (reverse (split-string (buffer-string) "\n" t "\r"))))
+                             (path (substring line (length "roost-socket "))))
                    (puthash (cons host socket) path roost-ghostel-tmux--socket-paths)))))
         socket)))
 
@@ -362,8 +363,9 @@ then, see `roost-ghostel-tmux--stand-in-shown'.  Killed, the workspace
 would show some other buffer in its place.  A tab says which buffers its
 windows show; a perspective only which buffers it has, so a stand-in a
 perspective has and no longer shows goes at the next open made there."
-  (pcase (roost--workspace-backend)
-    ('tab-bar
+  (when (roost--workspace-backend)
+    ;; Both, as tabs and perspective.el can be on at once.
+    (or
      (let ((name (buffer-name stand-in)))
        (seq-some (lambda (frame)
                    ;; As the frame keeps them: asking `tab-bar-tabs' would
@@ -372,9 +374,9 @@ perspective has and no longer shows goes at the next open made there."
                                (and (eq (car tab) 'tab)
                                     (member name (window-state-buffers (alist-get 'ws tab)))))
                              (frame-parameter frame 'tabs)))
-                 (frame-list))))
-    ('perspective
-     (and (fboundp 'perspectives-hash)
+                 (frame-list)))
+     (and (bound-and-true-p persp-mode)
+          (fboundp 'perspectives-hash)
           (seq-some (lambda (frame)
                       (let ((current (persp-curr frame)))
                         (seq-some (lambda (perspective)
@@ -516,19 +518,14 @@ a buffer that stands in for it."
              (kill-buffer stand-in))
            (signal (car err) (cdr err)))))))))
 
-(defun roost-ghostel-tmux--attached ()
-  "Put the session's pane wherever its stand-in shows.
-On `ghostel-tmux-attach-hook', in the controller: tmux has listed the
-session's windows, and no minibuffer is open, whose closing would put
-the stand-in back in its window.  By now every pane tmux still has is
-live again: the pane buffers an earlier connection left that are not,
-tmux no longer has."
+(defun roost-ghostel-tmux--follow-session ()
+  "Have the current controller's place follow the session it shows, and return it.
+ghostel-tmux's own command can switch a controller to another session:
+the place is that session's now.
+NEEDS: a hook before the switch, to open the session's task in its
+workspace instead, as `tmux-control-switch-session-functions' lets
+Roost do."
   (when-let* ((place roost-ghostel-tmux--place))
-    ;; The hook runs too once ghostel-tmux's own command has switched the
-    ;; controller to another session: the place is that session's now.
-    ;; NEEDS: a hook before the switch, to open the session's task in its
-    ;; workspace instead, as `tmux-control-switch-session-functions' lets
-    ;; Roost do.
     (when-let* ((session (ghostel-tmux-session-name))
                 ((not (equal session (nth 2 place)))))
       ;; What stood in for the session it left has no pane coming, and
@@ -541,6 +538,16 @@ tmux no longer has."
       (roost-ghostel-tmux--not-attached place t)
       (setq place (list (nth 0 place) (nth 1 place) session)
             roost-ghostel-tmux--place place))
+    place))
+
+(defun roost-ghostel-tmux--attached ()
+  "Put the session's pane wherever its stand-in shows.
+On `ghostel-tmux-attach-hook', in the controller: tmux has listed the
+session's windows, and no minibuffer is open, whose closing would put
+the stand-in back in its window.  By now every pane tmux still has is
+live again: the pane buffers an earlier connection left that are not,
+tmux no longer has."
+  (when-let* ((place (roost-ghostel-tmux--follow-session)))
     (setq roost-ghostel-tmux--was-attached t)
     (remhash place roost-ghostel-tmux--lost)
     ;; Each of the session's: one of a connection that dropped as it
@@ -720,10 +727,13 @@ With `roost-ghostel-tmux-window-buffer-functions'.  On
 or made live again by an attach."
   (when-let* ((ghostel-tmux-pane-mode)
               (controller (ghostel-tmux-controller))
-              (place (buffer-local-value 'roost-ghostel-tmux--place controller)))
+              ;; Its session's, should ghostel-tmux's own command have
+              ;; switched the controller since it attached: the attach
+              ;; hook that would say so can be held for a question.
+              (place (with-current-buffer controller
+                       (prog1 (roost-ghostel-tmux--follow-session)
+                         (setq roost-ghostel-tmux--was-attached t)))))
     (setq roost-ghostel-tmux--place place)
-    (with-current-buffer controller
-      (setq roost-ghostel-tmux--was-attached t))
     ;; Ghostel puts the buffer's name back at each change of title.
     (setq-local ghostel-buffer-identification-format nil
                 mode-line-buffer-identification '((:eval (roost-ghostel-tmux--mode-line-name))))

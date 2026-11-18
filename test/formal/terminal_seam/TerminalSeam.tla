@@ -154,6 +154,11 @@ Waits(S, p, k) == IF ~AttachSays THEN S
                   ELSE [i \in Sis |-> IF S[i].st = "live" /\ S[i].p = p
                                       THEN [S[i] EXCEPT !.t = "connecting", !.f = k] ELSE S[i]]
 
+\* `--follow-session`: what stood in for P0, a session the controller left,
+\* says "Detached" and waits for nothing.
+Left(S, p0) == [i \in Sis |-> IF S[i].st = "live" /\ S[i].p = p0
+                              THEN [S[i] EXCEPT !.f = 0, !.t = "detached"] ELSE S[i]]
+
 \* `--attach`: the controller's `--stand-in`, one of those of P, if any.
 FirstSi(S, p) == IF ~AttachSays \/ SisOf(S, p) = {} THEN 0 ELSE CHOOSE i \in SisOf(S, p) : TRUE
 
@@ -296,16 +301,23 @@ Hello(c) ==
 \* or waits while a minibuffer is open (`ghostel-tmux--hold`).
 Rows(c) ==
   /\ Calm /\ Live(c) /\ ctl[c].sid /\ ~ctl[c].rows /\ ~ctl[c].closing /\ alive[ctl[c].s]
-  /\ LET s == ctl[c].s IN
-     \* `--pane-made`, on `ghostel-tmux-pane-mode-hook`, which is not held.
-     /\ ctl' = [ctl EXCEPT ![c].rows = TRUE, ![c].ever = TRUE, ![c].was = (@ \/ PanesSay)]
-     /\ win' = [w \in Wins |-> IF (win[w].k = "snap" /\ win[w].s = s)
-                                  \/ (win[w].k = "pane" /\ win[w].i = c)
-                               THEN Pane(c, s) ELSE win[w]]
-     /\ snaps' = {x \in snaps : x.s # s}
+  /\ LET s == ctl[c].s
+         p0 == ctl[c].p
+         \* `--pane-made`, on `ghostel-tmux-pane-mode-hook`, which is not held:
+         \* `--follow-session`, then the controller is marked attached.
+         sw == PanesSay /\ s # p0
+     IN /\ ctl' = [ctl EXCEPT ![c].rows = TRUE, ![c].ever = TRUE, ![c].was = (@ \/ PanesSay),
+                               ![c].p = IF sw THEN s ELSE @]
+        /\ si' = IF sw THEN Left(si, p0) ELSE si
+        /\ lost' = IF sw THEN [lost EXCEPT ![p0] = 0] ELSE lost
+        /\ owed' = IF sw THEN [owed EXCEPT ![p0] = TRUE] ELSE owed
+        /\ win' = [w \in Wins |-> IF (win[w].k = "snap" /\ win[w].s = s)
+                                     \/ (win[w].k = "pane" /\ win[w].i = c)
+                                  THEN Pane(c, s) ELSE win[w]]
+        /\ snaps' = {x \in snaps : x.s # s}
   /\ IF mini THEN gHeld' = gHeld \cup {c} /\ gDue' = gDue
      ELSE gDue' = gDue \cup {c} /\ gHeld' = gHeld
-  /\ UNCHANGED <<si, live, closed, alive, lost, timers, probes, mini, rHeld, rDue, owed, n, bad>>
+  /\ UNCHANGED <<live, closed, alive, timers, probes, mini, rHeld, rDue, n, bad>>
 
 \* `ghostel-tmux-switch-session`, or tmux itself, moves the client to B:
 \* `--on-session-changed` names it at once and wipes the panes.
@@ -380,10 +392,7 @@ Attached(c) ==
   LET p0 == ctl[c].p
       s == ctl[c].s
       sw == s # p0   \* ghostel-tmux's own command switched it
-      S1 == IF sw THEN [i \in Sis |-> IF si[i].st = "live" /\ si[i].p = p0
-                                      THEN [si[i] EXCEPT !.f = 0, !.t = "detached"]
-                                      ELSE si[i]]
-            ELSE si
+      S1 == IF sw THEN Left(si, p0) ELSE si
       L1 == IF sw /\ SwitchForgets THEN [lost EXCEPT ![p0] = 0] ELSE lost
       GW == IF ctl[c].rows THEN {i \in Sis : S1[i].st = "live" /\ S1[i].p = s} ELSE {}
       ws == {w \in live : win[w].k = "si" /\ win[w].i \in GW}

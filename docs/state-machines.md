@@ -3367,7 +3367,7 @@ Invariants:
 | No terminal | open | | Connecting | stand-in shown, then the client starts | `roost-ghostel-tmux-connect-or-switch` |
 | No terminal | open | the attach signals | No terminal | window put back, stand-in killed, error passed on | `roost-ghostel-tmux-connect-or-switch` |
 | Connecting | open, another window | | Connecting | the same stand-in there too | `roost-ghostel-tmux-connect-or-switch` |
-| Connecting | a pane is made | | Connecting | `--was-attached` set, though the attach hook is held for a question | `roost-ghostel-tmux--pane-made` |
+| Connecting | a pane is made | | Connecting | `--was-attached` set, though the attach hook is held for a question; the place follows a session ghostel-tmux switched the controller to | `roost-ghostel-tmux--pane-made`, `--follow-session` |
 | Connecting | tmux lists the windows | a window shows the stand-in, no workspace off screen does | Shown | pane in its place, stand-in and old snapshots killed | `roost-ghostel-tmux--attached` |
 | Connecting | tmux lists the windows | no workspace off screen shows the stand-in | Shown | pane in each window on screen that showed it, stand-in killed | `roost-ghostel-tmux--give-way` |
 | Connecting | tmux lists the windows | a workspace off screen shows it | Shown, stand-in kept | pane in each window on screen that showed it | `roost-ghostel-tmux--give-way`, `--kept-p` |
@@ -3388,7 +3388,7 @@ Invariants:
 | Left as it was | `roost-ghostel-tmux-reconnect` | | Connecting | as open | `roost-ghostel-tmux-reconnect` |
 | Could not attach | open, from the stand-in or another window | | Connecting | every stand-in of the place says "Connecting to" again, and its mode line "Connecting" | `roost-ghostel-tmux--stand-in-for`, `--attach` |
 | Could not attach | `q` | | No terminal | the window shows what it did; the next open kills the stand-in | `quit-window`, `roost-ghostel-tmux--sweep-stand-ins` |
-| any | the controller is switched to another session | | the other place's | place follows the session | `roost-ghostel-tmux--attached` |
+| any | the controller is switched to another session | | the other place's | place follows the session, as its first pane is made or the attach hook runs | `roost-ghostel-tmux--follow-session` |
 
 Model: `test/formal/terminal_seam`, by `.claude/skills/verify-terminal-seam`, with
 ghostel-tmux read at `ce64afa`. It holds I1 to I7; I8 is

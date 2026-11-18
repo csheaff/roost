@@ -36,6 +36,7 @@ COVERED = {
         "roost-ghostel-tmux--kept-p",
         # What a stand-in says; panes made, which mark their controller attached.
         "roost-ghostel-tmux--say", "roost-ghostel-tmux--connecting", "roost-ghostel-tmux--pane-made",
+        "roost-ghostel-tmux--follow-session",
         # A connection that drops: End, Fire, Probe.
         "roost-ghostel-tmux--detached", "roost-ghostel-tmux--attach-again",
         "roost-ghostel-tmux--try-again", "roost-ghostel-tmux-disconnect",
