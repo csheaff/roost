@@ -8,8 +8,8 @@ description: >
   roost--request, roost--expire-request), refreshes (roost--refresh-host,
   roost--apply-snapshot), how a reply is cached (roost--cache-task,
   roost--cache-reply, roost--newer-events, roost--newer-offers,
-  roost--newer-branch, roost--act, roost--create-task, roost--task-made,
-  roost--take-offer, roost-retarget, the inspects in roost--open and
+  roost--newer-branch, roost--newer-shown, roost--act, roost--create-task,
+  roost--task-made, roost--take-offer, roost-retarget, the inspects in roost--open and
   roost--notify-attention, the refresh roost-compose-submit asks for an
   offer's draft),
   or the helper's install, prune_helpers, rpc's locking or detach, or what
@@ -45,10 +45,9 @@ with the shortest path to a broken rule.
   new one.
 - **NoShownRollback.** Nor does a reply take a task back to the image or
   page it showed before, or to none: a task Emacs lists has the newest
-  `shown.at` it has held. Showing moves no `updatedAt` either. **It fails on
-  the code as it is**, a finding, below. Harm: the panel no longer names
-  the image, and `roost-show-image` says the task has shown none, until
-  the next list.
+  `shown.at` it has held. Showing moves no `updatedAt` either. Harm: the
+  panel no longer names the image, and `roost-show-image` says the task
+  has shown none, until the next list.
 - **OfferRowGoes.** Once a task is made from an offer and its draft has
   asked for the host to be listed, the offer's row goes: with no list in
   flight, and none asked since that came to nothing, Emacs holds the task
@@ -77,19 +76,20 @@ with the shortest path to a broken rule.
 python3 test/formal/check.py emacs_and_hosts
 ```
 
-About three minutes, or six on a machine busy with other work; `make formal`
+About three and a half minutes, or seven on a machine busy with other work; `make formal`
 runs every model. Java and TLC 1.7.4 come from mise. Every line must say `ok`: `CachedTasks.cfg`,
-`CachedTasksOffer.cfg`, `CachedTasksRetarget.cfg`,
+`CachedTasksOffer.cfg`, `CachedTasksRetarget.cfg`, `CachedTasksShown.cfg`,
 `CachedTasksTwoCreates.cfg` and `HostRequests.cfg` pass, and each other
-config fails the way its first line says, the finding's too.
-`CachedTasksOffer.tla`, `CachedTasksRetarget.tla` and
-`CachedTasksTwoCreates.tla` are `CachedTasks.tla` again at other bounds, as
-the runner takes one passing config per model: a task made from an offer,
-`B`, and two tasks asked for at once, each take too long beside all that
-`CachedTasks.cfg` has. Nearly all the time is `CachedTasks.cfg`, 24.6
-million states, the same as before the offer's draft and what a task shows
-were added: both are switched off there (`FromOffer`, `MaxShown`). The
-other three are two million between them.
+config fails the way its first line says.
+`CachedTasksOffer.tla`, `CachedTasksRetarget.tla`, `CachedTasksShown.tla`
+and `CachedTasksTwoCreates.tla` are `CachedTasks.tla` again at other bounds,
+as the runner takes one passing config per model: a task made from an
+offer, `B`, what an agent shows, and two tasks asked for at once, each take
+too long beside all that `CachedTasks.cfg` has. Nearly all the time is
+`CachedTasks.cfg`, 24.6 million states, the same as before the offer's
+draft and what a task shows were added: both are switched off there
+(`FromOffer`, `MaxShown`). The other four are five million between them,
+three of them `CachedTasksShown.cfg`'s.
 
 Read every result with the pstack statechart skill (`/pstack:statechart`):
 it tells a failure's shortest path in plain words, and draws a passing
@@ -97,7 +97,8 @@ model as a chart.
 
 ## Does your change touch it?
 
-Coverage, confirmed against the code at **047486f**.
+Coverage, confirmed against the code at **047486f**, with `roost--newer-shown`
+and its place in `roost--cache-task`, which came with this line.
 `git diff 047486f -- roost.el scripts/roost_remote.py` and look for these:
 
 | Code | Model step |
@@ -111,7 +112,8 @@ Coverage, confirmed against the code at **047486f**.
 | `make_task`'s take of the offer a task was made from, under the lock it saves the task with | `HostRun` (create, of a task in `FromOffer`); run in `CachedTasksOffer` |
 | `roost-compose-submit`'s callback for the draft of an offer: `roost--refresh-host`, not quiet, called by `roost--task-made` once you are out of the minibuffer | `Succeed` (create) owes it, `RefreshForOffer`; run in `CachedTasksOffer` |
 | `propose_task`, `taken_offers` in `list_tasks` | No step of their own: each moves `offersAt` with no reply about it, as a take that Emacs gave up on and `HostRun` ran all the same |
-| `keep_shown` (`show_image`, `show_widget`): `shown.at` moves, no `updatedAt`; `roost--cache-task` has no step that goes by it | `AgentShows`; the record's `shown` rides with `NewerEvents`; run in the finding's config |
+| `keep_shown` (`show_image`, `show_widget`): `shown.at` moves, no `updatedAt`; nothing else writes `shown` or takes it out of a record | `AgentShows`; run in `CachedTasksShown` |
+| `roost--newer-shown` | `NewerShown` |
 | `leave`, `tell` (`roost-leave-pull-request`, `roost--tell-agent` from within `roost--cache-task`), `roost--newer-left` | As a take here, by `roost--act`; their clock, `prLeftAt`, is in `pull_request_left` |
 | `roost-retarget` (asked of a task listed, its callback's refresh), the helper's `retarget` | `AskAct` (retarget), `HostRun` (retarget), `Succeed` (retarget), `OverAndRefresh`; run in `CachedTasksRetarget` |
 | `roost--cache-reply`, `roost--went-p`, `roost--went` | `CacheReply` |
@@ -167,6 +169,10 @@ are known to bite:
 - `NoNewerBranch`: an older `retargetedAt` replaces a newer one, so a reply
   read before `B`, as one to stopping the task, brings back the branch it
   merged into. NoBranchRollback.
+- `NoNewerShown`: an older `shown.at`, or none, replaces a newer one, so a
+  reply read before the agent showed an image, as one to opening the task,
+  that comes after the list that read it since takes the image's name out
+  of the panel. NoShownRollback.
 - `NoRevisionCheck`: a list read before your retire lands after its reply.
   NoRollback.
 - `NoRefreshingGuard`: two lists at once. OneList.
@@ -191,30 +197,15 @@ are known to bite:
 
 ## Findings kept
 
-One, which fails until the code is fixed (`.claude/skills/fix-a-finding`):
-
-- `CachedTasks.finding-shown-rollback.cfg`, NoShownRollback, found
-  2026-11-17 and in the code since `show_image` (#263, e9beaa2). Emacs
-  lists the task and asks to open it (`inspect`); its host reads the record
-  for that; the agent shows an image, which moves `shown.at` and no
-  `updatedAt`; a poll reads the record, and its list lands first, so Emacs
-  holds what the task shows; then the inspect's reply lands, with the same
-  `updatedAt`, and `roost--cache-task` takes its `shown`, the older one or
-  none. Until the next list the panel has no line for the image, or names
-  the one before, and `roost-show-image` says the task has shown none. The
-  image on screen stays, and nothing older is fetched: `roost--shown-at`
-  only moves on. The fix is a step that goes by `shown.at`, as
-  `roost--newer-offers` goes by `offersAt`; then `MaxShown` goes into the
-  configs that pass, and the step gets a variant. The docs call the same
-  of `pr` after `P` "mentioned, not a finding", so this may be let be:
-  then say so there and drop the config.
-
-The three the model found before are fixed: C-g during `g` leaving its list
+None. The four the model found are fixed: C-g during `g` leaving its list
 running and create's late reply bringing back a task that went, which the
 main config allows (`Allow`) and `QuitLeavesProcess` and `CreateNoWentCheck`
 undo; and a reply read before `B` bringing back the branch a task merged
 into, which `CachedTasksRetarget.cfg` has (`MaxBase`) and `NoNewerBranch`
-undoes.
+undoes; and a reply read before the task's agent showed an image or a page
+taking the task back to what it showed before, or to nothing, which
+`CachedTasksShown.cfg` has (`MaxShown`) and `NoNewerShown` undoes
+(`roost-a-reply-from-before-an-image-was-shown-keeps-what-the-task-shows`).
 
 ## Bounds and what is left out
 
@@ -236,6 +227,16 @@ undoes.
   retire, inspect, take or retarget. With a task being made too, `B` once
   and one refresh ask, it passed as well: seven million states, not kept
   for the time they take.
+- `CachedTasksShown.cfg`: the one task, and none made. Its agent shows an
+  image or a page twice, so that a reply can name the one before as well
+  as none, beside taking its offer, two refresh asks, and two of stop,
+  retire, inspect or take. No `B`. With a task being made too, as
+  `CachedTasks.cfg` has, and one showing, a run was stopped unfinished
+  after half an hour on a busy machine, where `CachedTasks.cfg` took
+  twenty minutes, so the clock stays off there; with one showing each,
+  `CachedTasksRetarget.cfg` (with `B` twice), `CachedTasksOffer.cfg` and
+  `CachedTasksTwoCreates.cfg` passed as well, seven million states between
+  them, not kept for the time they take.
 - `CachedTasksTwoCreates.cfg`: two tasks asked for at once, as a draft's
   two attempts, one refresh ask, and one act, on a task made. No offers or
   `B`.
@@ -248,8 +249,9 @@ undoes.
   again, and polls coming round are not in the model. So it says the draft
   asks in a way a list in flight can't swallow, not that the row goes
   whatever fails.
-- The variants run with `MaxOver` and `MaxBase` 0, as before each, but for
-  `NoNewerOffers`, `QuietOfferRefresh` and `NoNewerBranch`. Three requests
+- The variants run with `MaxOver`, `MaxBase` and `MaxShown` 0, as before
+  each, but for `NoNewerOffers`, `QuietOfferRefresh`, `NoNewerBranch` and
+  `NoNewerShown`. Three requests
   through the helper.
   The variants run smaller.
 - Left out: forgetting a host, what is owed to measure

@@ -15,6 +15,15 @@ What each release changes, and what to do when upgrading. Newest first.
 - Roost asks for ghostel-tmux 0.4.0, which it has needed since 0.13.0: with
   0.3.0, opening a task failed with "Wrong number of arguments". When
   upgrading, update ghostel-tmux if `M-x roost-doctor` says it is older.
+- An agent's offer waits on when the task you create from it fails to start,
+  as when the repository's post-checkout hook fails: its row no longer goes
+  with nothing made. Create the draft again, do it here, or dismiss it.
+- Do it here (`e`) on an offer is refused while its draft is creating its
+  task, and an offer the agent made again is sent to it again rather than
+  answered with "Already sent".
+- An agent that offers a task in the project of a user this host doesn't
+  have (`~someone/project`) is told so, rather than getting an internal
+  error.
 - An image that fills the frame gives your windows back when it goes.
   Retiring or discarding its task, a task dropping from the list, or
   killing the image's buffer left the frame with one window, and the windows
@@ -45,6 +54,11 @@ What each release changes, and what to do when upgrading. Newest first.
   keeps to its time within one long line too. When upgrading: a search
   passes over a conversation file that is a symbolic link, so keep the
   files themselves where the agent writes them.
+- A task keeps the image or page it shows when a reply read before its
+  agent showed it, as one to opening the task, comes after the list that
+  read it since. The panel dropped its Image or Page line, or named the one
+  before, and `roost-show-image` said the task had shown no image, until
+  the next list. Nothing to do when upgrading.
 - An offer's draft that has asked for its task stays yours until the task is
   made. Before, one that got no reply, asked again and quit at the question
   about the project's setup command read as an offer you had only looked at:

@@ -1448,6 +1448,21 @@ merged it into the other."
         (when-let* ((cell (assq field old)))
           (setq task (cons cell task)))))))
 
+(defun roost--newer-shown (task old)
+  "TASK, with what OLD shows when its agent showed that since TASK was read.
+Showing an image or a page is no event of the agent's, which
+`roost--newer-events' goes by: this keeps a reply read before the agent
+showed it, such as one to opening the task, from bringing back what the
+task showed before, or nothing, for the panel to name and
+`roost-show-image' to ask for.  Only the next thing shown takes the
+place of one, so a reply that names none was read before any."
+  (let ((shown (alist-get 'at (roost--field old 'shown)))
+        (new (alist-get 'at (roost--field task 'shown))))
+    (if (not (and (stringp shown)
+                  (string< (if (stringp new) new "") shown)))
+        task
+      (cons (assq 'shown old) (assq-delete-all 'shown task)))))
+
 (defun roost--newer-left (task old)
   "TASK, with what OLD says of its pull request left to its agent, if newer.
 Leaving it, taking it back and telling the agent of it are no events of
@@ -1511,9 +1526,11 @@ A reply to create read before then can come after.")
     (let ((looked (roost--newer-look old task)))
       (setq task (roost--kept-reviews
                   (roost--newer-look (roost--newer-left
-                                      (roost--newer-branch
-                                       (roost--newer-offers (roost--newer-name (roost--newer-events task old) old)
-                                                            old)
+                                      (roost--newer-shown
+                                       (roost--newer-branch
+                                        (roost--newer-offers (roost--newer-name (roost--newer-events task old) old)
+                                                             old)
+                                        old)
                                        old)
                                       old)
                                      looked)
@@ -3915,6 +3932,13 @@ Nil too on another host, where reading it would hold up the draft."
 (defvar-local roost--compose-submitting nil
   "Non-nil while the drafted task is being created.")
 
+(defvar roost--offers-being-created nil
+  "The offers a request is making a task of now, each as (PARENT OFFER).
+The key of the task that offered it and the offer's ID, as the request
+went: the draft may be moved to another project meanwhile, or cancelled.
+One for each request under way, so one that ends leaves another's.
+`roost-offer-here' refuses one of these.")
+
 (defvar-local roost--compose-asked nil
   "The project directory and the ID the draft last asked to create its task with.
 A list, with what it said each time it asked with that ID, from
@@ -5090,8 +5114,15 @@ One of the others that fails says so, and the draft goes on."
            ;; What they are all made from, for their host to keep them to.
            (words (and others (roost--compose-words what)))
            (sent nil)
+           ;; The offer this makes a task of, as it is now: the draft's
+           ;; fields lose it if the draft is moved to another project.
+           (creating (roost--compose-offer-created fields))
            ;; The project's setup command is read for each, and asked about once.
            (roost--project-values (list t)))
+      ;; Once for each request, which ends its own: another of the same
+      ;; offer, as from a draft cancelled and opened again, keeps its own.
+      (when creating
+        (push creating roost--offers-being-created))
       (setq roost--compose-submitting t
             roost--draft-note (if others
                                   (format " Creating %s and %d more…" name (length others))
@@ -5125,6 +5156,7 @@ One of the others that fails says so, and the draft goes on."
              (plist-get fields :directory) name (plist-get fields :base) prompt
              (plist-get fields :agent)
              (lambda (task &optional found)
+               (roost--offer-created-done creating)
                ;; Its host took the offer it was made from: list it again,
                ;; so the offer's row goes now.  Not quietly, which a poll
                ;; in flight, read before the task was made, would drop.
@@ -5135,6 +5167,7 @@ One of the others that fails says so, and the draft goes on."
                    ;; offer came while you were busy there.
                    (and (plist-get fields :parent) t)))
              (lambda (err)
+               (roost--offer-created-done creating)
                (when (buffer-live-p buffer)
                  (with-current-buffer buffer
                    (setq roost--compose-submitting nil)
@@ -5167,6 +5200,7 @@ One of the others that fails says so, and the draft goes on."
         ;; Nothing reached the host, as when you quit the question about
         ;; the project's setup command: the draft is ready to create again.
         ((quit error)
+         (roost--offer-created-done creating)
          (setq roost--compose-submitting nil
                roost--draft-note nil)
          ;; Nor was it asked for what it says now; unless an attempt went,
@@ -5174,6 +5208,18 @@ One of the others that fails says so, and the draft goes on."
          (unless sent
            (setq roost--compose-asked asked))
          (signal (car err) (cdr err)))))))
+
+(defun roost--compose-offer-created (fields)
+  "The offer a draft with FIELDS makes a task of, as (PARENT OFFER), or nil.
+As `roost--offers-being-created' holds it."
+  (and (plist-get fields :parent) (plist-get fields :offer)
+       (list (plist-get fields :parent) (plist-get fields :offer))))
+
+(defun roost--offer-created-done (creating)
+  "Note that one request making a task of the offer CREATING has ended."
+  (when creating
+    (setq roost--offers-being-created
+          (cl-remove creating roost--offers-being-created :test #'equal :count 1))))
 
 (defun roost--attempt-field (group n total words)
   "What a request to create attempt N of TOTAL at one prompt says of it.
@@ -13346,7 +13392,7 @@ replaces would be answered with that one's task."
   "Have the agent that made the offer at point, or clicked in EVENT, do it.
 Its task gets the prompt Do this task here: “TITLE”, as `e' sends
 one, and the offer no longer waits.  The agent wrote the brief, so the
-title is all it needs."
+title is all it needs.  Not while its draft is creating its task."
   (interactive (list last-nonmenu-event))
   (pcase-let ((`(,task ,offer) (roost--offer-at event)))
     (when (roost--offer-project task offer)
@@ -13356,12 +13402,20 @@ title is all it needs."
                   (roost--field task 'name)))
     (unless (roost--agent-running-p task)
       (user-error "%s's agent isn't running; resume it first" (roost--field task 'name)))
+    ;; A draft's Create is on its way, and makes a task of it: though the
+    ;; draft was moved to another project since, or cancelled.
+    (when (member (list (roost--key task) (alist-get 'id offer)) roost--offers-being-created)
+      (user-error "Already creating %s as a task of its own" (alist-get 'title offer)))
     (roost--send-text task (format "Do this task here: “%s”" (alist-get 'title offer))
                       (lambda (_task) (roost--take-offer task offer))
                       nil nil
                       ;; The same for the same offer, so that asking again,
-                      ;; as after no reply, pastes it once.
-                      (concat (roost--field task 'id) (alist-get 'id offer)))))
+                      ;; as after no reply, pastes it once.  An offer its
+                      ;; agent made again keeps its ID and says when, so
+                      ;; that one is asked anew.
+                      (substring (secure-hash 'sha256 (concat (roost--field task 'id) (alist-get 'id offer)
+                                                              (alist-get 'at offer)))
+                                 0 32))))
 
 (defun roost-offer-dismiss (&optional event)
   "Dismiss the offer at point, or the one clicked in EVENT.

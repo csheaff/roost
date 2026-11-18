@@ -89,6 +89,7 @@ ROOST_TEST_MATCH, a regexp, keeps to the tests whose names match it."
 Terminals are tmux-control's, whose functions most tests stub; those of
 ghostel-tmux, the default, choose it themselves."
   `(let ((roost--tasks (make-hash-table :test 'equal))
+         (roost--offers-being-created nil)
          (roost-terminal-backend 'tmux-control)
          (roost-hosts-file (expand-file-name "hosts.json" (nth 0 ,scratch)))
          (roost-projects-file (expand-file-name "projects.json" (nth 0 ,scratch)))
@@ -16267,7 +16268,8 @@ it of the same ID's, or nil for the first."
            ;; Its agent gets a line that names it, not the brief it wrote,
            ;; once however often you ask: its ID is the offer's own.
            (roost-offer-here)
-           (should (equal sent '("budget" "Do this task here: “Fix \"add\"”" "11111111111111110a1b2c3d")))
+           (should (equal sent `("budget" "Do this task here: “Fix \"add\"”"
+                                 ,(substring (secure-hash 'sha256 "11111111111111110a1b2c3d") 0 32))))
            (should (equal acted '(("budget" "take-offer" ((offer . "0a1b2c3d"))))))
            (setq acted nil sent nil)
            (roost-offer-dismiss)
@@ -16278,6 +16280,111 @@ it of the same ID's, or nil for the first."
            (cl-letf (((symbol-function 'roost--agent-running-p) #'ignore))
              (should-error (roost-offer-here) :type 'user-error))
            (should-not (or acted sent))))))))
+
+(ert-deftest roost-an-offer-whose-task-is-being-created-is-not-done-here ()
+  ;; Its draft's Create is on its way: Do it here as well would have the
+  ;; agent do the work and a new task do it too.
+  (roost-test--isolated
+   (let ((default-directory "/tmp/") (roost--current-task nil) made failed sent
+         (offer '((id . "0a1b2c3d") (title . "Fix add") (brief . "add() subtracts."))))
+     (save-window-excursion
+       (delete-other-windows)
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--act) #'ignore)
+                     ((symbol-function 'roost--compose-integration) (lambda (&rest _) "main"))
+                     ((symbol-function 'roost--create-task)
+                      (lambda (_directory _name _base _prompt _agent &optional on-success on-error &rest _)
+                        (setq made on-success failed on-error)))
+                     ((symbol-function 'roost--send-text)
+                      (lambda (&rest arguments) (setq sent arguments))))
+             (let ((task (roost--cache-task "dev" (append `((name . "budget") (repo . "/srv/ledger") (live . t)
+                                                            (integrationBranch . "main") (offers ,offer))
+                                                          (roost-test--task "1111111111111111" "ready")))))
+               (roost--compose-offer task offer)
+               (with-temp-buffer
+                 (roost-dashboard-mode)
+                 (roost--render-dashboard)
+                 (goto-char (roost--offer-row (list (roost--key task) "0a1b2c3d")))
+                 ;; Only looked at, it can be done here still.
+                 (roost-offer-here)
+                 (should sent)
+                 (setq sent nil)
+                 (with-current-buffer roost--compose-buffer (roost-compose-submit))
+                 (should made)
+                 (should (string-match-p "Already creating Fix add"
+                                         (cadr (should-error (roost-offer-here) :type 'user-error))))
+                 (should-not sent)
+                 ;; Nor once the draft is moved to another project meanwhile,
+                 ;; which makes it no draft of the offer: the request is out.
+                 (with-current-buffer roost--compose-buffer
+                   (roost--compose-move "/tmp/roost-elsewhere/")
+                   (should-not (plist-get roost--compose-fields :offer)))
+                 (should (string-match-p "Already creating Fix add"
+                                         (cadr (should-error (roost-offer-here) :type 'user-error))))
+                 (should-not sent)
+                 ;; Nor once the draft is cancelled, which stops no request.
+                 (kill-buffer roost--compose-buffer)
+                 (should (string-match-p "Already creating Fix add"
+                                         (cadr (should-error (roost-offer-here) :type 'user-error))))
+                 (should-not sent)
+                 ;; Opened and created again, a second request is out: the
+                 ;; first one failing leaves that one's.
+                 (let ((first failed))
+                   (save-current-buffer
+                     (roost--compose-offer task offer)
+                     (with-current-buffer roost--compose-buffer (roost-compose-submit)))
+                   (funcall first "Could not create it")
+                   (should (string-match-p "Already creating Fix add"
+                                           (cadr (should-error (roost-offer-here) :type 'user-error))))
+                   ;; Moved to another project, then failed too: the offer
+                   ;; can be done here again.
+                   (with-current-buffer roost--compose-buffer
+                     (roost--compose-move "/tmp/roost-elsewhere/"))
+                   (funcall failed "Could not create it")
+                   (should-not roost--offers-being-created)
+                   (roost-offer-here)
+                   (should sent)
+                   (setq sent nil))
+                 ;; Another offer of its agent's can.
+                 (roost--cache-task "dev" (append `((name . "budget") (repo . "/srv/ledger") (live . t)
+                                                    (integrationBranch . "main")
+                                                    (offers ,offer ((id . "1b2c3d4e") (title . "Lint") (brief . "Lint."))))
+                                                  (roost-test--task "1111111111111111" "ready")))
+                 (roost--render-dashboard)
+                 (goto-char (roost--offer-row (list (roost--key task) "1b2c3d4e")))
+                 (roost-offer-here)
+                 (should (equal (cadr sent) "Do this task here: “Lint”")))))
+         (when (get-buffer roost--compose-buffer)
+           (kill-buffer roost--compose-buffer)))))))
+
+(ert-deftest roost-an-offer-made-again-is-asked-of-its-agent-again ()
+  ;; Do it here went, and its take was lost: the offer waits on, and its
+  ;; agent offers it again, which keeps its ID.  Asked again, the agent
+  ;; gets the line again, rather than its host saying it went before.
+  (roost-test--isolated
+   (let ((roost--current-task nil) ids)
+     (cl-letf (((symbol-function 'roost--act) #'ignore)
+               ((symbol-function 'roost--send-text)
+                (lambda (_task _text &optional _callback _failure _look id) (push id ids))))
+       (dolist (at '("2026-11-01T10:00:00+00:00" "2026-11-01T10:00:00+00:00" "2026-11-01T10:05:00+00:00"))
+         (let ((task (roost--cache-task
+                      "dev" (append `((name . "budget") (repo . "/srv/ledger") (live . t)
+                                      (offersAt . ,at)
+                                      (offers ((id . "0a1b2c3d") (title . "Fix add") (brief . "add() subtracts.")
+                                               (at . ,at))))
+                                    (roost-test--task "1111111111111111" "ready")))))
+           (with-temp-buffer
+             (roost-dashboard-mode)
+             (roost--render-dashboard)
+             (goto-char (roost--offer-row (list (roost--key task) "0a1b2c3d")))
+             (roost-offer-here))))
+       (pcase-let ((`(,third ,second ,first) ids))
+         ;; The same offer asked twice, as after no reply, is pasted once.
+         (should (equal first second))
+         (should-not (equal second third))
+         ;; As its host takes an ID.
+         (dolist (id ids)
+           (should (string-match-p "\\`[a-f0-9]\\{16,32\\}\\'" id))))))))
 
 (ert-deftest roost-finishing-a-task-names-the-offers-that-go-with-it ()
   ;; They go with its record, and nothing else would say so.
@@ -17683,3 +17790,34 @@ report.py, and the third alone changes src/totals.py."
                (should (equal (buffer-string) "other")))
              (roost--forget-shown '("dev" "4444444444444444"))))
        (when (get-buffer "*roost image: budget*") (kill-buffer "*roost image: budget*"))))))
+
+(ert-deftest roost-a-reply-from-before-an-image-was-shown-keeps-what-the-task-shows ()
+  ;; Showing an image or a page is no event of the agent's: the task's
+  ;; updatedAt stays, as for an offer, and only `shown's own `at' says
+  ;; which reply knows it better.  A reply its host read before the agent
+  ;; showed it, as one to opening the task, can come after the list that
+  ;; read it since.
+  (roost-test--isolated
+   (let ((shown '((id . "0a1b2c3d") (name . "plot.png") (kind . "png") (at . "2026-11-17T10:00:01+00:00")))
+         (before '((id . "99999999") (name . "old.png") (kind . "png") (at . "2026-11-17T09:00:00+00:00"))))
+     (cl-letf (((symbol-function 'roost--request) #'ignore))
+       ;; Emacs lists the task, which has shown nothing yet.
+       (roost--apply-snapshot "dev" (list (roost-test--task "a" "ready")))
+       (let ((listed (gethash '("dev" "a") roost--tasks)))
+         ;; Its host answers a request to open it (inspect), read now; the
+         ;; reply is on its way.  The agent shows plot.png, and a poll,
+         ;; read after that, lands first.
+         (roost--apply-snapshot "dev" (list (append `((shown . ,shown)) (roost-test--task "a" "ready"))))
+         (should (equal (roost--field (gethash '("dev" "a") roost--tasks) 'shown) shown))
+         ;; Then the reply read before it.
+         (roost--cache-reply "dev" (roost-test--task "a" "ready") listed)
+         ;; The task still shows what it showed: the panel names it, and
+         ;; `roost-show-image' doesn't say it has shown no image.
+         (should (equal (roost--field (gethash '("dev" "a") roost--tasks) 'shown) shown))
+         ;; Nor does a reply read while it showed an older one bring that back.
+         (roost--cache-reply "dev" (append `((shown . ,before)) (roost-test--task "a" "ready")) listed)
+         (should (equal (roost--field (gethash '("dev" "a") roost--tasks) 'shown) shown))
+         ;; The next it shows takes its place, from a reply as from a list.
+         (let ((next '((id . "4e5f6a7b") (name . "a page") (kind . "html") (at . "2026-11-17T10:00:02+00:00"))))
+           (roost--cache-reply "dev" (append `((shown . ,next)) (roost-test--task "a" "ready")) listed)
+           (should (equal (roost--field (gethash '("dev" "a") roost--tasks) 'shown) next))))))))
