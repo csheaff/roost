@@ -192,6 +192,13 @@ code before it was fixed.
 | VIEWS-16 | S3 | An offer's draft that got no reply, asked again and quit at the question about the setup command, reads as one you only looked at: `RET` on its offer starts it anew, and `C-c C-c` makes a second task | [The new task draft](#the-new-task-draft) | Fixed, `roost-an-offers-draft-that-asked-keeps-its-creation-id` |
 | REQUESTS-10 | S4 | A reply read before the task's agent showed an image or a page, as one to opening the task, and arriving after the list that read it since takes the task back to what it showed before, or to nothing: the panel drops or misnames its Image or Page line, and `roost-show-image` says it has shown none, until the next list (found 2026-11-17) | [Cached task](#cached-task) | Fixed, `roost-a-reply-from-before-an-image-was-shown-keeps-what-the-task-shows` |
 
+### Found by the bug hunt, 2026-11-18
+
+| Finding | Sev | What goes wrong | Machine | Status |
+| --- | --- | --- | --- | --- |
+| HOST-RETIRE-1 | S1 | Something the agent left running, as a server started with `nohup`, writes into the worktree after the last check and before Git removes it, and retire or discard deletes that file and says it went well; with a submodule, which Roost removes with `--force`, every time | [Finishing a task](#finishing-a-task) | Fixed: `stop` ends what the agent and the task's shell left running, refusing while any of it won't end, and a worktree with submodules is checked again just before Git; `test/test_left_running.py` |
+| HOST-RETIRE-2 | S1 | A process outside the task, one Roost can't tell is the task's (its environment hidden, as for Apple's own programs, or cleared, outside the panes' sessions) or yours elsewhere, writes between the last check and Git's removal, or into a folder Git has yet to reach: that file goes | [Finishing a task](#finishing-a-task) | Open question: narrowed to those milliseconds, not closed. Closing it would take Roost deleting the worktree itself, keeping each file changed since the check |
+
 ## A task on its host
 
 The helper's records and what it does to Git, from a task being asked for to its
@@ -551,8 +558,8 @@ What each step leaves if it stops there, and what asking again does.
 | 5 | `check_worktree`, clean, submodules, Git lock, agent work | registry | refused, nothing changed |
 | 6 | branch moved from `expect`, then merge, into `integrationBranch` as the record has it then; the record read again after, with `require_finished`, `require_clean` and `require_offers_named` again | registry, released while Git merges | see next machine; a second merge finds it there. Refused after: merged, and not retired |
 | 7 | `safe_to_delete`, by `integrationBranch` and `startCommit` as the record has them now; save `retiringCommit` | registry | |
-| 8 | `stop` | registry | task stopped; agent's window gone |
-| 9 | `remove_worktrees` | released | worktree partly gone; `put_back_removed` restores it |
+| 8 | `stop`: what is the task's, by the ownership rule below, noted as `leftRunning` (PID and start) before the panes close; the agent's and shell's panes closed; then all of it ended, SIGTERM then SIGKILL (`end_left_running`) | registry | task stopped; agent's window gone, nothing that is the task's still running; or refused, naming what won't end, `leftRunning` kept, so that the next request, panes gone, still ends or refuses on it |
+| 9 | `remove_worktrees`: teardown, `require_clean`, submodules, and with submodules, which only `--force` removes, both again just before Git | released | worktree partly gone; `put_back_removed` restores it |
 | 10 | staging folder, `unregister_gone`, `delete_branch` | registry | branch still there, `check_worktree` finds no folder and goes on |
 | 11 | `Store.remove` | registry | record gone; attachments, what its agent showed and a page it was writing first, so a kill between keeps the record |
 | 12 | `delete_remote_branch` | none | remote branch stays; nothing else depends on it |
@@ -560,16 +567,32 @@ What each step leaves if it stops there, and what asking again does.
 `discard`: steps 2, 4, then `check_worktree(branch=False)`; the dry run stops
 there. Then `expect` against the branch, `told` against `discard_losses` counted
 again, `offers` against the offers the record holds (`require_offers_named`),
-`stop`, removal with force, branch, record. No checkpoint: `expect`, `told` and
+`stop`, `told` counted once more, now that nothing the agent left running writes
+there (refused then with the agent stopped), removal with force, branch, record. No checkpoint: `expect`, `told` and
 `offers` are the guards, and a retry asks Emacs for a new dry run.
 
 `forget`: step 2, then no live pane, `require_offers_named`, the window closed and
 `Store.remove`, in one hold of the registry lock.
 
+What `stop` ends, the one rule (`left_running`, with `pane_sessions`), read before the panes close:
+- the agent's and the shell's panes' own sessions;
+- the sessions of the commands the agent, or its relay (which leads one of its own), runs: each begun directly by a process of the agent's;
+- a process with the task's `ROOST_TASK_ID`, or its shell's `ROOST_TASK_SHELL`, in its environment (never its arguments), in a session whose leader has gone, as a server started with `nohup` from a command that has since ended;
+- what an earlier stop noted in `leftRunning`, while each runs with the start it had;
+- never a session leader still running that is none of those, nor any process of its session: a daemon a command starts, as a build tool's server, or one a command you run in the shell starts, which other tasks may share.
+
 Invariants:
 - I1. No uncommitted work and no unmerged commit is lost by retire: checked
-  before the agent stops (`require_clean`), again after (`remove_worktrees`), and
-  the branch is deleted only at the commit verified. Holds, fuzzed against
+  before the agent stops (`require_clean`), again after (`remove_worktrees`),
+  by Git itself as it removes the worktree, or, with submodules, which Git
+  removes only with `--force`, by Roost again just before, and the branch is
+  deleted only at the commit verified. `stop` ends what the agent and the
+  task's shell left running first, so nothing they started writes after that
+  last check, but for a process whose environment the host hides (macOS hides
+  Apple's own programs') that left the pane's session, or one that cleared its
+  environment. Such a process, or yours outside the task, can still write as
+  Git deletes the worktree, and a file it writes into a folder Git has yet to
+  reach goes. Holds, fuzzed against
   commits landing throughout. What keeps that commit is a branch that stays: the
   branch it merges into, wherever `retarget` has put that, or, for a task that never
   committed, any other. Not one that is going: the branch of a worktree its agent
@@ -875,7 +898,7 @@ Invariants:
 | --- | --- | --- | --- | --- | --- |
 | (none) | create | | `starting` | record saved, then spawned, under one lock | `make_task` |
 | any | resume | pane not live; no agent elsewhere; worktree there | `starting` | new `runId`, `error` None, request forgotten; `lastEvent`, `exitCode`, `statusBeforeCrash` left as they were | `resume`, `spawn` |
-| any but `retired` | stop | | `stopped` | agent's pane and shell closed if owned; `paneId`, `windowId` None; seen carried over | `stop` |
+| any but `retired` | stop | | `stopped` | agent's pane and shell closed if owned, and what they left running ended; `paneId`, `windowId` None; seen carried over | `stop` |
 | not `stopped`/`retired`, this run | agent's process ended | | `exited` if code 0, else `failed` | `exitCode`, `error`, `endedRun`; after `finish()` | `runner` |
 | same | setup, copy or submodules failed | | `failed` | `error` is the reason; pane shows it | `runner` |
 | not `ENDED` | poll: pane not live | tmux answered | `crashed` | `statusBeforeCrash`, `seenBeforeCrash` | `list_tasks` |
