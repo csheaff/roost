@@ -3223,14 +3223,18 @@ answer to the task's terminal.  A question you had left open when you
 asked for the task is quit first, by `roost--quit-questions-left-open'."
   (if (not (active-minibuffer-window))
       (funcall function)
-    (cl-incf roost--held-for-minibuffer)
     (letrec ((done (lambda ()
                      (cl-decf roost--held-for-minibuffer)
                      (remove-hook 'minibuffer-exit-hook done)
                      ;; Once its window has given the selection back.
                      (run-at-time 0 nil #'roost--when-out-of-minibuffer function))))
-      ;; In turn: a terminal that goes, then the one that takes its place.
-      (add-hook 'minibuffer-exit-hook done t))))
+      ;; One held already, alike, as the same function held twice, goes
+      ;; for both: `add-hook' adds it once to the global value, and the
+      ;; count with it.
+      (unless (member done (default-value 'minibuffer-exit-hook))
+        (cl-incf roost--held-for-minibuffer)
+        ;; In turn: a terminal that goes, then the one that takes its place.
+        (add-hook 'minibuffer-exit-hook done t)))))
 
 (defun roost--close-buffer (buffer)
   "Close BUFFER, as a host's reply says it is done, and the windows made for it.
