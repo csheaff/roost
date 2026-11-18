@@ -12697,8 +12697,16 @@ A test stubs the functions of ghostel-tmux it reaches."
                ;; batch Emacs leaves out.
                (with-current-buffer (window-buffer)
                  (run-hook-with-args 'window-buffer-change-functions (selected-window)))
-               ;; Not from the hook itself, but once the windows are drawn.
+               ;; Not from the hook itself, but once the windows are drawn;
+               ;; nor while you answer a question, whose end would put the
+               ;; stand-in back in its window.
                (should (eq (window-buffer) stand-in))
+               (cl-letf (((symbol-function 'active-minibuffer-window) #'minibuffer-window))
+                 (sleep-for 0.05))
+               (should (eq (window-buffer) stand-in))
+               (should (buffer-live-p stand-in))
+               ;; The question answered or quit, the pane takes the window.
+               (run-hooks 'minibuffer-exit-hook)
                (sleep-for 0.05)
                (should (eq (window-buffer) pane))
                (should-not (buffer-live-p stand-in)))))
