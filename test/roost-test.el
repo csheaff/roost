@@ -15630,6 +15630,54 @@ it of the same ID's, or nil for the first."
          (when (get-buffer roost--compose-buffer)
            (kill-buffer roost--compose-buffer)))))))
 
+(ert-deftest roost-an-offers-draft-that-asked-keeps-its-creation-id ()
+  ;; NewTaskDraft.finding-quit-then-offer.cfg.  An offer's draft whose
+  ;; request got no reply asks again, and you quit the question about the
+  ;; project's setup command: its header says nothing of the request any
+  ;; more, but its host may have made the task.  RET on the offer shows
+  ;; the draft as it is, and asking again names the same task.
+  (roost-test--isolated
+   (let ((default-directory "/tmp/") (xterm-mouse-mode t) ids (calls 0)
+         (offer '((id . "0a1b2c3d") (title . "Fix add in calc.py") (brief . "add() subtracts."))))
+     (save-window-excursion
+       (delete-other-windows)
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--create-task)
+                      (lambda (_directory _name _base _prompt _agent &optional _made failed extra)
+                        (pcase (cl-incf calls)
+                          ;; As at the question about the setup command.
+                          (2 (signal 'quit nil))
+                          (_ (push (alist-get 'createId extra) ids)
+                             (funcall failed (propertize "No reply after 60s" 'roost-no-reply t))))))
+                     ((symbol-function 'roost--refresh-host) #'ignore)
+                     ((symbol-function 'roost-watch-mode) #'ignore)
+                     ((symbol-function 'yes-or-no-p) (lambda (&rest _) (error "Asked"))))
+             (let ((task (roost--cache-task "dev" (append `((name . "budget") (repo . "/srv/ledger")
+                                                            (live . t) (offers ,offer))
+                                                          (roost-test--task "1111111111111111" "ready")))))
+               (roost--compose-offer task offer)
+               (let ((draft (get-buffer roost--compose-buffer)))
+                 (with-current-buffer draft
+                   (roost-compose-submit)
+                   (should (condition-case nil (progn (roost-compose-submit) nil) (quit t)))
+                   (should-not roost--compose-submitting)
+                   (should-not roost--draft-note))
+                 (switch-to-buffer "*scratch*")
+                 (roost--compose-offer task offer)
+                 (should (eq draft (get-buffer roost--compose-buffer)))
+                 (with-current-buffer (get-buffer roost--compose-buffer)
+                   (roost-compose-submit))
+                 (should (= (length ids) 2))
+                 (should (equal (car ids) (cadr ids)))
+                 ;; Nor is it one you only looked at, to close unasked.
+                 (with-current-buffer draft
+                   (setq roost--draft-note nil)
+                   (should-not (roost--compose-looked-p))
+                   (should-error (roost-compose-cancel))
+                   (should-error (roost-compose-dismiss-offer))))))
+         (when (get-buffer roost--compose-buffer)
+           (kill-buffer roost--compose-buffer)))))))
+
 (ert-deftest roost-an-offer-opens-as-an-ordinary-draft-and-waits ()
   ;; Filled in from the offer and the task that made it.  Opening it only
   ;; shows it, and Create makes a task under that one, whose host takes
