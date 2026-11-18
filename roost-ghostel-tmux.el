@@ -345,6 +345,10 @@ pane: as when you are back in the workspace that showed it."
               ((eq (buffer-local-value 'major-mode stand-in) 'roost-ghostel-tmux-connecting-mode))
               (controller (buffer-local-value 'roost-ghostel-tmux--stands-in-for stand-in))
               ((memq controller (ghostel-tmux-controllers)))
+              ;; Its own session's still: ghostel-tmux's own command can
+              ;; have switched the controller to another since.
+              ((equal (buffer-local-value 'roost-ghostel-tmux--place controller)
+                      (buffer-local-value 'roost-ghostel-tmux--place stand-in)))
               (pane (roost-ghostel-tmux--pane controller)))
     (roost-ghostel-tmux--give-way stand-in pane)))
 
@@ -375,6 +379,8 @@ shows it when you are back: see `roost-ghostel-tmux--give-way'."
                (not (get-buffer-window buffer t)))
       (let ((controller (buffer-local-value 'roost-ghostel-tmux--stands-in-for buffer)))
         (unless (and (memq controller (ghostel-tmux-controllers))
+                     (equal (buffer-local-value 'roost-ghostel-tmux--place controller)
+                            (buffer-local-value 'roost-ghostel-tmux--place buffer))
                      (or (not (roost-ghostel-tmux--pane controller))
                          (roost--workspace-backend)))
           (kill-buffer buffer))))))
@@ -447,6 +453,8 @@ tmux no longer has."
     ;; Roost do.
     (when-let* ((session (ghostel-tmux-session-name))
                 ((not (equal session (nth 2 place)))))
+      ;; What stood in for the session it left has no pane coming.
+      (roost-ghostel-tmux--not-attached place t)
       (setq place (list (nth 0 place) (nth 1 place) session)
             roost-ghostel-tmux--place place))
     (setq roost-ghostel-tmux--was-attached t)
@@ -496,11 +504,17 @@ that ended.  The hook could say which."
 Eight times, about two and a half minutes: after that, opening the task
 attaches it."
   (let ((tries (gethash place roost-ghostel-tmux--lost 0)))
-    (if (>= tries 8)
-        (progn (remhash place roost-ghostel-tmux--lost)
-               (roost-ghostel-tmux--not-attached place))
+    (cond
+     ;; Attaching already, as when you opened its task while the host was
+     ;; asked: that try says how it went.
+     ((roost-ghostel-tmux--find-controller place)
+      (remhash place roost-ghostel-tmux--lost))
+     ((>= tries 8)
+      (remhash place roost-ghostel-tmux--lost)
+      (roost-ghostel-tmux--not-attached place))
+     (t
       (puthash place (1+ tries) roost-ghostel-tmux--lost)
-      (run-at-time (min 30 (expt 2 tries)) nil #'roost-ghostel-tmux--try-again place))))
+      (run-at-time (min 30 (expt 2 tries)) nil #'roost-ghostel-tmux--try-again place)))))
 
 (defun roost-ghostel-tmux--try-again (place)
   "Attach the session at PLACE if its host answers, else try later.

@@ -12486,7 +12486,8 @@ A test stubs the functions of ghostel-tmux it reaches."
          (place '("far" "main" "one"))
          delays)
      (cl-letf (((symbol-function 'run-at-time)
-                (lambda (delay &rest _) (push delay delays) nil)))
+                (lambda (delay &rest _) (push delay delays) nil))
+               ((symbol-function 'ghostel-tmux-controllers) #'ignore))
        ;; Eight tries, and a ninth call that gives up.
        (dotimes (_ 9) (roost-ghostel-tmux--attach-again place)))
      (should (equal (nreverse delays) '(1 2 4 8 16 30 30 30)))
@@ -12611,7 +12612,22 @@ A test stubs the functions of ghostel-tmux it reaches."
                ;; Detached, as Roost does before it stops a task: it says that.
                (open)
                (ends t)
-               (should (string-match-p "\\`Detached from one\\." (shown))))))
+               (should (string-match-p "\\`Detached from one\\." (shown)))
+               ;; A host asked for the last time answers once you have
+               ;; opened the task yourself: that try is still connecting.
+               (open)
+               (puthash place 8 roost-ghostel-tmux--lost)
+               (roost-ghostel-tmux--attach-again place)
+               (should (string-match-p "\\`Connecting to one" (shown)))
+               (should-not (gethash place roost-ghostel-tmux--lost))
+               ;; ghostel-tmux's own command switches the controller to
+               ;; another session: the pane that comes is not this one's.
+               (let ((stand-in (window-buffer)))
+                 (with-current-buffer controller
+                   (setq roost-ghostel-tmux--place '("far" "main" "two")))
+                 (setq arrived t)
+                 (roost-ghostel-tmux--stand-in-shown (selected-window))
+                 (should (eq (window-buffer) stand-in))))))
        (when (buffer-live-p controller) (kill-buffer controller))
        (kill-buffer pane)
        (roost-test--kill-stand-ins)))))
