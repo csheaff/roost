@@ -12653,7 +12653,7 @@ A test stubs the functions of ghostel-tmux it reaches."
                  ;; asks, it says its own session still.
                  (with-current-buffer stand-in
                    (should (equal (roost-ghostel-tmux--buffer-place) place)))
-                 (roost-ghostel-tmux--stand-in-shown (selected-window))
+                 (roost-ghostel-tmux--stand-in-gives-way (selected-window))
                  (should (eq (window-buffer) stand-in))
                  (should (string-match-p "\\`Detached from one\\." (shown)))))))
        (when (buffer-live-p controller) (kill-buffer controller))
@@ -12697,6 +12697,9 @@ A test stubs the functions of ghostel-tmux it reaches."
                ;; batch Emacs leaves out.
                (with-current-buffer (window-buffer)
                  (run-hook-with-args 'window-buffer-change-functions (selected-window)))
+               ;; Not from the hook itself, but once the windows are drawn.
+               (should (eq (window-buffer) stand-in))
+               (sleep-for 0.05)
                (should (eq (window-buffer) pane))
                (should-not (buffer-live-p stand-in)))))
        (while (cdr (roost--tabs)) (tab-bar-close-tab))

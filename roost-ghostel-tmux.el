@@ -338,10 +338,19 @@ some other buffer in its place."
       (kill-buffer stand-in))))
 
 (defun roost-ghostel-tmux--stand-in-shown (window)
-  "Show the pane that has come in WINDOW, which shows its stand-in now.
+  "Have the pane that has come take WINDOW, which shows its stand-in now.
 On `window-buffer-change-functions', in a buffer that stands in for a
-pane: as when you are back in the workspace that showed it."
-  (when-let* ((stand-in (window-buffer window))
+pane: as when you are back in the workspace that showed it.  Not from
+the hook itself, which runs as the windows are redrawn, before
+ghostel-tmux has fitted the pane to its window; nor while you answer a
+question, whose end would put the stand-in back."
+  (run-at-time 0 nil #'roost--when-out-of-minibuffer
+               (lambda () (roost-ghostel-tmux--stand-in-gives-way window))))
+
+(defun roost-ghostel-tmux--stand-in-gives-way (window)
+  "Show the pane that has come in WINDOW, if it shows its stand-in still."
+  (when-let* (((window-live-p window))
+              (stand-in (window-buffer window))
               ((eq (buffer-local-value 'major-mode stand-in) 'roost-ghostel-tmux-connecting-mode))
               (controller (buffer-local-value 'roost-ghostel-tmux--stands-in-for stand-in))
               ((memq controller (ghostel-tmux-controllers)))
