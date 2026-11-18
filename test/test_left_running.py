@@ -193,6 +193,50 @@ class LeftRunning(unittest.TestCase):
         self.assertEqual(later.wait(timeout=10), -15)
         self.assertNotIn("leftRunning", box.record(task["id"]))
 
+    def test_a_stop_killed_once_the_panes_closed_is_finished_by_the_next(self):
+        """The command the agent runs, in a session of its own, is noted
+        before the panes close: once they have, nothing else leads to it."""
+        box = self.box
+        task = box.create()
+        command = box.root / "command.py"
+        command.write_text(FOREVER)
+        pane = box.record(task["id"])["paneId"]
+        box.tmux("send-keys", "-t", pane, "-l",
+                 "ask " + shlex.join([sys.executable, "-c", OWN_SESSION, sys.executable, str(command)]))
+        box.tmux("send-keys", "-t", pane, "Enter")
+        box.wait_for(task, "permission")
+        box.tmux("send-keys", "-t", pane, "-l", "yes")
+        box.tmux("send-keys", "-t", pane, "Enter")
+        deadline = time.monotonic() + 10
+        while not self.running(command, last=True) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertTrue(self.running(command, last=True), "the agent started nothing")
+        box.arm("after", match="kill-window")
+        self.assertIsNone(box.helper("stop", id=task["id"]))
+        box.disarm()
+        self.assertTrue(self.running(command, last=True), "ended before the helper died")
+        self.assertTrue(box.record(task["id"]).get("leftRunning"))
+        self.assertTrue(box.helper("stop", id=task["id"])["ok"])
+        self.assertFalse(self.running(command), "still running after stop")
+        self.assertNotIn("leftRunning", box.record(task["id"]))
+
+    def test_what_a_teardown_left_running_is_said_as_the_teardown_s(self):
+        """It writes as the submodules are read: the last check says so, as
+        the first does, rather than offer to discard it as yours."""
+        box = self.box
+        task = self.with_submodule()
+        teardown = "nohup %s >/dev/null 2>&1 &" % shlex.join(map(str, self.writer(task)))
+        box.arm("before", 10 ** 9)
+        reply = box.helper("retire", id=task["id"], teardown=teardown)
+        box.disarm()
+        deadline = time.monotonic() + 10
+        while not self.written.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertTrue(self.written.exists(), "the teardown's writer never wrote")
+        self.assertEqual(self.lost(reply), [])
+        self.assertFalse(reply["ok"], reply)
+        self.assertIn("After the teardown command ran", reply["error"])
+
     def test_stop_leaves_a_daemon_the_agent_started(self):
         """A server of a build tool's, or an ssh connection, that the agent
         started and other tasks share, leads a session of its own."""
