@@ -558,7 +558,7 @@ What each step leaves if it stops there, and what asking again does.
 | 5 | `check_worktree`, clean, submodules, Git lock, agent work | registry | refused, nothing changed |
 | 6 | branch moved from `expect`, then merge, into `integrationBranch` as the record has it then; the record read again after, with `require_finished`, `require_clean` and `require_offers_named` again | registry, released while Git merges | see next machine; a second merge finds it there. Refused after: merged, and not retired |
 | 7 | `safe_to_delete`, by `integrationBranch` and `startCommit` as the record has them now; save `retiringCommit` | registry | |
-| 8 | `stop`: the agent's and shell's panes closed, then what they left running ended, as a server started with nohup: what is in their panes' sessions or in a session a process of those began, as Claude Code runs each command in a session of its own (not one such a command begins, as a daemon), and what has the task's `ROOST_TASK_ID`, or the task's shell's `ROOST_TASK_SHELL`, in its environment (never its arguments) in a session whose first process has ended; not a daemon, which leads its own (`end_left_running`). What it finds is saved as `leftRunning`, PID and start, before the panes close, kept until all of it has ended; what won't end after SIGKILL refuses | registry | task stopped; agent's window gone, nothing it started still running but daemons; or refused, `leftRunning` kept, so that the next request, panes gone, still ends or refuses on it |
+| 8 | `stop`: what is the task's, by the ownership rule below, noted as `leftRunning` (PID and start) before the panes close; the agent's and shell's panes closed; then all of it ended, SIGTERM then SIGKILL (`end_left_running`) | registry | task stopped; agent's window gone, nothing that is the task's still running; or refused, naming what won't end, `leftRunning` kept, so that the next request, panes gone, still ends or refuses on it |
 | 9 | `remove_worktrees`: teardown, `require_clean`, submodules, and with submodules, which only `--force` removes, both again just before Git | released | worktree partly gone; `put_back_removed` restores it |
 | 10 | staging folder, `unregister_gone`, `delete_branch` | registry | branch still there, `check_worktree` finds no folder and goes on |
 | 11 | `Store.remove` | registry | record gone; attachments, what its agent showed and a page it was writing first, so a kill between keeps the record |
@@ -573,6 +573,13 @@ there (refused then with the agent stopped), removal with force, branch, record.
 
 `forget`: step 2, then no live pane, `require_offers_named`, the window closed and
 `Store.remove`, in one hold of the registry lock.
+
+What `stop` ends, the one rule (`left_running`, with `pane_sessions`), read before the panes close:
+- the agent's and the shell's panes' own sessions;
+- the sessions of the commands the agent, or its relay (which leads one of its own), runs: each begun directly by a process of the agent's;
+- a process with the task's `ROOST_TASK_ID`, or its shell's `ROOST_TASK_SHELL`, in its environment (never its arguments), in a session whose leader has gone, as a server started with `nohup` from a command that has since ended;
+- what an earlier stop noted in `leftRunning`, while each runs with the start it had;
+- never a session leader still running that is none of those, nor any process of its session: a daemon a command starts, as a build tool's server, or one a command you run in the shell starts, which other tasks may share.
 
 Invariants:
 - I1. No uncommitted work and no unmerged commit is lost by retire: checked

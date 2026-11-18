@@ -180,6 +180,29 @@ class LeftRunning(unittest.TestCase):
         self.assertTrue(box.helper("stop", id=task["id"])["ok"])
         self.assertFalse(self.running(served), "still running after stop")
 
+    def test_stop_leaves_a_daemon_a_command_in_the_task_shell_starts(self):
+        """What a command you run in the shell starts in a session of its
+        own, as a build tool's daemon, is spared; the command is not."""
+        box = self.box
+        task = box.create()
+        reply = box.helper("shell", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        daemon = box.root / "daemon.py"
+        daemon.write_text(FOREVER)
+        launcher = box.root / "launcher.py"
+        launcher.write_text("import subprocess, sys, time\n"
+                            "subprocess.Popen([sys.executable, %r], start_new_session=True)\n"
+                            "while True: time.sleep(1)\n" % str(daemon))
+        box.tmux("send-keys", "-t", reply["result"]["shellPaneId"], "-l", shlex.join([sys.executable, str(launcher)]))
+        box.tmux("send-keys", "-t", reply["result"]["shellPaneId"], "Enter")
+        deadline = time.monotonic() + 10
+        while not self.running(daemon, last=True) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertTrue(self.running(daemon, last=True), "no daemon started")
+        self.assertTrue(box.helper("stop", id=task["id"])["ok"])
+        self.assertFalse(self.running(launcher, last=True), "the command still runs after stop")
+        self.assertTrue(self.running(daemon, last=True), "a daemon was ended")
+
     def test_stop_ends_what_an_earlier_stop_could_not(self):
         box = self.box
         task = box.create()

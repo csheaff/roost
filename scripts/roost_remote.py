@@ -4496,56 +4496,64 @@ def add_git_stats(tasks):
 
 
 def pane_sessions(task, inventory):
-    """The process sessions of TASK's agent and shell panes, as INVENTORY
-    has them: tmux starts each pane's process in a session of its own,
-    whose ID is that process's PID. A dead pane's PID, or the record's for
-    one that names none, counts only while no process has it: once its
-    session has ended, another may. Those of what a live pane's process
-    runs, as the session Claude Code starts for each command, count too:
-    read before the panes close, as once they do, nothing leads there."""
+    """The process sessions whose processes are TASK's to end, by the rule
+    `left_running` keeps, as INVENTORY has the panes, read before they close,
+    as once they have, nothing leads to a command's session: the agent's
+    and the shell's panes' own sessions, tmux starting each pane's process
+    in one of its own, whose ID is that process's PID; and the sessions of
+    the commands the agent runs, as Claude Code starts each in one of its
+    own, begun by a process of the agent's pane's session, or of the one a
+    relayed agent leads, begun by that pane's process. Not one such a
+    command begins, as a build tool's daemon other tasks share does, nor
+    one begun from the shell: what you run there is yours. A dead pane's
+    PID, or the record's for one that names none, counts only while no
+    process has it: once its session has ended, another may."""
     pane = owned_pane(task, inventory)
     shell = inventory.get(task.get("shellPaneId"))
     panes = [(pane, pane and (pane["pid"] or task.get("panePid")))]
     if shell and shell["task"] == task["id"]:
         panes.append((shell, shell["pid"]))
-    sessions = set()
+    sessions = []
     for found, pid in panes:
         if not found or not isinstance(pid, int) or pid <= 1:
+            sessions.append(None)
             continue
         if found["dead"]:
             try:
                 os.kill(pid, 0)
+                sessions.append(None)
                 continue
             except ProcessLookupError:
                 pass
             except OSError:
+                sessions.append(None)
                 continue
-        sessions.add(pid)
+        sessions.append(pid)
+    agent = sessions[0]
+    found = {pid for pid in sessions if pid}
     table = processes()
+    if agent not in table:
+        return found
     children = collections.defaultdict(list)
     for child, (parent, _) in table.items():
         children[parent].append(child)
-    # Only a session begun by a process of the panes' own sessions, as each
-    # command Claude Code runs: not one a command of its starts, as a build
-    # tool's daemon other tasks share does, which leads its own. A relayed
-    # agent leads one of its own, begun by its pane's process: its commands'
-    # sessions count too.
-    panes_own = set(sessions)
-    for pid in list(panes_own):
-        for child in children.get(pid, ()):
-            with contextlib.suppress(OSError):
-                if os.getsid(child) == child:
-                    panes_own.add(child)
-    pending = [pid for pid in sessions if pid in table]
+    # The agent's own: its pane's session, and a relayed agent's.
+    agents = {agent}
+    for child in children.get(agent, ()):
+        with contextlib.suppress(OSError):
+            if os.getsid(child) == child:
+                agents.add(child)
+    found |= agents
+    # Each session one of those begins: the commands the agent runs.
+    pending = [agent]
     while pending:
         parent = pending.pop()
         for child in children.pop(parent, ()):
             with contextlib.suppress(OSError):
-                sid = os.getsid(child)
-                if sid == child and os.getsid(parent) in panes_own:
-                    sessions.add(sid)
+                if os.getsid(child) == child and os.getsid(parent) in agents:
+                    found.add(child)
             pending.append(child)
-    return sessions
+    return found
 
 
 def own_line():
@@ -4598,14 +4606,19 @@ def task_environment(pid):
 
 
 def left_running(task_id, sessions, own):
-    """The PIDs of what still runs in SESSIONS, or that the task's agent or
-    shell started (`ROOST_TASK_ID` or `ROOST_TASK_SHELL` its TASK_ID in its
-    environment, never its arguments) in a session whose first process has
-    ended: wherever it went, as a server started with nohup from the
-    session Claude Code ran a command in, but for those whose environment
-    the system hides, as macOS does Apple's own programs'. Not a daemon it
-    started, as a build tool's server or an ssh connection other tasks
-    share, which leads a session of its own. Never one in OWN."""
+    """The PIDs of what TASK_ID's stop ends, by this rule, the one place
+    it is said:
+    - every process in SESSIONS (`pane_sessions`): the agent's and the
+      shell's panes' own sessions, and those of the commands the agent, or
+      its relay, runs, each begun directly by one of the agent's;
+    - a process with `ROOST_TASK_ID` or `ROOST_TASK_SHELL` TASK_ID in its
+      environment, never its arguments, in a session whose leader has
+      gone, as a server started with nohup from a command's session once
+      that command ended; but for one whose environment the system hides,
+      as macOS does Apple's own programs';
+    - never a session leader still running that isn't one of SESSIONS, as
+      a build tool's daemon or an ssh connection other tasks share, nor
+      any process of its session, nor one in OWN."""
     markers = {("ROOST_TASK_ID=" + task_id).encode(), ("ROOST_TASK_SHELL=" + task_id).encode()}
     result = execute(["ps", "-A", "-o", "pid=,stat="], check=False)
     # PID -> session, of each process but zombies, which write nothing.
