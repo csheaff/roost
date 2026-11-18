@@ -16823,6 +16823,18 @@ it of the same ID's, or nil for the first."
            (should (equal (car said) "budget stopped drawing a page"))
            (should-not (gethash file roost--live-seen))
            (should-not (gethash key roost--shown-at))
+           ;; Gone between being listed as changed and being read: the
+           ;; next look still finds a page that stopped.
+           (funcall write "<svg>" nil)
+           (roost--read-live)
+           (should (roost--shown-buffer key))
+           (let ((listed (mapcar (lambda (entry) (cons (car entry) 'changed))
+                                 (roost--live-files))))
+             (delete-file file)
+             (cl-letf (((symbol-function 'roost--live-files) (lambda () listed)))
+               (roost--read-live)))
+           (roost--read-live)
+           (should-not (roost--shown-buffer key))
            ;; Whole, its host has the call next: its file going changes nothing.
            (funcall write "<svg>" nil)
            (roost--read-live)

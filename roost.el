@@ -12488,7 +12488,11 @@ file's changes are each reported."
       (let ((seen (gethash file roost--live-seen)))
         (unless (equal time (car seen))
           (let ((state (with-demoted-errors "Roost: %S" (roost--take-live file))))
-            (setq seen (puthash file (list time state now) roost--live-seen))
+            ;; A file that went before it could be read keeps what was
+            ;; seen of it, so the next look finds a page that stopped.
+            (if (and (null state) (not (file-exists-p file)))
+                (setq again t)
+              (setq seen (puthash file (list time state now) roost--live-seen)))
             ;; Whole: its host, this machine, has the call next, and says
             ;; so when asked.
             (when (eq state 'whole)
