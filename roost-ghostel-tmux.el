@@ -349,6 +349,11 @@ pane: as when you are back in the workspace that showed it."
               ;; have switched the controller to another since.
               ((equal (buffer-local-value 'roost-ghostel-tmux--place controller)
                       (buffer-local-value 'roost-ghostel-tmux--place stand-in)))
+              ;; Nor switched and yet to say so: ghostel-tmux runs the
+              ;; hook that moves its place once tmux has listed the session.
+              ((let ((session (with-current-buffer controller (ghostel-tmux-session-name))))
+                 (or (not session)
+                     (equal session (nth 2 (buffer-local-value 'roost-ghostel-tmux--place stand-in))))))
               (pane (roost-ghostel-tmux--pane controller)))
     (roost-ghostel-tmux--give-way stand-in pane)))
 
@@ -432,10 +437,14 @@ a buffer that stands in for it."
             (roost-ghostel-tmux--show-stand-in
              stand-in (roost-ghostel-tmux--attach place t) window)
           ((error quit)
-           (when (and (window-live-p window) (eq (window-buffer window) stand-in)
-                      (buffer-live-p shown) (not (eq shown stand-in)))
-             (set-window-buffer window shown))
-           (kill-buffer stand-in)
+           (if (eq shown stand-in)
+               ;; One that said an earlier try could not attach, opened
+               ;; again from it: it says so of this one, where it shows.
+               (roost-ghostel-tmux--not-attached place)
+             (when (and (window-live-p window) (eq (window-buffer window) stand-in)
+                        (buffer-live-p shown))
+               (set-window-buffer window shown))
+             (kill-buffer stand-in))
            (signal (car err) (cdr err)))))))))
 
 (defun roost-ghostel-tmux--attached ()
@@ -458,6 +467,8 @@ tmux no longer has."
       (dolist (stand-in (roost-ghostel-tmux--stand-ins place))
         (with-current-buffer stand-in
           (setq roost-ghostel-tmux--stands-in-for nil)))
+      ;; Nor is it tried again, should a try of it be due.
+      (remhash place roost-ghostel-tmux--lost)
       (roost-ghostel-tmux--not-attached place t)
       (setq place (list (nth 0 place) (nth 1 place) session)
             roost-ghostel-tmux--place place))

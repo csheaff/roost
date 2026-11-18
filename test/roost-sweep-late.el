@@ -738,6 +738,10 @@ That is RET unless given."
      :run ,(lambda (deliver)
              (when-let* ((terminal (get-buffer (roost-sweep-late--terminal roost-sweep-late--mine))))
                (kill-buffer terminal))
+             ;; And what stands in for its pane, through ghostel-tmux.
+             (dolist (buffer (buffer-list))
+               (when (eq (buffer-local-value 'major-mode buffer) 'roost-ghostel-tmux-connecting-mode)
+                 (kill-buffer buffer)))
              (funcall deliver)))
     (delete-window
      :left t
