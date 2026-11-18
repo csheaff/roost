@@ -18,6 +18,16 @@ What each release changes, and what to do when upgrading. Newest first.
   after `q` from an image that filled the frame, or going back to a
   task's tab or perspective. It came back at its top, the task's row out
   of view.
+- Retiring or discarding a task no longer deletes a file that something its
+  agent left running wrote as the worktree went, as a dev server started
+  with `nohup` does. Stopping a task now ends what its agent and its shell
+  left running, and retiring a worktree with submodules checks it once more
+  just before Git removes it; what won't end keeps the task from being
+  retired or discarded, and Roost names it; discarding counts again once the agent
+  is stopped, and refuses if there is more than it told you. When
+  upgrading: a server you started from a task's agent or shell stops with
+  the task, but for a daemon, such as a build tool's server; start it
+  outside the task to keep it running.
 - A terminal that cannot attach its task's tmux session says so. When the
   session went as you opened the task, or the connection dropped as it
   attached, the window said "Connecting to" the session for good. It now

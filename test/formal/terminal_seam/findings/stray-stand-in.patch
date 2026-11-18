@@ -1,0 +1,48 @@
+diff --git a/test/roost-test.el b/test/roost-test.el
+index 6202b71..536ad7b 100644
+--- a/test/roost-test.el
++++ b/test/roost-test.el
+@@ -12750,6 +12750,43 @@ A test stubs the functions of ghostel-tmux it reaches."
+        (kill-buffer before)
+        (roost-test--kill-stand-ins)))))
+ 
++(ert-deftest roost-ghostel-tmux-a-stand-in-you-gave-way-yourself-goes-once-its-pane-comes ()
++  ;; TerminalSeam.finding-stray-stand-in.cfg.  With workspaces, you open a
++  ;; task and give its window another buffer before the pane comes.  No
++  ;; window, in any workspace, shows the stand-in, yet it is kept, and the
++  ;; next open keeps it too, until the session's client ends.
++  (roost-test--isolated
++   (roost-test--ghostel-backend)
++   (let ((roost-workspace 'tab-bar)
++         (before (generate-new-buffer "before"))
++         (pane (generate-new-buffer "pane"))
++         (controller (generate-new-buffer " controller"))
++         arrived)
++     (unwind-protect
++         (save-window-excursion
++           (cl-letf (((symbol-function 'ghostel-tmux-controller) #'ignore)
++                     ((symbol-function 'ghostel-tmux-controllers) (lambda () (list controller)))
++                     ((symbol-function 'ghostel-tmux-active-pane) (lambda (&rest _) (and arrived pane)))
++                     ((symbol-function 'ghostel-tmux-panes) #'ignore)
++                     ((symbol-function 'ghostel-tmux-session-name) #'ignore)
++                     ((symbol-function 'ghostel-tmux-window-split) #'ignore)
++                     ((symbol-function 'ghostel-tmux-attach) (lambda (&rest _) controller)))
++             (delete-other-windows)
++             (switch-to-buffer before)
++             (roost-ghostel-tmux-connect-or-switch nil "main" "roost-notes-123456")
++             (let ((stand-in (window-buffer)))
++               (switch-to-buffer before)
++               (setq arrived t)
++               (with-current-buffer controller (run-hooks 'ghostel-tmux-attach-hook))
++               ;; As the next open does, of another task.
++               (roost-ghostel-tmux--sweep-stand-ins)
++               (should-not (and (buffer-live-p stand-in)
++                                (not (get-buffer-window stand-in t)))))))
++       (kill-buffer controller)
++       (kill-buffer pane)
++       (kill-buffer before)
++       (roost-test--kill-stand-ins)))))
++
+ (ert-deftest roost-terminal-images-are-what-the-terminal-package-draws ()
+   ;; A task's host hears it when the task starts and when it resumes, so
+   ;; an agent that sends images only when told, as Pi under tmux, is told.

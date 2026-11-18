@@ -16,9 +16,8 @@ or out of one, goes in the same commit as the code.
   [what an agent is doing](#what-an-agent-is-doing),
   [Emacs and its hosts](#emacs-and-its-hosts),
   [Git and the forge](#git-and-the-forge),
-  [what you are doing in Emacs](#what-you-are-doing-in-emacs), where
-  [a terminal through ghostel-tmux](#a-terminal-through-ghostel-tmux) is mapped and
-  not yet modelled
+  [what you are doing in Emacs](#what-you-are-doing-in-emacs), with
+  [a terminal through ghostel-tmux](#a-terminal-through-ghostel-tmux)
 - [Across machines](#across-machines): what each action does in each state, who
   writes each field, what was checked and found sound, and what is known and not fixed
 
@@ -184,13 +183,28 @@ fails in its place.
 ### Found by the models, 2026-11-17
 
 Found as the models were brought in line with 0.13.0, and replayed on the real
-code before it was fixed.
+code before it was fixed. The VIEWS-17 to 21 rows came from the first model of
+[a terminal through ghostel-tmux](#a-terminal-through-ghostel-tmux): each replay
+fails on the code, and is a patch under `test/formal/terminal_seam/findings/`
+until its fix brings it into the suite.
 
 | Finding | Sev | What goes wrong | Machine | Status |
 | --- | --- | --- | --- | --- |
 | STATUS-13 | S3 | A relayed Claude that reports its work before its `SessionStart` hook, as 2.1.303 does on a task's prompt, reads `ready` through its first turn, so a send goes through unasked. Since #245 | [Who wins](#who-wins-hooks-reports-poll-runner) | Fixed, `test_a_claude_that_reports_its_work_before_its_session_start_hook_reads_running` |
 | VIEWS-16 | S3 | An offer's draft that got no reply, asked again and quit at the question about the setup command, reads as one you only looked at: `RET` on its offer starts it anew, and `C-c C-c` makes a second task | [The new task draft](#the-new-task-draft) | Fixed, `roost-an-offers-draft-that-asked-keeps-its-creation-id` |
 | REQUESTS-10 | S4 | A reply read before the task's agent showed an image or a page, as one to opening the task, and arriving after the list that read it since takes the task back to what it showed before, or to nothing: the panel drops or misnames its Image or Page line, and `roost-show-image` says it has shown none, until the next list (found 2026-11-17) | [Cached task](#cached-task) | Fixed, `roost-a-reply-from-before-an-image-was-shown-keeps-what-the-task-shows` |
+| VIEWS-17 | S3 | A host's session attaches while you answer a question, and its ssh drops before you are done: ghostel-tmux drops the attach hook it held, so the terminal says "Could not attach" and is not tried again | [A terminal through ghostel-tmux](#a-terminal-through-ghostel-tmux) | Open: `TerminalSeam.finding-ends-while-held.cfg`, `findings/ends-while-held.patch` |
+| VIEWS-18 | S4 | Opened while a dropped host is tried again, an attach that signals says "Could not attach", and the next try attaches anyway | [A terminal through ghostel-tmux](#a-terminal-through-ghostel-tmux) | Open: `TerminalSeam.finding-fails-in-a-row.cfg`, `findings/fails-in-a-row.patch` |
+| VIEWS-19 | S4 | A frame that says "Could not attach" keeps saying it while the task, opened in another frame, connects | [A terminal through ghostel-tmux](#a-terminal-through-ghostel-tmux) | Open: `TerminalSeam.finding-two-frames-could-not.cfg`, `findings/two-frames-could-not.patch` |
+| VIEWS-20 | S4 | The task opened in two frames as it connects: a frame in another workspace when the pane comes shows some other buffer in the task's workspace | [A terminal through ghostel-tmux](#a-terminal-through-ghostel-tmux) | Open: `TerminalSeam.finding-two-frames-workspace.cfg`, `findings/two-frames-workspace.patch` |
+| VIEWS-21 | S4 | With workspaces, a stand-in whose window you gave another buffer, or whose workspace you closed, before its pane came stays hidden until its client ends | [A terminal through ghostel-tmux](#a-terminal-through-ghostel-tmux) | Open: `TerminalSeam.finding-stray-stand-in.cfg`, `findings/stray-stand-in.patch` |
+
+### Found by the bug hunt, 2026-11-18
+
+| Finding | Sev | What goes wrong | Machine | Status |
+| --- | --- | --- | --- | --- |
+| HOST-RETIRE-1 | S1 | Something the agent left running, as a server started with `nohup`, writes into the worktree after the last check and before Git removes it, and retire or discard deletes that file and says it went well; with a submodule, which Roost removes with `--force`, every time | [Finishing a task](#finishing-a-task) | Fixed: `stop` ends what the agent and the task's shell left running, refusing while any of it won't end, and a worktree with submodules is checked again just before Git; `test/test_left_running.py` |
+| HOST-RETIRE-2 | S1 | A process outside the task, one Roost can't tell is the task's (its environment hidden, as for Apple's own programs, or cleared, outside the panes' sessions) or yours elsewhere, writes between the last check and Git's removal, or into a folder Git has yet to reach: that file goes | [Finishing a task](#finishing-a-task) | Open question: narrowed to those milliseconds, not closed. Closing it would take Roost deleting the worktree itself, keeping each file changed since the check |
 
 ## A task on its host
 
@@ -551,8 +565,8 @@ What each step leaves if it stops there, and what asking again does.
 | 5 | `check_worktree`, clean, submodules, Git lock, agent work | registry | refused, nothing changed |
 | 6 | branch moved from `expect`, then merge, into `integrationBranch` as the record has it then; the record read again after, with `require_finished`, `require_clean` and `require_offers_named` again | registry, released while Git merges | see next machine; a second merge finds it there. Refused after: merged, and not retired |
 | 7 | `safe_to_delete`, by `integrationBranch` and `startCommit` as the record has them now; save `retiringCommit` | registry | |
-| 8 | `stop` | registry | task stopped; agent's window gone |
-| 9 | `remove_worktrees` | released | worktree partly gone; `put_back_removed` restores it |
+| 8 | `stop`: what is the task's, by the ownership rule below, noted as `leftRunning` (PID and start) before the panes close; the agent's and shell's panes closed; then all of it ended, SIGTERM then SIGKILL (`end_left_running`) | registry | task stopped; agent's window gone, nothing that is the task's still running; or refused, naming what won't end, `leftRunning` kept, so that the next request, panes gone, still ends or refuses on it |
+| 9 | `remove_worktrees`: teardown, `require_clean`, submodules, and with submodules, which only `--force` removes, both again just before Git | released | worktree partly gone; `put_back_removed` restores it |
 | 10 | staging folder, `unregister_gone`, `delete_branch` | registry | branch still there, `check_worktree` finds no folder and goes on |
 | 11 | `Store.remove` | registry | record gone; attachments, what its agent showed and a page it was writing first, so a kill between keeps the record |
 | 12 | `delete_remote_branch` | none | remote branch stays; nothing else depends on it |
@@ -560,16 +574,32 @@ What each step leaves if it stops there, and what asking again does.
 `discard`: steps 2, 4, then `check_worktree(branch=False)`; the dry run stops
 there. Then `expect` against the branch, `told` against `discard_losses` counted
 again, `offers` against the offers the record holds (`require_offers_named`),
-`stop`, removal with force, branch, record. No checkpoint: `expect`, `told` and
+`stop`, `told` counted once more, now that nothing the agent left running writes
+there (refused then with the agent stopped), removal with force, branch, record. No checkpoint: `expect`, `told` and
 `offers` are the guards, and a retry asks Emacs for a new dry run.
 
 `forget`: step 2, then no live pane, `require_offers_named`, the window closed and
 `Store.remove`, in one hold of the registry lock.
 
+What `stop` ends, the one rule (`left_running`, with `pane_sessions`), read before the panes close:
+- the agent's and the shell's panes' own sessions;
+- the sessions of the commands the agent, or its relay (which leads one of its own), runs: each begun directly by a process of the agent's;
+- a process with the task's `ROOST_TASK_ID`, or its shell's `ROOST_TASK_SHELL`, in its environment (never its arguments), in a session whose leader has gone, as a server started with `nohup` from a command that has since ended;
+- what an earlier stop noted in `leftRunning`, while each runs with the start it had;
+- never a session leader still running that is none of those, nor any process of its session: a daemon a command starts, as a build tool's server, or one a command you run in the shell starts, which other tasks may share.
+
 Invariants:
 - I1. No uncommitted work and no unmerged commit is lost by retire: checked
-  before the agent stops (`require_clean`), again after (`remove_worktrees`), and
-  the branch is deleted only at the commit verified. Holds, fuzzed against
+  before the agent stops (`require_clean`), again after (`remove_worktrees`),
+  by Git itself as it removes the worktree, or, with submodules, which Git
+  removes only with `--force`, by Roost again just before, and the branch is
+  deleted only at the commit verified. `stop` ends what the agent and the
+  task's shell left running first, so nothing they started writes after that
+  last check, but for a process whose environment the host hides (macOS hides
+  Apple's own programs') that left the pane's session, or one that cleared its
+  environment. Such a process, or yours outside the task, can still write as
+  Git deletes the worktree, and a file it writes into a folder Git has yet to
+  reach goes. Holds, fuzzed against
   commits landing throughout. What keeps that commit is a branch that stays: the
   branch it merges into, wherever `retarget` has put that, or, for a task that never
   committed, any other. Not one that is going: the branch of a worktree its agent
@@ -875,7 +905,7 @@ Invariants:
 | --- | --- | --- | --- | --- | --- |
 | (none) | create | | `starting` | record saved, then spawned, under one lock | `make_task` |
 | any | resume | pane not live; no agent elsewhere; worktree there | `starting` | new `runId`, `error` None, request forgotten; `lastEvent`, `exitCode`, `statusBeforeCrash` left as they were | `resume`, `spawn` |
-| any but `retired` | stop | | `stopped` | agent's pane and shell closed if owned; `paneId`, `windowId` None; seen carried over | `stop` |
+| any but `retired` | stop | | `stopped` | agent's pane and shell closed if owned, and what they left running ended; `paneId`, `windowId` None; seen carried over | `stop` |
 | not `stopped`/`retired`, this run | agent's process ended | | `exited` if code 0, else `failed` | `exitCode`, `error`, `endedRun`; after `finish()` | `runner` |
 | same | setup, copy or submodules failed | | `failed` | `error` is the reason; pane shows it | `runner` |
 | not `ENDED` | poll: pane not live | tmux answered | `crashed` | `statusBeforeCrash`, `seenBeforeCrash` | `list_tasks` |
@@ -3292,7 +3322,7 @@ Kind: implicit. Lives in: `roost-ghostel-tmux.el`, one machine for each place, a
 stand-in; `roost-ghostel-tmux--stand-in` and `roost-ghostel-tmux--was-attached` on a
 controller; `roost-ghostel-tmux--stands-in-for` on a stand-in;
 `roost-ghostel-tmux--lost`; and, in ghostel-tmux, the controller's tmux client and its
-pane buffers. Mapped on 2026-11-17 and not modelled. [A terminal's
+pane buffers. Mapped and modelled on 2026-11-17. [A terminal's
 connection](#a-terminals-connection) is what Roost does to a terminal ahead of an
 action, with either package; this is what the terminal does by itself.
 
@@ -3311,28 +3341,44 @@ Invariants:
   any pane. (Docstring of `roost-ghostel-tmux--stand-in`.) Otherwise the commands
   Roost sends from the window's buffer right after it connects go nowhere, and an open
   whose window shows another session by the time its host replies is dropped
-  (`roost--still-there-p`).
+  (`roost--still-there-p`). No window shows another session's pane in its place, and
+  an open that fails leaves the window as it was. (Model: `OwnPane`,
+  `OpenKeepsWindow`.)
 - I2. A stand-in says it is connecting only while a client that can bring its pane
-  runs, or a try is due. Otherwise the window says "Connecting to" for good, with
-  nothing to tell you the task did not open. (Sweep's `left-behind`;
-  `roost-ghostel-tmux-a-stand-in-says-its-session-could-not-be-attached`.) **Was
-  broken** for a session on this machine and for one that never attached.
+  runs, or a try is due; and it says no pane is coming only while none is. Otherwise
+  the window says "Connecting to" for good, with nothing to tell you the task did not
+  open, or tells you to open again what is on its way. (Sweep's `left-behind`;
+  `roost-ghostel-tmux-a-stand-in-says-its-session-could-not-be-attached`; model:
+  `ConnectingIsTrue`, `EndIsTrue`.) **Was broken** for a session on this machine and
+  for one that never attached. **Broken** the other way by VIEWS-18 and VIEWS-19.
 - I3. A stand-in that no pane is coming to names a way back, and opening its task
-  again connects in it. Otherwise the window is a dead end.
+  again connects in it. Otherwise the window is a dead end. It says "Could not attach"
+  only of a client whose panes never came, and "Detached" only of one whose had, or
+  that you or Roost detached. (Model: `WordIsTrue`.) **Broken** by VIEWS-17.
 - I4. Only a connection that dropped is tried again: not a session on this machine,
-  one you or Roost detached, one tmux said has ended, or one that never attached.
-  (Docstring of `roost-ghostel-tmux--detached`.) Otherwise a terminal Roost released
-  ahead of an action comes back and reports a lost connection, or an ended session is
-  asked for again and again.
+  one you or Roost detached, one tmux said has ended, one its client was switched away
+  from, or one that never attached. (Docstring of `roost-ghostel-tmux--detached`;
+  model: `RetryOnlyDropped`.) Otherwise a terminal Roost released ahead of an action
+  comes back and reports a lost connection, or an ended session is asked for again
+  and again. And a host's connection that drops after its panes came, or in a row of
+  tries, is tried again (`DropIsTried`): otherwise it stays dead until you open the
+  task. **Broken** by VIEWS-17.
 - I5. Tries end: eight, no more than thirty seconds apart, and none once the session
   is attached again or no pane of it is left. (`roost-ghostel-tmux--attach-again`,
-  `roost-ghostel-tmux--try-again`.) Otherwise a host that is gone is asked for good.
+  `roost-ghostel-tmux--try-again`; model: `TriesEnd`.) Otherwise a host that is gone
+  is asked for good.
 - I6. A stand-in goes once a window shows its pane in its place. One no window shows
-  goes too, except with workspaces, where it waits for its workspace to show it.
-  Otherwise stand-ins pile up, or the workspace you left shows some other buffer.
-  (`roost-ghostel-tmux--give-way`.)
-- I7. A place has one controller. Assumed: `ghostel-tmux-attach` returns the
-  controller of a session attached already. Two would fight over the session's size.
+  goes too, except with workspaces, where it waits for its workspace to show it. The
+  pane takes its window only when no question is open, and not from the window-change
+  hook itself. Otherwise stand-ins pile up, the workspace you left shows some other
+  buffer, or the question's end puts the stand-in back.
+  (`roost-ghostel-tmux--give-way`, `roost-ghostel-tmux--stand-in-shown`; model:
+  `KeptForItsWorkspace`, `NoStrayStandIn`, `HandoffOutside`.) **Broken** by VIEWS-20
+  and VIEWS-21.
+- I7. A place has one controller. Roost attaches only when
+  `roost-ghostel-tmux--find-controller` finds none, and a try's probe looks again
+  before it attaches. Two would fight over the session's size. (Model:
+  `OneController`.)
 - I8. A pane keeps its place once its client has ended. (`roost-ghostel-tmux--buffer-place`.)
   Otherwise opening the task finds no pane to bring back, and attaches beside it.
 
@@ -3362,28 +3408,44 @@ Invariants:
 | Could not attach | `q` | | No terminal | the window shows what it did; the next open kills the stand-in | `quit-window`, `roost-ghostel-tmux--sweep-stand-ins` |
 | any | the controller is switched to another session | | the other place's | place follows the session | `roost-ghostel-tmux--attached` |
 
-Open, each a suspected race, none reproduced:
-- ghostel-tmux holds `ghostel-tmux-attach-hook` while a minibuffer is open, and runs
-  `ghostel-tmux-detach-hook` at once. A client that ends while the attach hook is
-  held: does the hook still run, in a dead controller, and would
-  `roost-ghostel-tmux--attached` then kill the panes just kept as snapshots?
-- A try's `ssh` probe is under way when you open the task. The probe's sentinel looks
-  for a controller before it attaches, but two timers for one place can both be due,
-  and `--lost` counts them as one row of tries.
-- A dropped connection is told from a session that ended by `ghostel-tmux--closing`,
-  a variable of ghostel-tmux's own. Can a connection that drops look closed, and so
-  never be tried again, or an ended session look dropped, and be tried eight times?
-- The controller is switched to another session by ghostel-tmux's own command before
-  its first pane came: the stand-in keeps the old place, and no pane of that place
-  comes.
-- A workspace that is not current can name a stand-in that another window shows.
-  When that window's pane comes the stand-in goes, and the other workspace shows
-  some other buffer when you are back. It needs the same task opened in two
-  workspaces while it connects; Roost cannot see what a saved workspace names.
-- With workspaces, a stand-in kept for a workspace that is closed, or whose task is
-  retired, stays until its controller ends and another task is opened.
-- The host's `inspect` and the attach are two steps: the session can end between
-  them. The window then says "Could not attach"; nothing asks the host again.
+Model: `test/formal/terminal_seam`, by `.claude/skills/verify-terminal-seam`, with
+ghostel-tmux read at `ce64afa`. It holds I1 to I7; I8 is
+`roost-ghostel-tmux-place-follows-the-session-its-controller-shows`. Assumed, and not
+in the model: each function runs to its end, though TRAMP lets timers run while it
+waits inside an attach; and `roost--restore-terminal`'s reconnect, which can run while
+a minibuffer is open, is left out.
+
+The open questions of the map, answered:
+- A client that ends while ghostel-tmux holds its attach hook for the minibuffer: the
+  hook never runs, as `ghostel-tmux--run-held-calls` skips a controller that is gone,
+  so no snapshot is killed. But `--was-attached` is never set: the stand-in says
+  "Could not attach" of a session that attached, and a host's connection that dropped
+  is not tried again. VIEWS-17.
+- A try's probe under way when you open the task, and two timers for one place: the
+  probe's sentinel and `--attach-again` look for a controller first, so nothing
+  attaches twice, and a client attaching keeps the count. Two timers run two probes,
+  and each failure counts one try, so such a row ends sooner, never later. Checked and
+  sound. The model found a neighbour: an open that fails mid-row says "Could not
+  attach" over the row, VIEWS-18.
+- `ghostel-tmux--closing` is set only by `%exit` and by `ghostel-tmux-detach`. tmux
+  3.6a answers an attach to a session it can't find with `%error`, then `%exit`, and
+  sends `%exit` to a client whose session is killed, so a session that ended reads as
+  closed. An ssh that drops brings no `%exit` to Emacs, so it reads as dropped. A
+  session that ended just as ssh dropped is tried once: that try cannot find it,
+  closes, and the tries end. Checked against tmux, and in the model; a real dropped
+  ssh was not run.
+- The controller switched to another session before its first pane came: its stand-in
+  is told "Detached from" the session it left and let go of, and that session's tries
+  are forgotten (`--attached`). Checked and sound, for a switch before or after the
+  first pane, and with the hook held for a question.
+- The same task in two workspaces while it connects: one stand-in in both, and the
+  frame not showing it when its pane comes loses it. VIEWS-20, and VIEWS-19 for the
+  other frame's word.
+- A stand-in kept for a workspace that is closed, or whose window you gave another
+  buffer, stays until its client ends and another task opens. VIEWS-21.
+- The session ending between the host's `inspect` and the attach: tmux answers
+  `%error` and `%exit`, the stand-in says "Could not attach" and that opening its task
+  again tries once more, and that open asks the host again. Checked and sound.
 
 ### `n`, the run through waiting tasks
 
@@ -3712,6 +3774,11 @@ next one starts somewhere else.
   `commit` from older records still read.
 - **Older records.** `runId`, `claudeSession`, missing flags, `retired`, `{number, url}`
   and `{}` for a pull request all read.
+- **A terminal through ghostel-tmux.** Tries of a dropped host against opens, a probe
+  under way and two timers for one place; a session that ends between `inspect` and
+  the attach; ghostel-tmux switching a controller to another session, before its
+  first pane or with its hook held: `test/formal/terminal_seam` finds nothing there
+  beyond VIEWS-17 to 21.
 
 Not proved: that sshd leaves a helper running after a dropped connection, taken from
 OpenSSH's behaviour and not run; perspective.el and tab-bar paths, read but not driven;
