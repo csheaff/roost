@@ -3136,15 +3136,17 @@ Invariants:
 | Being written | its host sends the page whole | its frame holds just the code the view, loaded, was handed, all of it | On screen, Waiting or Closed, as it was | the view stays as it is, and one you closed meanwhile stays closed | `roost--take-shown`, `roost--live-shows-p` |
 | Being written | its host sends another page or an image, or that page before the view was handed all of it | | On screen or Waiting | shown in its place, as any is | `roost--take-shown` |
 | Being written | another call's page starts | | Being written | the new page takes its place | `roost--take-live` |
+| Being written | its message ends first, as when you stop the agent, or the page grows past what the helper shows | Pi's extension removes the page's file | Closed | its buffer and the window made for it close, unless another page or image took the buffer meanwhile; "stopped drawing a page"; what the task showed before is fetched at the next poll | `roost--read-live`, `roost--live-stopped` |
 
 Open: a reply its host read before the agent showed an image, with the same
 `updatedAt`, can come after a list that names the image, and the panel's Image line
 then names the one before, or goes, until the next poll. Nothing is fetched twice
 (I4), and the line fetches what the host has now. A helper killed between writing a
 copy and saving the record leaves the copy until the next image or the task's end.
-A `show_widget` call the helper refuses, as for a page too large, leaves the page
-shown as it was written with no record of it: the panel's Image line and
-`roost-show-image` know nothing of it. The file of a page being written goes
+A `show_widget` call the helper refuses for another reason than its size, which
+Pi's extension counts as the helper does, leaves the page shown as it was written
+with no record of it: the panel's Image line and `roost-show-image` know nothing
+of it. The file of a page being written goes
 with its task (`Store.remove`), and when an Emacs on its machine that watches
 for such pages sees the task go (`roost--forget-shown`).
 A fetch that fails is not tried again by itself: the panel's line brings it up.

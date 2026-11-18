@@ -17695,6 +17695,74 @@ it of the same ID's, or nil for the first."
        (delete-directory roost-state-directory t)
        (when (get-buffer "*roost image: budget*") (kill-buffer "*roost image: budget*"))))))
 
+(ert-deftest roost-a-page-its-agent-stops-writing-closes ()
+  ;; Pi's extension removes the file of a page it stops writing, as when
+  ;; you stop the agent or the page is more than Roost shows: its host
+  ;; never has that page, and its buffer closes.  A whole page's stays.
+  (roost-test--isolated
+   (let* ((roost-state-directory (make-temp-file "roost-live" t))
+          (roost--live-seen (make-hash-table :test 'equal))
+          (roost--shown-at (make-hash-table :test 'equal))
+          (roost--live-watch nil)
+          (roost--live-timer nil)
+          (key '(nil "1111111111111111"))
+          (file (expand-file-name "live/1111111111111111.json" roost-state-directory))
+          (write (lambda (code whole)
+                   (with-temp-file file
+                     (insert (json-encode `((id . "call_1") (title . "Clock") (code . ,code)
+                                            (whole . ,(if whole t :json-false))))))
+                   ;; Read as changed, however soon after the last.
+                   (set-file-times file (time-add (current-time) (random 1000)))))
+          said)
+     (unwind-protect
+         (cl-letf (((symbol-function 'roost--pages-p) (lambda () t))
+                   ((symbol-function 'roost--draw-page) #'ignore)
+                   ((symbol-function 'roost--display-shown) #'ignore)
+                   ((symbol-function 'roost--task-terminal-window) (lambda (_task) (selected-window)))
+                   ((symbol-function 'run-at-time) #'ignore)
+                   ((symbol-function 'message)
+                    (lambda (format &rest arguments) (push (apply #'format-message format arguments) said))))
+           (make-directory (file-name-directory file) t)
+           (with-temp-file (expand-file-name "live/page.html" roost-state-directory)
+             (insert "<p>live</p>"))
+           (roost--cache-task nil (append '((name . "budget")) (roost-test--task "1111111111111111" "running")))
+           ;; It took the buffer of what the task showed before, which
+           ;; the next poll fetches again.
+           (puthash key "2026-11-17T10:05:00+00:00" roost--shown-at)
+           (funcall write "<svg>" nil)
+           (roost--read-live)
+           (should (roost--shown-buffer key))
+           (delete-file file)
+           (roost--read-live)
+           (should-not (roost--shown-buffer key))
+           (should (equal (car said) "budget stopped drawing a page"))
+           (should-not (gethash file roost--live-seen))
+           (should-not (gethash key roost--shown-at))
+           ;; Gone between being listed as changed and being read: the
+           ;; next look still finds a page that stopped.
+           (funcall write "<svg>" nil)
+           (roost--read-live)
+           (should (roost--shown-buffer key))
+           (let ((listed (mapcar (lambda (entry) (cons (car entry) 'changed))
+                                 (roost--live-files))))
+             (delete-file file)
+             (cl-letf (((symbol-function 'roost--live-files) (lambda () listed)))
+               (roost--read-live)))
+           (roost--read-live)
+           (should-not (roost--shown-buffer key))
+           ;; Whole, its host has the call next: its file going changes nothing.
+           (funcall write "<svg>" nil)
+           (roost--read-live)
+           (funcall write "<svg/>" t)
+           (roost--read-live)
+           (setq said nil)
+           (delete-file file)
+           (roost--read-live)
+           (should (roost--shown-buffer key))
+           (should-not said))
+       (delete-directory roost-state-directory t)
+       (when (get-buffer "*roost image: budget*") (kill-buffer "*roost image: budget*"))))))
+
 (ert-deftest roost-a-page-asks-and-you-send ()
   ;; What a page asks to send, as when you click a button in it, opens a
   ;; draft to its task with those words: a page's script can ask unclicked,
