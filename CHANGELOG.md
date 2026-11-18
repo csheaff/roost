@@ -12,7 +12,9 @@ What each release changes, and what to do when upgrading. Newest first.
   session file that was a FIFO held the list of a host with a Pi task, and
   any search, for good: Roost now reads only regular files, keeps only a
   session Pi names in the folder Roost gave it for the task, and a search
-  keeps to its time within one long line too. Nothing to do when upgrading.
+  keeps to its time within one long line too. When upgrading: a search
+  passes over a conversation file that is a symbolic link, so keep the
+  files themselves where the agent writes them.
 
 ## 0.13.0
 
