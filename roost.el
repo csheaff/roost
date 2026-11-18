@@ -12487,7 +12487,8 @@ file's changes are each reported."
     (pcase-dolist (`(,file . ,time) files)
       (let ((seen (gethash file roost--live-seen)))
         (unless (equal time (car seen))
-          (let ((state (with-demoted-errors "Roost: %S" (roost--take-live file))))
+          (let ((state (and (file-exists-p file)
+                            (with-demoted-errors "Roost: %S" (roost--take-live file)))))
             ;; A file that went before it could be read keeps what was
             ;; seen of it, so the next look finds a page that stopped.
             (if (and (null state) (not (file-exists-p file)))
