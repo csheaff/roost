@@ -35,7 +35,7 @@ CONSTANTS
   MaxSi,         \* stand-ins, over the whole run
   \* Scope a finding needed, on in the base once fixed:
   HeldEnds,      \* a client ends while ghostel-tmux holds its attach hook
-  Closes,        \* you close a workspace that is not on screen: off, see verify-terminal-seam
+  Closes,        \* you close a workspace that is not on screen: a finding, VIEWS-23
   FailsInARow,   \* your open's attach signals while a row of tries is under way
   \* The code as it is: each TRUE.  FALSE is a broken variant.
   OwnSession,    \* `--stand-in-gives-way`: the controller is still the stand-in's place and session

@@ -201,7 +201,7 @@ rules the step out.
 
 ### Findings
 
-None open. Each finding is a config that fails on purpose, and a patch
+Each is a config that fails on purpose, and a patch
 under `findings/` that adds its replay to `test/roost-test.el`, which fails
 on the code at `SYNC`. To fix one, follow `.claude/skills/fix-a-finding`;
 once fixed, delete the config and the patch, and turn on the scope it
@@ -213,10 +213,16 @@ are `roost-ghostel-tmux-a-connection-that-drops-while-a-question-holds-its-hook-
 `roost-ghostel-tmux-a-stand-in-elsewhere-says-nothing-of-not-attaching-while-the-task-connects`,
 `roost-ghostel-tmux-a-pane-that-came-shows-in-each-workspace-that-waited-for-it`
 and `roost-ghostel-tmux-a-stand-in-you-gave-way-yourself-goes-once-its-pane-comes`.
-`Closes` stays off: a stand-in kept for a tab you close goes at the next
-open's sweep, not as you close it, which `NoStrayStandIn` would call a
-stray; nor can Roost tell when a perspective that has a stand-in no longer
-shows it.
+- `finding-closed-workspace` (VIEWS-23, scope `Closes` with `MaxOthers = 0`,
+  rule NoStrayStandIn, `findings/closed-workspace.patch`). With workspaces,
+  you open a task, leave its workspace before the pane comes, and the
+  stand-in is kept for it, as it should be. You close that workspace: the
+  stand-in stays, though nothing will show it, until the next open's sweep.
+  A fix would sweep as a tab or perspective closes
+  (`tab-bar-tab-post-close-functions`, `persp-killed-hook`).
+
+Apart from closing, Roost cannot tell when a perspective that has a
+stand-in no longer shows it: that one goes at the next open made there.
 
 ## When the code changes on purpose
 

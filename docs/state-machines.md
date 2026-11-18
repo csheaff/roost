@@ -197,6 +197,7 @@ code before it was fixed. The VIEWS-17 to 21 rows came from the first model of
 | VIEWS-20 | S4 | The task opened in two frames as it connects: a frame in another workspace when the pane comes shows some other buffer in the task's workspace | [A terminal through ghostel-tmux](#a-terminal-through-ghostel-tmux) | Fixed, `roost-ghostel-tmux-a-pane-that-came-shows-in-each-workspace-that-waited-for-it` |
 | VIEWS-21 | S4 | With workspaces, a stand-in whose window you gave another buffer, or whose workspace you closed, before its pane came stays hidden until its client ends | [A terminal through ghostel-tmux](#a-terminal-through-ghostel-tmux) | Fixed, `roost-ghostel-tmux-a-stand-in-you-gave-way-yourself-goes-once-its-pane-comes` |
 | VIEWS-22 | S4 | With workspaces, back in the one that kept a stand-in while a question is open, you put another buffer over it before you answer: the stand-in stayed hidden until its client ended. Found as VIEWS-21's fix was folded into the model | [A terminal through ghostel-tmux](#a-terminal-through-ghostel-tmux) | Fixed, `roost-ghostel-tmux-a-stand-in-you-cover-while-a-question-holds-its-pane-goes` |
+| VIEWS-23 | S4 | With workspaces, a stand-in kept for a tab or perspective you left before its pane came stays once you close that workspace, hidden, until the next open | [A terminal through ghostel-tmux](#a-terminal-through-ghostel-tmux) | Open: `TerminalSeam.finding-closed-workspace.cfg`, `findings/closed-workspace.patch` |
 
 ## A task on its host
 
@@ -3354,7 +3355,7 @@ Invariants:
   `KeptForItsWorkspace`, `NoStrayStandIn`, `HandoffOutside`.) **Was broken** by
   VIEWS-20, VIEWS-21 and VIEWS-22. A perspective that has the stand-in but no longer shows it
   keeps it until an open made in that perspective sweeps it; a tab you close keeps
-  it until the next open.
+  it until the next open (VIEWS-23, open).
 - I7. A place has one controller. Roost attaches only when
   `roost-ghostel-tmux--find-controller` finds none, and a try's probe looks again
   before it attaches. Two would fight over the session's size. (Model:
@@ -3425,8 +3426,8 @@ The open questions of the map, answered:
   other frame's word; both fixed.
 - A stand-in kept for a workspace that is closed, or whose window you gave another
   buffer, stayed until its client ended and another task opened. VIEWS-21 and VIEWS-22, fixed for
-  the window you gave another buffer, and for a closed tab at the next open. The
-  model leaves closing out (`Closes`).
+  the window you gave another buffer. A closed one keeps it until the next open:
+  VIEWS-23, open.
 - The session ending between the host's `inspect` and the attach: tmux answers
   `%error` and `%exit`, the stand-in says "Could not attach" and that opening its task
   again tries once more, and that open asks the host again. Checked and sound.
