@@ -196,6 +196,29 @@ class CutShort(unittest.TestCase):
                       "/state/worktrees/xyz/.relink-build-abcdef-0123456789ab/build-abcdef"):
             self.assertFalse(roost.spare_of(worktree, other), other)
 
+    def test_a_folder_made_a_worktree_of_another_repository_keeps_its_link(self):
+        box = self.box
+        stuck = self.worktree / "d025"
+        stuck.chmod(0o555)
+        self.addCleanup(lambda: stuck.exists() and stuck.chmod(0o755))
+        box.arm("after", match="worktree remove")
+        self.assertIsNone(box.helper("retire", id=self.task["id"]))
+        box.disarm()
+        stuck.chmod(0o755)
+        # Since, someone made it one of another repository's.
+        other = box.root / "other"
+        box.git("init", "-q", "-b", "main", str(other))
+        (other / "f").write_text("f\n")
+        box.git("add", ".", cwd=other)
+        box.git("commit", "-qm", "Other", cwd=other)
+        box.git("worktree", "add", "-q", "--detach", str(box.root / "theirs"), cwd=other)
+        link = "gitdir: %s\n" % box.git("rev-parse", "--absolute-git-dir", cwd=box.root / "theirs")
+        (self.worktree / ".git").write_text(link)
+        reply = box.helper("retire", id=self.task["id"])
+        self.assertFalse(reply["ok"], reply)
+        self.assertIn("another repository", reply["error"])
+        self.assertEqual((self.worktree / ".git").read_text(), link)
+
     def test_a_worktree_git_forgot_can_be_discarded(self):
         box = self.box
         stuck = self.worktree / "d025"

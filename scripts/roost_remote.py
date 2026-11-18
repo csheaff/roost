@@ -6501,6 +6501,32 @@ def restore_deleted(worktree):
                    input=b"".join(os.fsencode(path) + b"\0" for path in gone))
 
 
+def require_link_ours(repo, worktree):
+    """Refuse to write WORKTREE's .git link over one to another repository,
+    as when its folder has since become a worktree of that, or over a
+    repository of its own there. A missing one, one that leads nowhere, and
+    one to REPO, as a relink cut short leaves, can go."""
+    link = Path(worktree) / ".git"
+    if not os.path.lexists(link):
+        return
+    said = b""
+    with contextlib.suppress(OSError):
+        said = link.read_bytes() if link.is_file() and not link.is_symlink() else None
+    if said is None or not said.startswith(b"gitdir:"):
+        raise RoostError("The task's worktree folder %s holds a .git of its own now, not Roost's; move what you "
+                         "want to keep out of it, then try again" % worktree)
+    gitdir = Path(worktree) / os.fsdecode(said[len(b"gitdir:"):].strip())
+    if not gitdir.is_dir():
+        return
+    common = gitdir
+    with contextlib.suppress(OSError, UnicodeDecodeError):
+        common = gitdir / (gitdir / "commondir").read_text().strip()
+    ours = common_dir(repo)
+    if ours is None or common.resolve() != ours.resolve():
+        raise RoostError("The task's worktree folder %s is now a worktree of another repository, %s; move it, "
+                         "then try again" % (worktree, common))
+
+
 def relink_removed(task, worktree):
     """Make WORKTREE, which Git forgot as it removed it (`forgotten`), TASK's
     worktree again, on its branch, with the tracked files Git deleted put
@@ -6508,6 +6534,7 @@ def relink_removed(task, worktree):
     and reads as changes, as in any worktree. Each step can be cut short
     and done again: until the last link is made, the spare is all Git has."""
     repo = task["repo"]
+    require_link_ours(repo, worktree)
     drop_spares(repo, worktree, task["branch"])
     # A worktree with no files, named as the task's, so that what Git keeps
     # of it is too, whose link takes the place of the forgotten one's: Git
@@ -6528,6 +6555,7 @@ def relink_removed(task, worktree):
         # writes them, which needs Git 2.29: the folder's first, so that
         # until the other is written, the spare is all Git has.
         gitdir = Path(git(spare, "rev-parse", "--absolute-git-dir").stdout.strip())
+        require_link_ours(repo, worktree)
         atomic_text(worktree / ".git", "gitdir: %s\n" % gitdir)
         atomic_text(gitdir / "gitdir", "%s\n" % (worktree / ".git"))
         (spare / ".git").unlink()
