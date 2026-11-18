@@ -296,6 +296,39 @@ subprocess.run([tmux, "-L", socket, "split-window", "-d", "-t", window, "sleep 6
         self.assertIn("sleep 600", box.tmux("list-panes", "-a", "-F", "#{pane_start_command}"),
                       "the pane you joined was closed with the agent's")
 
+    def test_stop_ends_the_command_a_relayed_agent_is_running(self):
+        """The agent relays its status, in a session of its own, which the
+        session of the command it runs comes from."""
+        box = self.box
+        task = box.create(programStatus=True)
+        command = box.root / "command.py"
+        command.write_text(FOREVER)
+        self.run_command(task, [sys.executable, command])
+        deadline = time.monotonic() + 10
+        while not self.running(command, last=True) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertTrue(self.running(command, last=True), "the agent started nothing")
+        self.assertTrue(box.helper("stop", id=task["id"])["ok"])
+        self.assertFalse(self.running(command), "still running after stop")
+
+    def test_stop_leaves_a_daemon_a_relayed_agents_command_starts(self):
+        box = self.box
+        task = box.create(programStatus=True)
+        daemon = box.root / "daemon.py"
+        daemon.write_text(FOREVER)
+        launcher = box.root / "launcher.py"
+        launcher.write_text("import subprocess, sys, time\n"
+                            "subprocess.Popen([sys.executable, '-c', %r, sys.executable, %r])\n"
+                            "while True: time.sleep(1)\n" % (OWN_SESSION, str(daemon)))
+        self.run_command(task, [sys.executable, launcher])
+        deadline = time.monotonic() + 10
+        while not self.running(daemon, last=True) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertTrue(self.running(daemon, last=True), "no daemon started")
+        self.assertTrue(box.helper("stop", id=task["id"])["ok"])
+        self.assertFalse(self.running(launcher, last=True), "the command still runs after stop")
+        self.assertTrue(self.running(daemon, last=True), "a daemon was ended")
+
     def test_stop_leaves_a_daemon_the_agent_started(self):
         """A server of a build tool's, or an ssh connection, that the agent
         started and other tasks share, leads a session of its own."""
