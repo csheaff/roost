@@ -13219,8 +13219,8 @@ nil), it is discarded."
 (ert-deftest roost-ghostel-tmux-a-waiting-terminal-joins-the-perspective-it-shows-in ()
   ;; With tab-bar for Roost and persp-mode on too, a stand-in shown in a
   ;; perspective is one of its buffers: kept for it, should you switch
-  ;; perspectives before the pane comes.  perspective.el's advice on
-  ;; `switch-to-buffer' adds it, NORECORD or not.
+  ;; perspectives before the pane comes.  perspective.el leaves a buffer
+  ;; shown with NORECORD out of it, as newer releases do, so Roost adds it.
   (skip-unless (require 'perspective nil t))
   (roost-test--isolated
    (roost-test--ghostel-backend)

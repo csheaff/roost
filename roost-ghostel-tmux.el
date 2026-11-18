@@ -49,6 +49,7 @@
 (declare-function perspectives-hash "perspective" (&optional frame))
 (declare-function persp-curr "perspective" (&optional frame))
 (declare-function persp-buffers "perspective" (perspective))
+(declare-function persp-add-buffer "perspective" (buffer-or-name))
 
 (defgroup roost-ghostel-tmux nil
   "Roost's terminals through ghostel-tmux."
@@ -442,7 +443,13 @@ there: the stand-in would sit beside that session's other panes."
         (ignore-errors (delete-window other))))
     (when (window-live-p window)
       (with-selected-window window
-        (switch-to-buffer stand-in t)))))
+        (switch-to-buffer stand-in t)
+        ;; One of the perspective's buffers, whichever workspaces Roost
+        ;; uses: perspective.el leaves one shown with NORECORD out, and a
+        ;; perspective left before the pane came would then lose it, see
+        ;; `roost-ghostel-tmux--kept-p'.
+        (when (and (bound-and-true-p persp-mode) (fboundp 'persp-add-buffer))
+          (persp-add-buffer stand-in))))))
 
 (defun roost-ghostel-tmux--sweep-stand-ins ()
   "Kill the stand-ins no window shows whose pane has come or never will.
