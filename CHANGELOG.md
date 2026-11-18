@@ -8,7 +8,8 @@ What each release changes, and what to do when upgrading. Newest first.
   agent left running wrote as the worktree went, as a dev server started
   with `nohup` does. Stopping a task now ends what its agent and its shell
   left running, and retiring a worktree with submodules checks it once more
-  just before Git removes it; discarding counts again once the agent
+  just before Git removes it; what won't end keeps the task from being
+  retired or discarded, and Roost names it; discarding counts again once the agent
   is stopped, and refuses if there is more than it told you. When
   upgrading: a server you started from a task's agent or shell stops with
   the task, but for a daemon, such as a build tool's server; start it
