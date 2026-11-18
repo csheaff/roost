@@ -16976,6 +16976,27 @@ report.py, and the third alone changes src/totals.py."
                  (should (= (window-total-height window) 10))))))
        (kill-buffer buffer)))))
 
+(ert-deftest roost-a-page-after-a-small-image-gets-the-window-of-a-page ()
+  ;; A page gets four tenths of its terminal.  Not the few lines of the
+  ;; small image the task showed before it, in the same window.
+  (roost-test--isolated
+   (let ((buffer (generate-new-buffer "*roost image: budget*"))
+         (size '(30 . 4)))
+     (unwind-protect
+         (cl-letf (((symbol-function 'roost--shown-size) (lambda (_buffer) size))
+                   ((symbol-function 'roost--draw-shown) #'ignore))
+           (let ((roost--shown-terminal-columns 20))
+             (delete-other-windows)
+             (let* ((terminal (selected-window))
+                    (lines (window-total-height terminal))
+                    (window (roost--display-shown buffer terminal)))
+               (should (= (window-total-height window) 6))
+               ;; The page: nothing to measure.
+               (setq size nil)
+               (should (eq (roost--display-shown buffer terminal) window))
+               (should (>= (window-total-height window) (floor (* 0.4 lines)))))))
+       (kill-buffer buffer)))))
+
 (ert-deftest roost-an-image-fills-the-frame-and-the-windows-come-back ()
   (roost-test--isolated
    (let ((buffer (generate-new-buffer "*roost image: budget*"))
@@ -17012,6 +17033,45 @@ report.py, and the third alone changes src/totals.py."
              ;; Elsewhere there is no image to enlarge.
              (should-error (roost-enlarge-image) :type 'user-error)))
        (kill-buffer buffer)))))
+
+(ert-deftest roost-the-windows-come-back-when-an-image-that-fills-the-frame-goes ()
+  ;; You let an image fill the frame; its task is retired, as by a merge
+  ;; that lands or from another Emacs.  The windows it took come back.
+  (roost-test--isolated
+   (let ((key '("dev" "1111111111111111"))
+         (buffer (generate-new-buffer "*roost image: budget*"))
+         (code (generate-new-buffer "code.py"))
+         (notes (generate-new-buffer "notes.md")))
+     (unwind-protect
+         (cl-letf (((symbol-function 'roost--shown-size) (lambda (_buffer) '(30 . 4)))
+                   ((symbol-function 'roost--draw-shown) #'ignore)
+                   ((symbol-function 'message) #'ignore))
+           (with-current-buffer buffer (setq roost--shown-task key))
+           (delete-other-windows)
+           (switch-to-buffer code)
+           (set-window-buffer (split-window nil nil 'right) notes)
+           (let ((window (roost--display-shown buffer (selected-window))))
+             (roost-enlarge-image (list 'mouse-1 (list window 1 '(0 . 0) 0)))
+             (should (one-window-p))
+             (roost--forget-shown key)
+             (should-not (buffer-live-p buffer))
+             (should (get-buffer-window code))
+             (should (get-buffer-window notes))
+             ;; And no window is left where the image was.
+             (should (= (length (window-list)) 2)))
+           ;; The same when you kill its buffer yourself.
+           (setq buffer (generate-new-buffer "*roost image: budget*"))
+           (with-current-buffer buffer (setq roost--shown-task key))
+           (let ((window (roost--display-shown buffer (selected-window))))
+             (roost-enlarge-image (list 'mouse-1 (list window 1 '(0 . 0) 0)))
+             (should (one-window-p))
+             (kill-buffer buffer)
+             (should (get-buffer-window code))
+             (should (get-buffer-window notes))
+             (should (= (length (window-list)) 2))))
+       (when (buffer-live-p buffer) (kill-buffer buffer))
+       (kill-buffer code)
+       (kill-buffer notes)))))
 
 (ert-deftest roost-images-shown-together-go-in-the-rows-that-draw-them-largest ()
   (should (equal (roost--sheet-ways 3) '((1 1 1) (1 2) (2 1) (3))))
@@ -17132,6 +17192,32 @@ report.py, and the third alone changes src/totals.py."
                (should (equal (buffer-string) "shot"))))))
        (when (roost--shown-buffer key) (kill-buffer (roost--shown-buffer key)))))))
 
+(ert-deftest roost-an-image-name-with-a-percent-reads-as-itself-over-the-image ()
+  ;; The helper lets a file's name keep its %; the header line over one of
+  ;; several images takes it for a mode line construct.
+  (roost-test--isolated
+   (let ((key '("dev" "1111111111111111")))
+     (roost--cache-task "dev" (append '((name . "budget")) (roost-test--task "1111111111111111" "ready")))
+     (unwind-protect
+         (cl-letf (((symbol-function 'display-images-p) (lambda (&rest _) t))
+                   ((symbol-function 'image-type-available-p) (lambda (&rest _) t))
+                   ((symbol-function 'roost--display-shown) #'ignore)
+                   ((symbol-function 'message) #'ignore))
+           (roost--take-shown key '((name . "cpu-50%-idle.png and after.png") (kind . "png")
+                                    (at . "2026-11-17T10:00:00+00:00")
+                                    (images ((name . "cpu-50%-idle.png") (kind . "png") (data . "YmVmb3Jl"))
+                                            ((name . "after.png") (kind . "png") (data . "YWZ0ZXI=")))))
+           (with-current-buffer (roost--shown-buffer key)
+             (setq roost--shown-one 0)
+             (roost--shown-header)
+             ;; Batch Emacs formats no mode line: a header line shows a string
+             ;; as it is only with each % doubled, as
+             ;; `roost-ghostel-tmux--mode-line-name' writes a task's name.
+             (let ((name (car (last header-line-format))))
+               (should (equal (string-replace "%%" "%" name) "cpu-50%-idle.png"))
+               (should-not (string-search "%" (string-replace "%%" "" name))))))
+       (when (roost--shown-buffer key) (kill-buffer (roost--shown-buffer key)))))))
+
 (ert-deftest roost-an-image-put-away-comes-back-with-its-task ()
   ;; Another task's terminal takes an image off the screen; it shows
   ;; again when its own task is opened, as one you closed does not.
@@ -17172,6 +17258,47 @@ report.py, and the third alone changes src/totals.py."
              (roost--show-waiting mine)
              (should (equal displayed (list buffer)))
              (should-not (gethash key roost--shown-waiting))))
+       (kill-buffer buffer)))))
+
+(ert-deftest roost-an-image-goes-when-another-task-takes-the-frame-without-a-terminal ()
+  ;; I5: a frame shows only the image of the task whose terminal it shows.
+  ;; A view of a task with no terminal, as the files of one stopped, takes
+  ;; the frame and puts the other task's terminal away: its image goes too,
+  ;; and waits for its own task.
+  (roost-test--isolated
+   (let* ((key '("dev" "1111111111111111"))
+          (other (progn
+                   (roost--cache-task "dev" (append '((name . "budget")) (roost-test--task "1111111111111111" "ready")))
+                   (roost--cache-task "dev" (append '((name . "ledger")) (roost-test--task "2222222222222222" "stopped")))))
+          (buffer (generate-new-buffer "*roost image: budget*"))
+          (side (generate-new-buffer "*side*")))
+     (unwind-protect
+         (cl-letf (((symbol-function 'roost--shown-size) (lambda (_buffer) nil))
+                   ((symbol-function 'roost--draw-shown) #'ignore)
+                   ((symbol-function 'message) #'ignore))
+           (with-current-buffer buffer (setq roost--shown-task key))
+           (delete-other-windows)
+           (roost--display-shown buffer (selected-window))
+           (should (get-buffer-window buffer))
+           (roost--take-frame other)
+           (should-not (get-buffer-window buffer))
+           (should (eq (gethash key roost--shown-waiting) buffer))
+           ;; One that fills the frame gives the windows back as it goes.
+           (let ((yours (window-buffer (selected-window)))
+                 (window (roost--display-shown buffer (selected-window))))
+             (remhash key roost--shown-waiting)
+             (roost-enlarge-image (list 'mouse-1 (list window 1 '(0 . 0) 0)))
+             (should (one-window-p))
+             (roost--take-frame other)
+             (should-not (get-buffer-window buffer))
+             (should (get-buffer-window yours))
+             (should (eq (gethash key roost--shown-waiting) buffer)))
+           ;; The only window between the frame's sides has nowhere to go.
+           (display-buffer-in-side-window side '((side . left)))
+           (set-window-buffer (window-main-window) buffer)
+           (roost--take-frame other)
+           (should (get-buffer-window buffer)))
+       (kill-buffer side)
        (kill-buffer buffer)))))
 
 (ert-deftest roost-shows-an-image-beside-its-terminal-or-once-opened ()

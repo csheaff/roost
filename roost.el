@@ -3133,13 +3133,22 @@ terminal or a draft."
 (defun roost--take-frame (task)
   "Make the selected frame TASK's, as for a view of it, without its terminal.
 Another task's terminal there goes back to what its window showed
-before, but not to another task's terminal.  TASK's drafts another task
+before, but not to another task's terminal, and its image waits for its
+own task, as `roost--put-away-shown' says.  TASK's drafts another task
 took off the frame come back, as when TASK is opened."
+  ;; Another task's image that fills the frame gives the windows back, to
+  ;; go from them as its terminal does.
+  (dolist (window (window-list))
+    (when (and (roost--shown-enlarged-p window)
+               (not (equal (buffer-local-value 'roost--shown-task (window-buffer window))
+                           (roost--key task))))
+      (roost--shown-go-back window)))
   (roost--put-away-other-terminals task)
   (roost--activate-workspace task)
   (unless (roost--workspace-backend)
     (roost--bring-back-drafts task))
-  (roost--mark-in-sidebar))
+  (roost--mark-in-sidebar)
+  (roost--put-away-shown task))
 
 (defvar-local roost--set-aside nil
   "The frames this draft was taken off when other tasks took them.
@@ -11834,7 +11843,8 @@ windows but those at its sides, as `roost--shown-beside' says."
   "Size WINDOW, which shows an image already, for what BUFFER shows now.
 Only a window as Roost left it, beside its terminal: one you have
 resized since stays as you have it, and so does one that fills its
-frame.  It stays on the side it is on."
+frame.  It stays on the side it is on.  For a page, and an image this
+Emacs can't measure, four tenths of what it and its terminal have."
   (pcase (window-parameter window 'roost-shown-fit)
     ((and `(,direction ,width ,height)
           (guard (and (window-prev-sibling window)
@@ -11848,12 +11858,16 @@ frame.  It stays on the side it is on."
                     (+ (window-pixel-height window) (if across 0 (window-pixel-height terminal)))
                     (frame-char-width (window-frame window)) (frame-char-height (window-frame window))
                     direction))
-            (delta (if place
-                       (window-resizable
-                        window
-                        (- (cdr place) (if across (window-total-width window) (window-total-height window)))
-                        across)
-                     0)))
+            (total (lambda (of) (if across (window-total-width of) (window-total-height of))))
+            (delta (window-resizable
+                    window
+                    (- (if place
+                           (cdr place)
+                         ;; A page, and what this Emacs can't measure: four
+                         ;; tenths, as `roost--display-shown' gives a new one.
+                         (floor (* 0.4 (+ (funcall total window) (funcall total terminal)))))
+                       (funcall total window))
+                    across)))
        (unless (zerop delta)
          (window-resize window delta across)
          (set-window-parameter window 'roost-shown-fit
@@ -11928,7 +11942,8 @@ came."
                   (format "%d of %d" (1+ roost--shown-one) (length roost--shown-images))
                   (button " › " #'roost-next-image "The next image")
                   " "
-                  (car (nth roost--shown-one roost--shown-images)))))))
+                  ;; As it is, not as a mode line construct.
+                  (string-replace "%" "%%" (car (nth roost--shown-one roost--shown-images))))))))
 
 (defvar-local roost--sheet-drawn nil
   "The window size this buffer's images were last laid out for: (WIDTH . HEIGHT).")
@@ -12090,6 +12105,26 @@ And show all of several images again, where it showed one alone."
       (set-window-configuration (cdr back)))
     (when-let* ((window (get-buffer-window buffer)))
       (roost--draw-shown buffer window))))
+
+(defun roost--shown-killed ()
+  "Put back the windows this buffer's image took to fill a frame, as it goes.
+As when its task is retired or discarded, and when you kill the buffer:
+its window, the only one left, would show another buffer in its place."
+  (when roost--shown-task
+    (let ((buffer (current-buffer)))
+      (dolist (frame (frame-list))
+        (dolist (window (window-list frame 'no-minibuffer))
+          (when-let* ((back (window-parameter window 'roost-shown-back))
+                      ((eq (car back) buffer)))
+            (set-window-parameter window 'roost-shown-back nil)
+            (when (eq (window-configuration-frame (cdr back)) frame)
+              (set-window-configuration (cdr back))
+              ;; Its own window among them goes with it.
+              (dolist (own (get-buffer-window-list buffer nil frame))
+                (when (eq (window-deletable-p own) t)
+                  (delete-window own))))))))))
+
+(add-hook 'kill-buffer-hook #'roost--shown-killed)
 
 (defun roost-quit-image ()
   "Close this image's window, or put the windows back if it fills the frame.
@@ -12524,7 +12559,8 @@ As TASK's terminal takes the place of theirs.  Each waits, to show
 again when its own task is opened."
   (dolist (window (window-list))
     (when-let* ((key (buffer-local-value 'roost--shown-task (window-buffer window))))
-      (unless (or (equal key (roost--key task)) (one-window-p))
+      ;; Not the frame's only window, nor the only one between its sides.
+      (unless (or (equal key (roost--key task)) (not (eq (window-deletable-p window) t)))
         ;; It comes back with its task, as one you closed doesn't.
         (puthash key (window-buffer window) roost--shown-waiting)
         (delete-window window))))

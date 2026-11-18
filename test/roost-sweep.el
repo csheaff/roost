@@ -17,7 +17,12 @@
 ;;   completion popup hides a question once you click elsewhere, and
 ;;   never does nothing.
 ;; - A button or key that changes only the view keeps that change through
-;;   a redraw, and another button or key changes it back.
+;;   a redraw, and another button or key changes it back.  For what an
+;;   agent showed beside its terminal, an image, several or a page, the
+;;   frame's windows are part of the view: one that fills the frame has a
+;;   way back to them.
+;; - When its task goes, or you kill its buffer, what an agent showed
+;;   takes none of your windows with it, whatever you pressed there first.
 ;; - A key the view tells you to press is bound there, and its command
 ;;   applies to the task.  A click on it, there or gone since, never ends
 ;;   in a Lisp error.
@@ -43,6 +48,11 @@
 (require 'cl-lib)
 (require 'roost)
 (require 'roost-test)
+;; Its mode, which the views of what an agent showed draw without.
+(require 'image-mode)
+;; Loaded before its functions are stood in for, which loading it then
+;; would define over the stand-ins.
+(require 'xwidget nil t)
 
 (defconst roost-sweep--long-prompt
   (concat "Make the report show how much is left of each budget, and flag the "
@@ -250,6 +260,12 @@ KIND is `committed', `uncommitted', `untracked' or `binary'."
     ;; Its agent showed you an image, which its panel names.
     ("shows an image" (status . "ready") (live . t)
      (shown (id . "0a1b2c3d") (name . "shot.png") (kind . "png") (at . "2026-10-03T19:58:00+00:00")))
+    ;; Or several together, named in one line.
+    ("shows several images" (status . "ready") (live . t)
+     (shown (id . "2c3d4e5f") (name . "before.png and after.png") (kind . "png")
+            (at . "2026-10-03T19:58:00+00:00")
+            (images ((id . "2c3d4e5f") (name . "before.png") (kind . "png"))
+                    ((id . "3d4e5f6a") (name . "after.png") (kind . "png")))))
     ;; Or a page it wrote, named the same way.
     ("shows a page" (status . "ready") (live . t)
      (shown (id . "1b2c3d4e") (name . "what changed") (kind . "html") (at . "2026-10-03T19:58:00+00:00")))
@@ -366,6 +382,54 @@ task's perspective rather than where the others start."
                   (remove-hook 'kill-buffer-query-functions keep)))
               (set-window-configuration windows))))))))
 
+(defvar roost-sweep--showing nil
+  "Non-nil once the view under way is what a task's agent showed.
+Then images and pages draw as `roost-sweep--drawing-shown' says.")
+
+(defvar-local roost-sweep--web-views nil
+  "The web views made for this buffer, stand-ins for those of a page.")
+(put 'roost-sweep--web-views 'permanent-local t)
+
+(defun roost-sweep--drawing-shown (body)
+  "Call BODY where what an agent showed draws, though batch Emacs draws none.
+Once `roost-sweep--showing' is set, and not before, so that the other
+views draw as they do: this Emacs draws images, each of 30 by 4 pixels,
+`image-mode' is a mode that draws nothing, and Emacs has web views.  A
+web view is a stand-in that loads nothing: Roost makes it, fits it and
+closes it as it does a real one."
+  (let* ((roost-sweep--showing nil)
+         (once (lambda (function fake)
+                 (let ((real (symbol-function function)))
+                   (lambda (&rest args)
+                     (apply (if roost-sweep--showing fake real) args))))))
+    (cl-letf (((symbol-function 'display-images-p) (funcall once 'display-images-p #'always))
+              ((symbol-function 'image-type-available-p) (funcall once 'image-type-available-p #'always))
+              ((symbol-function 'create-image)
+               (funcall once 'create-image (lambda (data &rest _) (list 'image :type 'png :data data))))
+              ((symbol-function 'roost--measure-image)
+               (funcall once 'roost--measure-image (lambda (_data) (cons 30 4))))
+              ((symbol-function 'image-mode)
+               (funcall once 'image-mode
+                        (lambda () (kill-all-local-variables) (setq major-mode 'image-mode mode-name "Image"))))
+              ((symbol-function 'roost--pages-p) (funcall once 'roost--pages-p #'always))
+              ((symbol-function 'make-xwidget)
+               (lambda (&rest args)
+                 (let ((view (list 'web-view)))
+                   (with-current-buffer (car (last args))
+                     (push view roost-sweep--web-views))
+                   view)))
+              ((symbol-function 'get-buffer-xwidgets)
+               (lambda (buffer) (buffer-local-value 'roost-sweep--web-views buffer)))
+              ((symbol-function 'kill-xwidget)
+               (lambda (view) (setq roost-sweep--web-views (delq view roost-sweep--web-views))))
+              ((symbol-function 'xwidget-live-p) #'always)
+              ((symbol-function 'set-xwidget-query-on-exit-flag) #'ignore)
+              ((symbol-function 'xwidget-put) #'ignore)
+              ((symbol-function 'xwidget-webkit-goto-uri) #'ignore)
+              ((symbol-function 'xwidget-resize) #'ignore)
+              ((symbol-function 'xwidget-webkit-execute-script) #'ignore))
+      (funcall body))))
+
 (defmacro roost-sweep--world (&rest body)
   "Run BODY with the outside world stubbed and fresh Roost state.
 Under perspective.el, in the perspectives it started with."
@@ -397,7 +461,7 @@ Under perspective.el, in the perspectives it started with."
                     ;; Global modes have tests of their own; here they are only noted.
                     ((symbol-function 'roost-watch-mode)
                      (lambda (&rest args) (push (cons 'roost-watch-mode args) roost-sweep--effects))))
-           ,@body))))))
+           (roost-sweep--drawing-shown (lambda () ,@body))))))))
 
 ;;;; Views
 
@@ -511,6 +575,64 @@ For a task that is none, attempts that have all gone since."
     (setq roost--attempts-shown
           (list (roost--field task 'host) (or (alist-get 'group (roost--attempt task)) "gone")))))
 
+;; What an agent showed beside its terminal: an image, several together,
+;; one of those alone, or a page.  Each is made as its host's reply makes
+;; it, and shown as it is when you open its task.
+
+(defun roost-sweep--shown-make (state)
+  "The buffer of what STATE's task's agent showed, as its host's reply makes it.
+It waits, as for a task whose terminal is off screen."
+  (setq roost-sweep--showing t)
+  (let* ((key (roost-sweep--key state))
+         (shown (roost--field (gethash key roost--tasks) 'shown))
+         (bytes (lambda (part) (base64-encode-string (format "bytes of %s" (alist-get 'name part))))))
+    (roost--take-shown
+     key
+     `((name . ,(alist-get 'name shown)) (kind . ,(alist-get 'kind shown)) (at . ,(alist-get 'at shown))
+       ,@(if-let* ((parts (alist-get 'images shown)))
+             `((images ,@(mapcar (lambda (part)
+                                   `((name . ,(alist-get 'name part)) (kind . ,(alist-get 'kind part))
+                                     (data . ,(funcall bytes part))))
+                                 parts)))
+           `((data . ,(funcall bytes shown))))))
+    (or (gethash key roost--shown-waiting) (error "%s shows nothing" state))))
+
+(defun roost-sweep--shown-render ()
+  "Draw again what the current buffer shows of its task's agent's."
+  (roost--draw-shown (current-buffer) (get-buffer-window)))
+
+(defun roost-sweep--shown-reads ()
+  "How what an agent showed reads besides its text.
+Its mode, the line over it, and the buffers of the frame's windows in
+their order: an image that fills the frame changes only those."
+  (format "\n%s %S %S" major-mode
+          (and (consp header-line-format)
+               (mapcar (lambda (part) (if (stringp part) (substring-no-properties part) part))
+                       header-line-format))
+          (mapcar (lambda (window) (buffer-name (window-buffer window)))
+                  (window-list nil 'no-minibuffer (frame-first-window)))))
+
+(defun roost-sweep--shown-places ()
+  "Where to click in what an agent showed: on each image there."
+  (let ((pos (point-min)) found)
+    (while (< pos (point-max))
+      (when (get-text-property pos 'roost-shown-index)
+        (push pos found))
+      (setq pos (next-single-property-change pos 'roost-shown-index nil (point-max))))
+    (or (nreverse found) (list (point-min)))))
+
+(defun roost-sweep--one-setup (_state)
+  "Let the first of the images the current buffer shows fill the frame alone."
+  (roost-enlarge-image))
+
+(defun roost-sweep--task-goes (state _buffer)
+  "STATE's task goes, as when it is retired, discarded or dropped from a list."
+  (roost--forget-shown (roost-sweep--key state)))
+
+(defun roost-sweep--buffer-killed (_state buffer)
+  "You kill BUFFER."
+  (kill-buffer buffer))
+
 (defvar roost-sweep--views
   '((panel :mode roost-task-info-mode :render roost--render-task-info :widths (40 100)
            :layouts (selected none other both) :setup roost-sweep--panel-setup)
@@ -532,7 +654,30 @@ For a task that is none, attempts that have all gone since."
                  :keys (roost-compose-submit roost-compose-cancel roost-compose-set-project))
     (attempts :mode roost-attempts-mode :render roost--render-attempts
               :layouts (selected none other both) :setup roost-sweep--attempts-setup :point roost-sweep--row
-              :keys (roost-attempts-visit roost-attempts-merge roost-attempts-refresh)))
+              :keys (roost-attempts-visit roost-attempts-merge roost-attempts-refresh))
+    (image :make roost-sweep--shown-make :render roost-sweep--shown-render :reads roost-sweep--shown-reads
+           :layouts (beside none) :sized t :states ("shows an image")
+           :clicks roost-sweep--shown-places
+           :goes (roost-sweep--task-goes roost-sweep--buffer-killed)
+           :keys (roost-enlarge-image roost-next-image roost-previous-image roost-quit-image))
+    (sheet :make roost-sweep--shown-make :render roost-sweep--shown-render :reads roost-sweep--shown-reads
+           :layouts (beside none) :sized t :states ("shows several images")
+           :clicks roost-sweep--shown-places
+           :goes (roost-sweep--task-goes roost-sweep--buffer-killed)
+           :keys (roost-enlarge-image roost-quit-image))
+    (one-of-several :make roost-sweep--shown-make :setup roost-sweep--one-setup
+                    :render roost-sweep--shown-render :reads roost-sweep--shown-reads
+                    :layouts (beside) :sized t :states ("shows several images")
+                    :clicks roost-sweep--shown-places
+                    :goes (roost-sweep--task-goes roost-sweep--buffer-killed)
+                    :keys (roost-enlarge-image roost-next-image roost-previous-image roost-quit-image))
+    ;; No key of a page's lets it fill the frame: it does where it took
+    ;; the place of an image that did, as the command alone has it here.
+    (page :make roost-sweep--shown-make :render roost-sweep--shown-render :reads roost-sweep--shown-reads
+          :layouts (beside none) :sized t :states ("shows a page")
+          :goes (roost-sweep--task-goes roost-sweep--buffer-killed)
+          :also ((key [?z] . roost-enlarge-image))
+          :keys (roost-quit-image)))
   "Roost's views, each (NAME . PLIST).
 :mode makes the buffer, :setup gives it what it shows for a state,
 :render draws it, :point finds the state's task in it, and :buffer names
@@ -541,7 +686,18 @@ windows to show it in, the first as actions are tried: see
 `roost-sweep--draw'.  :sized means it fits the window it is in, so with
 none it draws for a width of its own, and isn't compared with the rest.
 :keys are the commands of a view with few keys, which the sweep must
-reach; for one without, it must reach more than six.")
+reach; for one without, it must reach more than six.
+A view of what an agent showed has :make in place of :mode, which
+returns its buffer for a state, and :setup, if any, once it is on
+screen.  Its layout `beside' shows it as opening its task does.  :states
+are the only states it is drawn for, :reads what it reads as besides
+its text, and :clicks the places in it to click.  :goes are the ways it
+goes with its task, each called with the state and the buffer, and
+:also the actions tried before those besides its buttons and keys.")
+
+(defun roost-sweep--states (view)
+  "The gallery states VIEW is drawn for."
+  (or (roost-sweep--view view :states) (mapcar #'car roost-sweep--gallery)))
 
 (defun roost-sweep--view (view property)
   "PROPERTY of VIEW in `roost-sweep--views'."
@@ -549,20 +705,29 @@ reach; for one without, it must reach more than six.")
 
 (defun roost-sweep--draw (view state width &optional layout)
   "Make and draw VIEW for gallery STATE at WIDTH, in windows as LAYOUT says.
-LAYOUT is `selected', the window you are in, unless given; `none', no
-window; `other', a window beside the one you are in, as a panel is
-beside the terminal you type in; or `both'.  Return the buffer, current,
-with point on STATE's task in a list."
-  (let ((buffer (generate-new-buffer (or (roost-sweep--view view :buffer) (format "*sweep %s*" view)))))
+LAYOUT is the first of the view's unless given: `selected', the window
+you are in; `none', no window; `other', a window beside the one you are
+in, as a panel is beside the terminal you type in; `both'; or `beside',
+for what an agent showed, as opening its task shows it: beside the
+window you are in, which stands for the terminal, with a window of your
+own at its other side, and you in its window as when you type there.
+Return the buffer, current, with point on STATE's task in a list."
+  (let* ((make (roost-sweep--view view :make))
+         (buffer (if make
+                     (funcall make state)
+                   (generate-new-buffer (or (roost-sweep--view view :buffer) (format "*sweep %s*" view))))))
     (delete-other-windows)
     (set-window-buffer (selected-window) (get-buffer-create "*sweep elsewhere*"))
-    (pcase (or layout 'selected)
+    (pcase (or layout (car (roost-sweep--view view :layouts)) 'selected)
       ('selected (set-window-buffer (selected-window) buffer))
       ('other (set-window-buffer (split-window) buffer))
       ('both (set-window-buffer (selected-window) buffer)
-             (set-window-buffer (split-window) buffer)))
+             (set-window-buffer (split-window) buffer))
+      ('beside (set-window-buffer (split-window nil nil 'left) (get-buffer-create "*sweep code*"))
+               (roost--show-waiting (gethash (roost-sweep--key state) roost--tasks))
+               (select-window (get-buffer-window buffer))))
     (set-buffer buffer)
-    (funcall (roost-sweep--view view :mode))
+    (unless make (funcall (roost-sweep--view view :mode)))
     (when-let* ((setup (roost-sweep--view view :setup))) (funcall setup state))
     (roost-sweep--at-width width
       (funcall (roost-sweep--view view :render)))
@@ -578,12 +743,16 @@ with point on STATE's task in a list."
   (pcase layout
     ('none "in no window")
     ('selected "in the window you are in")
+    ('beside "beside its terminal")
     ('other "beside the window you are in")
     ('both "in two windows")))
 
-(defun roost-sweep--text ()
-  "The current buffer's text, without properties."
-  (buffer-substring-no-properties (point-min) (point-max)))
+(defun roost-sweep--text (&optional view)
+  "The current buffer's text, without properties.
+With what else VIEW reads as, if it says."
+  (concat (buffer-substring-no-properties (point-min) (point-max))
+          (when-let* ((reads (and view (roost-sweep--view view :reads))))
+            (funcall reads))))
 
 (defun roost-sweep--button-starts ()
   "The buttons in the current buffer, each (LABEL OCCURRENCE . START).
@@ -604,7 +773,8 @@ OCCURRENCE counts the buttons before it with the same label."
 (defun roost-sweep--keys ()
   "The keys the current buffer's mode binds, each (KEY . COMMAND).
 Those of Roost's modes: its own, then those it derives from while they
-are Roost's.  The keys of the others, such as `special-mode' or
+are Roost's, and Roost's minor modes that are on in this buffer alone,
+as over an image.  The keys of the others, such as `special-mode' or
 `text-mode', are left out: what they do depends on Emacs and its
 setup, such as the word list `text-mode''s C-M-i completes from.
 Mouse events are left out too, and keys whose commands switch global
@@ -625,15 +795,31 @@ C-c, counts for the keys after it."
                                      (not (assoc key found)))
                                 (push (cons key binding) found))))))
                    map)))
+      (pcase-dolist (`(,mode . ,map) minor-mode-map-alist)
+        (when (and (string-prefix-p "roost-" (symbol-name mode)) (local-variable-p mode)
+                   (symbol-value mode))
+          (walk map nil)))
       (let ((mode major-mode))
         (while (and mode (string-prefix-p "roost-" (symbol-name mode)))
           (walk (symbol-value (derived-mode-map-name mode)) nil)
           (setq mode (get mode 'derived-mode-parent)))))
     (nreverse found)))
 
+(defun roost-sweep--view-clicks (view)
+  "The clicks VIEW says to try in the current buffer, each (POS . COMMAND).
+What mouse-1 runs at each of its :clicks."
+  (when-let* ((places (roost-sweep--view view :clicks)))
+    (seq-keep (lambda (pos)
+                (when-let* ((command (key-binding [mouse-1] t nil pos))
+                            ((commandp command)))
+                  (cons pos command)))
+              (funcall places))))
+
 (defun roost-sweep--do (action)
   "Do ACTION in the current buffer: (button LABEL . N) or (key KEY . COMMAND).
-Return nil, or the error it ended in when that is a Lisp error."
+Or (click POS . COMMAND), a click there from another window, if the
+frame has one: a click selects nothing.  A key is typed in the buffer's
+window.  Return nil, or the error it ended in when that is a Lisp error."
   (condition-case err
       (progn
         (pcase action
@@ -645,10 +831,22 @@ Return nil, or the error it ended in when that is a Lisp error."
                           (error "No button %S here" label)))
            (push-button (point)))
           (`(key ,key . ,command)
+           (when-let* ((window (get-buffer-window)))
+             (select-window window))
            (let ((last-command-event (aref key (1- (length key))))
+                 (last-nonmenu-event (aref key (1- (length key))))
                  (this-command command)
                  (current-prefix-arg nil))
-             (call-interactively command nil key))))
+             (call-interactively command nil key)))
+          (`(click ,pos . ,command)
+           (let* ((window (or (get-buffer-window) (error "No window to click in")))
+                  (click (list 'mouse-1 (list window pos '(0 . 0) 0)))
+                  (last-input-event click)
+                  (last-nonmenu-event click))
+             (when-let* ((other (seq-find (lambda (other) (not (eq other window))) (window-list))))
+               (select-window other))
+             (with-current-buffer (window-buffer (selected-window))
+               (call-interactively command nil (vector click))))))
         nil)
     ((user-error quit roost-sweep-outside beginning-of-buffer end-of-buffer) nil)
     (error err)))
@@ -683,12 +881,14 @@ keys there are then."
                 (if (not (buffer-live-p buffer))
                     (list :error error :outside outside)
                   (set-buffer buffer)
-                  (let ((text (roost-sweep--text)))
+                  (let ((text (roost-sweep--text view)))
                     (funcall (roost-sweep--view view :render))
                     (list :text text :error error :outside outside
-                          :redrawn (roost-sweep--text)
+                          :redrawn (roost-sweep--text view)
                           :actions (append (mapcar (lambda (b) (cons 'button b)) (roost-sweep--buttons))
-                                           (mapcar (lambda (k) (cons 'key k)) (roost-sweep--keys))))))))
+                                           (mapcar (lambda (k) (cons 'key k)) (roost-sweep--keys))
+                                           (mapcar (lambda (c) (cons 'click c))
+                                                   (roost-sweep--view-clicks view))))))))
           (dolist (new (buffer-list))
             (unless (memq new existing) (kill-buffer new))))))))
 
@@ -752,7 +952,8 @@ couldn't; and :error, a Lisp error."
   "ACTION, from `roost-sweep--do', as text."
   (pcase action
     (`(button ,label . ,_) (format "button %S" label))
-    (`(key ,key . ,command) (format "%s (%s)" (key-description key) command))))
+    (`(key ,key . ,command) (format "%s (%s)" (key-description key) command))
+    (`(click ,pos . ,command) (format "a click at %d (%s)" pos command))))
 
 ;;;; Rules
 
@@ -765,10 +966,10 @@ couldn't; and :error, a Lisp error."
             (save-window-excursion
               (let ((buffer (roost-sweep--draw view state width layout)))
                 (unwind-protect
-                    (let ((text (roost-sweep--text)) (point (point)))
+                    (let ((text (roost-sweep--text view)) (point (point)))
                       (roost-sweep--at-width width
                         (funcall (roost-sweep--view view :render)))
-                      (unless (equal text (roost-sweep--text))
+                      (unless (equal text (roost-sweep--text view))
                         (push (format "drawing it again changes it, shown %s" (roost-sweep--layout layout))
                               problems))
                       (unless (= point (point))
@@ -1000,6 +1201,53 @@ Only for a task that waits, which it goes to, in echo areas narrow and wide."
                 (setq pos end))))))
       (delete-dups (nreverse problems)))))
 
+(defun roost-sweep--gone (view state width actions way)
+  "Draw VIEW for STATE at WIDTH, do ACTIONS, and have it go by WAY.
+WAY is one of the view's :goes.  Return what is wrong then, or nil: a
+Lisp error, its buffer still there, or a window you had beside it gone."
+  (roost-sweep--world
+    (save-window-excursion
+      (let* ((existing (buffer-list))
+             (buffer (roost-sweep--draw view state width))
+             ;; What you had beside it as it came: one that fills the
+             ;; frame from the start has taken their windows already.
+             (yours (delq nil (mapcar #'get-buffer '("*sweep elsewhere*" "*sweep code*"))))
+             error)
+        (unwind-protect
+            (progn
+              (dolist (action actions)
+                (when (and (buffer-live-p buffer) (not error))
+                  (set-buffer buffer)
+                  (setq error (roost-sweep--do action))))
+              (unless error
+                (setq error (condition-case err
+                                (progn (funcall way state buffer) nil)
+                              (error err))))
+              (cond (error (format "fails: %S" error))
+                    ((buffer-live-p buffer) "leaves its buffer")
+                    ((seq-find (lambda (mine) (not (get-buffer-window mine))) yours)
+                     (format "takes the window of %s with it"
+                             (buffer-name (seq-find (lambda (mine) (not (get-buffer-window mine))) yours))))))
+          (dolist (new (buffer-list))
+            (unless (memq new existing) (kill-buffer new))))))))
+
+(defun roost-sweep--check-going (view state width)
+  "Problems when VIEW for STATE at WIDTH goes, as its :goes say.
+As it comes, and after each of its buttons, keys and clicks, and what
+else it says to try: your windows beside it stay."
+  (let ((actions (append (plist-get (roost-sweep--try view state width nil) :actions)
+                         (roost-sweep--view view :also)))
+        problems)
+    (dolist (way (roost-sweep--view view :goes))
+      (dolist (first (cons nil (mapcar #'list actions)))
+        (when-let* ((problem (roost-sweep--gone view state width first way)))
+          (push (format "%s%s %s"
+                        (replace-regexp-in-string "\\`roost-sweep--\\|-" " " (symbol-name way))
+                        (if first (format ", after %s," (roost-sweep--describe (car first))) "")
+                        problem)
+                problems))))
+    (nreverse problems)))
+
 (defun roost-sweep--face-span (pos face)
   "The next span from POS with FACE among its faces, as (START . END), or nil."
   (let ((start (roost-sweep--face-start pos face)))
@@ -1020,7 +1268,7 @@ Only for a task that waits, which it goes to, in echo areas narrow and wide."
 Return them as (PROBLEM . PLACES), PLACES naming the view, state and width."
   (let (problems)
     (dolist (view views)
-      (dolist (state (mapcar #'car roost-sweep--gallery))
+      (dolist (state (roost-sweep--states view))
         (dolist (width (or (roost-sweep--view view :widths) '(nil)))
           (dolist (problem (and (roost-test--mine-p) (funcall rule view state width)))
             (let ((place (format "%s, %s%s" view state (if width (format " at %d" width) "")))
@@ -1047,7 +1295,7 @@ Return them as (PROBLEM . PLACES), PLACES naming the view, state and width."
   (roost-test--isolated
    (let (buttons keys)
      (dolist (view (mapcar #'car roost-sweep--views))
-       (dolist (state (mapcar #'car roost-sweep--gallery))
+       (dolist (state (roost-sweep--states view))
          (let ((start (roost-sweep--try view state (car (roost-sweep--view view :widths)) nil)))
            (dolist (action (plist-get start :actions))
              (pcase action
@@ -1072,12 +1320,46 @@ Return them as (PROBLEM . PLACES), PLACES naming the view, state and width."
                     (panel "running" 100 (button "Show the whole prompt" . 0))
                     (panel "after a later prompt" 100 (button "Show the whole prompt" . 0))
                     (panel "permission" 40 (button "Show the whole reply" . 0))
-                    (search "running" nil (key [?\t] . roost-search-toggle))))
+                    (search "running" nil (key [?\t] . roost-search-toggle))
+                    ;; What an agent showed fills the frame, by a key or a
+                    ;; click, and one of several steps to the next.
+                    (image "shows an image" nil (key [?z] . roost-enlarge-image))
+                    (image "shows an image" nil (click 1 . roost-enlarge-image))
+                    (sheet "shows several images" nil (key [?\r] . roost-enlarge-image))
+                    (sheet "shows several images" nil (click 3 . roost-enlarge-image))
+                    (one-of-several "shows several images" nil (key [?n] . roost-next-image))
+                    (one-of-several "shows several images" nil (key [?q] . roost-quit-image))))
      (let ((start (roost-sweep--try view state width nil))
            (changed (roost-sweep--try view state width (list action))))
        (should-not (plist-get changed :outside))
        (should-not (plist-get changed :error))
        (should-not (equal (plist-get changed :text) (plist-get start :text)))))
+   ;; Each of those is in its own mode, a page's web view is made, and
+   ;; each has the clicks the sweep tries, on each image and its name,
+   ;; but a page, which takes its own.
+   (pcase-dolist (`(,view ,state ,mode ,clicks)
+                  '((image "shows an image" image-mode 1) (sheet "shows several images" roost-shown-sheet-mode 4)
+                    (one-of-several "shows several images" image-mode 1)
+                    (page "shows a page" roost-shown-page-mode 0)))
+     (roost-sweep--world
+       (save-window-excursion
+         (let ((buffer (roost-sweep--draw view state nil)))
+           (unwind-protect
+               (progn
+                 (should (eq major-mode mode))
+                 (should (eq (window-buffer (selected-window)) buffer))
+                 (should (= (length (window-list)) (if (eq view 'one-of-several) 1 3)))
+                 (should (eq (and (roost--page-view) t) (eq view 'page)))
+                 (should (= (length (roost-sweep--view-clicks view)) clicks)))
+             (kill-buffer buffer))))))
+   ;; A view that goes is found out: one that stayed, and one that took
+   ;; a window with it.
+   (should (equal (roost-sweep--gone 'image "shows an image" nil nil #'ignore) "leaves its buffer"))
+   (should (equal (roost-sweep--gone 'image "shows an image" nil nil
+                                     (lambda (_state buffer)
+                                       (delete-window (get-buffer-window "*sweep code*"))
+                                       (kill-buffer buffer)))
+                  "takes the window of *sweep code* with it"))
    ;; Each list's rows open their task with a click, and show a menu.
    (dolist (view '(dashboard sidebar))
      (let ((clicks (roost-sweep--world
@@ -1123,6 +1405,13 @@ Return them as (PROBLEM . PLACES), PLACES naming the view, state and width."
   :tags '(sliced)
   (roost-test--isolated
    (roost-sweep--report (roost-sweep--run #'roost-sweep--check-actions (mapcar #'car roost-sweep--views)))))
+
+(ert-deftest roost-sweep-what-an-agent-showed-goes-and-your-windows-stay ()
+  :tags '(sliced)
+  (roost-test--isolated
+   (roost-sweep--report (roost-sweep--run #'roost-sweep--check-going
+                                          (seq-filter (lambda (view) (roost-sweep--view view :goes))
+                                                      (mapcar #'car roost-sweep--views))))))
 
 (ert-deftest roost-sweep-decoration-changes-no-text ()
   :tags '(sliced)

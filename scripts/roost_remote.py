@@ -509,6 +509,10 @@ class Store:
         path = self.path(task_id)
         shutil.rmtree(self.attachments(task_id), ignore_errors=True)
         shutil.rmtree(self.shown(task_id), ignore_errors=True)
+        # What a Pi task kept of a page as its model wrote it.
+        for name in (task_id + ".json", task_id + ".json.part"):
+            with contextlib.suppress(OSError):
+                (self.root / "live" / name).unlink()
         before = self.recorded(task_id)
         if before and isinstance(before.get("repo"), str):
             with contextlib.suppress(OSError, ValueError):

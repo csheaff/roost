@@ -4,6 +4,26 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- **An image that fills the frame gives your windows back when it goes.**
+  Retiring or discarding its task, a task dropping from the list, or
+  killing the image's buffer left the frame with one window, and the windows
+  you had before were gone. They come back now, as with `q`.
+- **Another task's image goes when you open a view of a task without a
+  terminal.** The files, review or Magit of a stopped task took the frame
+  and put the other task's terminal away, but left its image there. The
+  image goes too now, and comes back when you open its own task.
+- **A page shown after a small image gets a window of a page's size.** It
+  kept the few lines of the image before it; it now gets four tenths of
+  what the window and its terminal have, unless you resized the window.
+- **A `%` in an image's file name reads as itself** in the line over one of
+  several images, where a name such as `cpu-50%-idle.png` was not shown as
+  written.
+- **A page a Pi task was writing goes with its task.** What the task kept
+  of the page for Emacs to show as it was written, in `live` under Roost's
+  state directory, stayed after the task was retired, discarded or
+  forgotten. Files left by tasks that went before this stay: remove
+  `live/*.json` and `live/*.json.part` there by hand if you mind them.
+
 ## 0.13.0
 
 To upgrade from 0.12:
