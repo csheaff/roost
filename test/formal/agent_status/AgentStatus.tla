@@ -36,7 +36,11 @@ CONSTANTS
     AfterFailure,   \* what Claude reports after StopFailure: subset of {"done", "idle", "error"}
     PlanMenuCloses, \* you may close Codex's plan menu, with Esc or "No, stay
                     \* in Plan mode", of which Codex says nothing
-    Break           \* "none", or one place where the model breaks the code
+    EarlyWork,      \* agents that, started on a task's prompt, report that
+                    \* they work before their SessionStart hook runs, as the
+                    \* relayed captures of Claude 2.1.303 and Codex 0.163.0
+                    \* show: subset of Agents
+    Break          \* "none", or one place where the model breaks the code
                     \* on purpose, to show a rule can fail
 
 ACTIVE == {"starting", "running", "permission", "background"}
@@ -93,6 +97,13 @@ Observe(e, cur) ==
   IF agent = "claude" THEN
     IF e = "SessionStart" THEN "ready"
     ELSE IF e \in {"UserPromptSubmit", "PreToolUse", "PostToolUse"} THEN "running"
+    \* A tool's failure is news only of what was asked: the turn goes on.
+    ELSE IF e = "PostToolUseFailure" THEN (IF cur = "permission" THEN "running" ELSE "none")
+    \* PostToolUseFailure with is_interrupt: you stopped the tool, which
+    \* the transcript records, for the poll.  Broken: `interrupt_is_news`
+    \* takes it for any failure.
+    ELSE IF e = "ToolInterrupted"
+      THEN (IF Break = "interrupt_is_news" /\ cur = "permission" THEN "running" ELSE "none")
     ELSE IF e = "PermissionRequest" THEN "permission"
     ELSE IF e = "Stop" THEN "ready"
     ELSE IF e = "StopBg" THEN "background"       \* Stop with background_tasks
@@ -123,8 +134,11 @@ Beside(s, before) ==
        THEN s ELSE "none"
   ELSE IF s = "running" /\ before = "permission" THEN "none" ELSE s
 
-(* `update_hook`, for hook E of run R.  Tool events are the main agent's,
-   so `tool_answers` is true. *)
+(* `update_hook`, for hook E of run R.  Unrelayed, a status other than
+   `permission` stands over `permission` only if the event answers what was
+   asked (`answers`).  Here it always does: every event is the one agent's,
+   a tool's end is of the tool it asked for, and no subagent ends.
+   SubagentAsks.tla has the rest. *)
 Hook(e, r) ==
   LET before == status
       s0 == Observe(e, before)
@@ -173,7 +187,12 @@ Report(f) ==
             ELSE IF st = "error" /\ s # "failed" THEN "failed"
             ELSE "none"
       after == IF ch = "none" THEN s ELSE ch
-  IN /\ psRun' = run
+  \* programStatusRun: a report older than the last hook's status counts
+  \* for nothing, the run's relay included, so the hooks go on counting
+  \* until a report newer than them all is recorded.  Broken:
+  \* `stale_report_relays` counts the run as relayed from any report, as
+  \* before.
+  IN /\ psRun' = IF f.stale /\ Break \notin {"no_hookat", "stale_report_relays"} THEN psRun ELSE run
      /\ status' = after
      /\ dialog' = IF ch = "none" THEN dialog ELSE (st = "blocked" /\ s # "running")
      /\ plan' = IF ch = "none" THEN plan ELSE FALSE
@@ -187,13 +206,17 @@ StartScript ==
   IF agent = "claude" THEN Scr(<<H("SessionStart"), R("idle")>>)
   ELSE Scr(<<R("idle"), H("SessionStart")>>)
 
+\* A first turn, from the task's prompt, of an agent in EarlyWork: its word
+\* that it works is read before its SessionStart hook runs.
+EarlyScript == <<R("idle"), R("working"), H("SessionStart"), H("UserPromptSubmit")>>
+
 Init ==
   /\ agent \in Agents
   /\ relayed \in Modes
-  /\ truth = "idle"
+  /\ \/ truth = "idle" /\ script = StartScript
+     \/ agent \in EarlyWork /\ relayed /\ truth = "working" /\ script = EarlyScript
   /\ cmd = FALSE
   /\ marker = FALSE
-  /\ script = StartScript
   /\ queue = <<>>
   /\ stray = NoHook
   /\ late = <<>>
@@ -231,10 +254,14 @@ Prompt ==   \* you send a prompt, or Claude wakes for its background work;
   /\ CanStep /\ truth \in {"idle", "failedTurn", "background", "planMenu"}
   /\ Step("working", <<R("working"), H("UserPromptSubmit")>>, FALSE, FALSE)
 
+\* How a tool ends: done, or for Claude, failed (PostToolUseFailure).
+ToolEnds == IF Claude THEN {"PostToolUse", "PostToolUseFailure"} ELSE {"PostToolUse"}
+
 Tool ==
   /\ CanStep /\ truth = "working" /\ ~cmd
-  /\ Step("working", IF Claude THEN <<R("working"), H("PreToolUse"), H("PostToolUse")>>
-                     ELSE <<H("PreToolUse"), H("PostToolUse")>>, FALSE, marker)
+  /\ \E end \in ToolEnds :
+       Step("working", IF Claude THEN <<R("working"), H("PreToolUse"), H(end)>>
+                       ELSE <<H("PreToolUse"), H(end)>>, FALSE, marker)
 
 Ask ==      \* it asks to run a command
   /\ CanStep /\ truth = "working" /\ ~cmd
@@ -261,11 +288,15 @@ Approve ==  \* you approve; the command runs, and its end comes later
 
 CommandEnds ==
   /\ CanStep /\ truth = "working" /\ cmd
-  /\ Step("working", <<H("PostToolUse")>>, FALSE, marker)
+  /\ \E end \in ToolEnds : Step("working", <<H(end)>>, FALSE, marker)
 
-Decline ==  \* Esc at the request, or mid-turn
+Decline ==  \* Esc at the request, or mid-turn.  Claude runs a hook only for
+            \* a tool you stopped, here the command you approved; Codex
+            \* calls a declined request work before it says you stopped it.
   /\ CanStep /\ truth \in {"asking", "working"}
-  /\ Step("idle", IF Claude THEN <<R("idle")>> ELSE <<H("Interrupt"), R("idle")>>, FALSE, Claude)
+  /\ Step("idle", IF Claude THEN (IF cmd THEN <<H("ToolInterrupted"), R("idle")>> ELSE <<R("idle")>>)
+                  ELSE IF truth = "asking" THEN <<R("working"), H("Interrupt"), R("idle")>>
+                  ELSE <<H("Interrupt"), R("idle")>>, FALSE, Claude)
 
 End ==
   /\ CanStep /\ truth = "working" /\ ~cmd

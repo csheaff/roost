@@ -8,8 +8,9 @@ description: >
   forget, retarget, remove_worktrees, remove_agent_worktrees, agent_work,
   delete_branch, safe_to_delete, branches_going, discard_losses,
   put_back_removed, require_not_removing, holding_worktree, integrating,
-  conversation_to_fork, propose_task, require_offers_named, the registry
-  lock, or the order of their steps in scripts/roost_remote.py;
+  conversation_to_fork, propose_task, require_offers_named, what `stop` or
+  `resume` is refused for, the registry lock, or the order of their steps
+  in scripts/roost_remote.py;
   when "A task on its host" in docs/state-machines.md changes; or when asked
   to verify finishing a task. Not for creation, the agent's status or
   Emacs's views.
@@ -23,8 +24,10 @@ two requests for the same task at once (a retry beside the original, which
 goes on once Emacs stops waiting), a request killed between any two steps,
 the agent working until `stop` closes its pane while its record says it's
 idle, others working in the repository's `.claude/worktrees`, in the
-worktree its agent made too, and another worktree made at its path as
-Roost removes it. Where a config says so, also: you change the branch the
+worktree its agent made too, another worktree made at its path as
+Roost removes it, and you stopping the task and resuming it, each a request
+of its own, as Emacs stops one before it retires an agent with work in the
+background or forgets one still running. Where a config says so, also: you change the branch the
 task merges into (`B`), the task is a fork that began at a commit only its
 source's branch has, a fork is made of it, and its agent offers a task,
 before you are asked or while you read the question.
@@ -54,7 +57,7 @@ doesn't: interleavings, and the moments between a read and the act on it.
 python3 test/formal/check.py task_on_host
 ```
 
-About 80 s, twenty-four runs. Four must pass: `TaskOnHost.cfg`, and the
+About two minutes, twenty-six runs. Four must pass: `TaskOnHost.cfg`, and the
 model again at other bounds, as the runner takes one passing config per
 model and all of it at once takes too long. `TaskOnHostRetarget.cfg` has a
 retarget and a fork's start, `TaskOnHostRetargetWork.cfg` those with work
@@ -92,30 +95,43 @@ or `discard` calls them, needs the model checked against it.
 | `SourceBegins`, `SourceEnds` | `discard` of the task this one was forked from: its count, its `removing` mark while its worktree goes, its `delete_branch` |
 | `ForkBegins`, `ForkReads` | `conversation_to_fork` and the `snapshot` after it in `make_task` |
 | `AgentOffers` | `propose_task`; what goes with the record is `task_offers` |
+| `YouStop`, `YouResume` | `stop` and `resume` as requests of their own, and `rpc`'s `require_not_removing` before each; `roost-retire` and `roost-forget` in roost.el, which send `stop` first, after the question |
 | `Crash` | what a reboot leaves: locks freed, `removing` mark kept |
 
 The record's `status` is "active", "ready" or "stopped". "ready" stands for
 whatever `require_finished` takes for an agent at rest, so also `permission`
 at Codex's plan menu (`asks_about_plan`): the agent may work on while its
 record says so, as after any turn, and retire checks its worktree again.
+"active" is any status in `ACTIVE`, so also `background`, for which `x`
+sends `stop` before `retire`. An agent that ended by itself, whose dead
+pane `owned_pane` takes for the task's, stands as one stopped: it writes
+and offers no more, and `forget` takes it.
+
+Other requests write the record and take nothing from it or from Git:
+`leave`, `tell`, `take-offer`, and the agent's `show_image` and
+`show_widget` (`keep_shown`), each under the registry lock on the record
+read then, so none brings back a record that has gone. `tell` pastes a
+prompt, which is `YouPrompt`. They have no step here.
 
 A conversation is a task in a repository Roost keeps (`conversation_repository`),
 with a worktree and a branch there, and finishes as any task. `retarget`
 refuses one, so the model's runs with no retarget are its runs.
 
-Last confirmed against the code at commit `4508d8f`, with what came with
-this line: all that follows, and `require_offers_named`, its calls in
-`retire`, `discard` and `forget`, and the `offers` that `TASK_ACTIONS`
-hands them.
-Since `e910487` that took in `retarget`, which moves the branch it merges
+Last confirmed against the code at commit `047486f`. Since `ec689c7`, the
+commit before it that this was confirmed at, nothing in the table changed
+but `owned_pane`, which takes a dead pane that names no process for the
+task's; what came in was beside it: `x` sending `stop` before `retire`
+(`roost-retire`), hence `YouStop` and `YouResume`, and the record's new
+writers, named above. Before that, since `e910487`, it took in
+`require_offers_named`, its calls in `retire`, `discard` and `forget`, the
+`offers` that `TASK_ACTIONS` hands them, `retarget`, which moves the branch it merges
 into and never where its branch was made (`startCommit`, which
 `safe_to_delete` tells a task that never committed by, merged beside this
 from "Git and the forge"), conversations, a fork's start and read, offers, `require_finished` at a
 plan menu, and a branch that is going keeping no commit (`safe_to_delete`,
 `discard_losses`, `branches_going`). If
-`git log 4508d8f..HEAD -- scripts/roost_remote.py` shows changes, past the
-one that brought this line, to
-anything above, check the model against them before you trust a pass, and
+`git log 047486f..HEAD -- scripts/roost_remote.py` shows changes to
+anything above, or a new writer of the task's record, worktree or branch, check the model against them before you trust a pass, and
 move this commit forward only once you have.
 
 ## Reading a failure
@@ -157,7 +173,8 @@ Never weaken a rule, or the bounds, until it passes.
 `TaskOnHost.cfg`: two units of work, two requests, one crash, one task, one
 agent worktree folder (x) and one branch of yours, with others at work in x
 and another worktree made there as Roost removes it. The other three have
-nobody else in x. `TaskOnHostRetarget.cfg`: two requests and one crash, no
+nobody else in x. All four have you stop the task and resume it, as often
+as you like. `TaskOnHostRetarget.cfg`: two requests and one crash, no
 work but the commit a fork starts with, and one retarget, to `main`, your
 branch or the branch of the agent's worktree. `TaskOnHostRetargetWork.cfg`:
 the same with one unit of work, one request and one crash.
@@ -167,7 +184,7 @@ stopped.
 
 Left out, by design or as covered elsewhere: creating a task (`make crash`'s
 `Create`) but for a fork's read of its source, `update`, `pr` and its
-shared hold of the worktree, `resume`, the forge (`merged_pull_request_head`),
+shared hold of the worktree, the forge (`merged_pull_request_head`),
 a merge that conflicts or a hook that refuses it (each changes nothing),
 submodules, links and moved worktrees (`check_worktree`), records from older
 helpers, taking an offer (`take_offer`, in `make crash` and
@@ -182,7 +199,11 @@ didn't agree to stop. Likewise
 `remove_agent_worktrees` reads what x holds, checks its stamp and removes
 it a few Git calls apart, and the model takes those as one step, as it does
 `require_clean` and the removal of the task's worktree: what is written
-there in those milliseconds is lost. And what you delete by hand is yours:
+there in those milliseconds is lost. `stop` ends the agent's writing in the
+task's worktree: a process it left running that outlives its pane, as the
+background work `x` now stops an agent with, writes into those same
+milliseconds and no others, as `require_clean` and Git's own refusal come
+after the stop. And what you delete by hand is yours:
 a branch you delete with Git while a request counts on it for the task's
 commits, as the agent's worktree's once its agent switched it to another.
 
@@ -215,3 +236,9 @@ The variants keep what the model found before, each a fix undone:
   `propose_task` refuses. A merge lets that lock go while Git merges, so it
   asks again after: the second variant leaves that out. The timing is
   `"offer once asked"` in `Also`, on in `TaskOnHostForkOffer.cfg`.
+
+Two more break a guard no finding came from, which the rules lean on once
+you can resume a task: `TaskOnHost.resume-while-removing.cfg` and its
+`-discard` twin have `resume` start the agent again while a request removes
+the worktree, as `require_not_removing` refuses. It then offers a task that
+goes with the record, or writes a file a discard never counted.

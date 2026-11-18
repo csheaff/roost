@@ -12,7 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-SYNC = "4508d8f"
+SYNC = "047486f"
 ROOT = Path(__file__).resolve().parents[3]
 COVERED = {
     "roost.el": [
@@ -20,6 +20,7 @@ COVERED = {
         "roost--compose-made", "roost--compose-listed", "roost--task-made",
         "roost--create-task", "roost--compose-agents", "roost--attempt-field",
         "roost--compose-continues", "roost--compose-offer",
+        "roost--compose-looked-p", "roost--compose-offer-waiting",
         "roost--when-out-of-minibuffer", "roost--close-buffer",
         "roost--quit-questions-left-open", "roost--quit-questions-here",
         "roost-send-submit", "roost--send-kept", "roost--send-text",

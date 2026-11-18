@@ -181,6 +181,15 @@ fails in its place.
 | LC-10 | S4 | An offer its agent makes after you were asked goes with a task you finish, unnamed | [Finishing a task](#finishing-a-task) | Fixed: `test_an_offer_made_since_you_were_asked_keeps_its_task`, `test_an_offer_made_while_git_merges_keeps_its_task`, `roost-finishing-a-task-tells-its-host-which-offers-its-question-named` |
 | STATUS-12 | S4 | Closing Codex's plan menu says nothing, so its task reads `permission` until your next prompt | [Agent status](#agent-status) | Accepted: `AgentStatus.PlanMenuClosed.cfg` |
 
+### Found by the models, 2026-11-17
+
+Found as the models were brought in line with 0.13.0, and replayed on the real
+code before it was fixed.
+
+| Finding | Sev | What goes wrong | Machine | Status |
+| --- | --- | --- | --- | --- |
+| STATUS-13 | S3 | A relayed Claude that reports its work before its `SessionStart` hook, as 2.1.303 does on a task's prompt, reads `ready` through its first turn, so a send goes through unasked. Since #245 | [Who wins](#who-wins-hooks-reports-poll-runner) | Fixed, `test_a_claude_that_reports_its_work_before_its_session_start_hook_reads_running` |
+
 ## A task on its host
 
 The helper's records and what it does to Git, from a task being asked for to its
@@ -798,7 +807,8 @@ How the helper knows, and the process that runs the agent. `roost-program-status
 is off by default, so **unrelayed is what most tasks run**: hooks alone set the
 status, and the poll fills in what hooks can't say. Relayed means the runner's
 `relay` reads OSC 7501 reports, and the task's `programStatusRun` equals its `runId`,
-set by the run's first report.
+set by the run's first report that counts: one read after the last hook that
+recorded a status.
 
 ### Agent status
 
@@ -881,7 +891,12 @@ Invariants:
 | `permission` | `PreToolUse` | from the agent that asked | `running` | same | request cleared: it went on, as when what it asked for failed |
 | `permission` | `PreToolUse`, `PostToolUse` | named by a notification, not an MCP question's; the main agent's | `running` | same | request cleared |
 | `permission` | `PreToolUse`, `PostToolUse` | any other | unchanged | unchanged | `tool_answers` |
+| `permission` | `PostToolUseFailure` | not `is_interrupt`; from the agent that asked, of the tool it asked for | `running` | same | request cleared: what it asked for failed, and the turn goes on |
+| `permission` | `SubagentStop` | of the subagent that asked | `running` | same | request cleared |
+| `permission` | `PostToolUseFailure`, `SubagentStop` | any other; a tool you stopped (`is_interrupt`), which the transcript records for the poll | unchanged | unchanged | `claude_answers` |
+| not `permission` | `PostToolUseFailure`, `SubagentStop` | | unchanged | unchanged | nothing at all |
 | any | `PermissionRequest` | | `permission` | same | `request`, `requestCommand` |
+| `permission` | `Stop`, `UserPromptSubmit` | a subagent's request, or overlapping ones with `beside`; the `Stop` leaves work or doesn't say, the prompt is Claude's own | unchanged | unchanged | [A task's request](#a-tasks-request), I6 |
 | any | `Stop` | `background_tasks` or `session_crons` | `background` | `Stop` | `lastReply` |
 | any | `Stop` | else | `ready` | `Stop` | `lastReply` |
 | any | `StopFailure` | | `failed` | same | `error`, `lastReply` |
@@ -895,7 +910,9 @@ Claude waits for a hook before it goes on, and the captures show `PreToolUse`,
 `PermissionRequest`, `PostToolUse` in order. Whether it waits for `Notification`,
 which comes on a timer, isn't established. Subagents' tool events come through
 the same hooks, beside the main agent's, with `agent_id`, which the main agent's
-lack; no capture has one yet. As a request waits, a tool called together with
+lack; no capture has one yet. `claude-2.1.322` has the `SubagentStop` of an agent
+Claude started itself, a second after a turn's end: nobody's request, so it
+ends none. As a request waits, a tool called together with
 the one that asked may still end, and is left out by its arguments: a tool's end
 agrees with the request on each argument both name, as a question's end adds its
 answers, and Codex's leaves out a `description`. A next `PreToolUse` from that
@@ -992,9 +1009,10 @@ plugin folds into these.
 
 `T` = the adapter's `reports_turns` (Claude, Pi, OpenCode true; Codex false).
 A report with an `id` is a subagent's, and left out. A report read before `hookAt`
-is dropped first; every hook of an agent that waits for its hooks (Claude, Codex:
+is dropped first, and makes no run a relayed one; every hook of an agent that waits for its hooks (Claude, Codex:
 `waits_for_hooks`) that records a status sets that: any of Codex's, a relayed
-Claude's `failed` or `background`, and its `SessionStart` with `source=clear`. Pi
+Claude's `failed` or `background`, its `SessionStart` with `source=clear`, and
+any of Claude's before a report of its run counts. Pi
 and OpenCode may send a hook late, so theirs set none. Conditions are tried in this order:
 
 | From | State | Guard | To | `lastEvent` |
@@ -1038,7 +1056,10 @@ Four sources write one field. This says which counts when they disagree.
 | Relayed, turns (Claude, Pi) | `programStatusRun` == `runId`, `reports_turns` | Reports. Hooks keep their other fields, and their status only if `failed`, `background` (for Pi, only from `running`/`ready`, as its hooks may come late), or Claude's `SessionStart` with `source=clear`, as reports can't say that a new conversation started; such a hook sets `hookAt`, so a report read before it, of the turn it ended, is older news |
 | Relayed, hooks (Codex) | same, not `reports_turns` | Hooks, but for `running` from `permission`. Reports for what hooks miss: a request, its approval, `idle` after a failed request, `error`. A report read before `hookAt` is older news |
 
-Before a relayed run's first report it counts as unrelayed. The poll's guesses
+Before a relayed run's first report it counts as unrelayed, and so until one
+is recorded that was read after the last hook to record a status: an older one
+is dropped, and with no report to say what the agent does, its hooks go on
+saying it. The poll's guesses
 (`was_interrupted`, `approved_command_running`) run only when unrelayed. The
 crash check runs in every mode. The runner's end is last in every mode, as
 `finish()` records what is queued first.
@@ -1065,6 +1086,7 @@ Is the outcome the same in any order? Replayed: each capture in
 | --- | --- | --- |
 | Report later than following hooks (the queue waits for the lock) | Yes | Same end, each step, for all relayed captures: Claude's hooks hold only other fields, and `hookAt` drops the old report, from Codex's hooks and from Claude's `StopFailure` or `Stop` with work left |
 | Report later than another report | No: one queue | |
+| Report read before a hook that says less than it: `working`, then `SessionStart`, on a task's prompt | Yes: Claude 2.1.303 and Codex 0.163.0, relayed, in their captures | Same end: if that hook has the lock before the recorder, the reports are dropped, the run stays unrelayed, and the `UserPromptSubmit` that follows counts (STATUS-13) |
 | Hook later than the agent's next event | Not for an awaited hook of one agent | Different, and stays so until the next event, for `Stop`, `PermissionRequest` |
 | `PermissionRequest` and another agent's tool event, unrelayed | Yes, with subagents | `permission`, either way |
 
@@ -1081,6 +1103,7 @@ Disagreements, and who wins:
 | `SessionEnd` as tmux goes, relayed or not | Poll: `crashed` | Yes |
 | Hook after the runner's end | Runner: the hook keeps only what it says beside the status | Yes |
 | Claude's `SessionStart` with `source=clear`, report `idle`, either order | Hook: `ready`, `SessionStart` | Yes |
+| Claude's `SessionStart` before its run's first report is recorded, then a `working` read before that hook | Hook: `ready`, as `hookAt` drops the report, which leaves the run unrelayed; its `UserPromptSubmit` then counts, as `running` | Yes. Before STATUS-13's fix the dropped report made the run relayed, and it read `ready` while it worked: `AgentStatus.NoStaleUnrelayed.cfg` |
 | Poll `crashed`, then a hook of a live agent | Hook, and `statusBeforeCrash` goes stale, unused | Yes |
 | Poll `crashed`, then relayed `done` | Neither: the report changes nothing, and recovery brings back `running` | Would be wrong, but needs a false `crashed`, and none is known since the C locale fix |
 
@@ -1633,7 +1656,14 @@ Notes:
 - A reply's callback can ask for a refresh, in the reply's own sentinel: `B`'s for its
   task, measured against its new branch, and `m`'s for the rest. It is a refresh as any
   other, owed if a list is in flight, and it reads the revision its reply just bumped,
-  so its list is not dropped for that reply.
+  so its list is not dropped for that reply. So does the draft of an offer once its
+  task is made, for the task that offered it, whose offer its host took: in that
+  sentinel, or once you are out of the minibuffer (`roost-compose-submit`,
+  `roost--task-made`). Not quietly, which would do nothing while a poll is in flight,
+  and that poll, read before the task was made, is dropped for the creation's reply.
+  `test/formal/emacs_and_hosts` checks it as `OfferRowGoes`.
+- A page a Pi task on this machine has written whole asks for a quiet poll half a
+  second later, as a timer's does (`roost--read-live`).
 - `roost--pull-requests-asked` is stamped before the request, and put back as it was
   if the list fails or is dropped, so a poll after an outage asks GitHub.
 - A full list that takes over a minute reads as Offline until the next quiet poll.
@@ -1649,7 +1679,9 @@ Notes:
 
 Kind: implicit. Lives in: `roost--tasks`, and what is keyed alongside:
 `roost--statuses`, `roost--pr-verdicts`, `roost--agent-news`, `roost--seen`,
-`roost--turns-sent`, `roost--merges-reported`.
+`roost--turns-sent`, `roost--merges-reported`, what Roost told its agent
+(`roost--telling`, `roost--told-here`, `roost--sent-at`, `roost--untold`) and what it
+shows (`roost--shown-at`, `roost--shown-waiting`, its buffer).
 What Emacs believes of each task, and how a reply merges into it.
 
 | State | Meaning | How you can tell |
@@ -1660,12 +1692,15 @@ What Emacs believes of each task, and how a reply merges into it.
 
 Invariants:
 - I1. A reply read before a task went doesn't bring it back (`roost--cache-reply`, `roost--went-p`; lists by I3 of Host refresh). Checked for `inspect`, `roost--act`, the turn reply, `roost--compose-listed`, and create's reply, of a task a list showed and that went before it came (`roost--went`).
-- I2. No reply rolls a task back: older `updatedAt` keeps the old record with the reply's measurements (`roost--newer-events`). What changes with no event of the agent's has a clock of its own, and a reply with an older one keeps what Emacs has of it: the name (`renamedAt`, `roost--newer-name`), the look (`roost--newer-look`), the offers (`offersAt`, `roost--newer-offers`) and the branch it starts from and merges into (`retargetedAt`, `roost--newer-branch`).
+- I2. No reply rolls a task back: older `updatedAt` keeps the old record with the reply's measurements (`roost--newer-events`). What changes with no event of the agent's has a clock of its own, and a reply with an older one keeps what Emacs has of it: the name (`renamedAt`, `roost--newer-name`), the look (`roost--newer-look`), the offers (`offersAt`, `roost--newer-offers`), the branch it starts from and merges into (`retargetedAt`, `roost--newer-branch`) and a pull request left to its agent (`prLeftAt`, `roost--newer-left`). Not what it shows, which has a clock (`shown.at`) that the merge doesn't go by: Open, below.
 - I3. A reply saying the task went always counts. It would not if its `updatedAt` were older, but `retire`, `discard` and `forget` all stamp `now()` last.
 - I4. String order of `updatedAt` is time order, and of the other clocks. `now()` is UTC isoformat; `+` sorts before `.`, so a whole second sorts first. True while the host's clock doesn't step back.
 
 `test/formal/emacs_and_hosts` checks I1 and I2 as `NoRollback`, and I2 of the offers
 and the branch as `NoOfferRollback` and `NoBranchRollback`, with replies in every order.
+I2 of what a task shows is `NoShownRollback`, which fails
+(`CachedTasks.finding-shown-rollback.cfg`); of a pull request left to its agent,
+`test/formal/pull_request_left` has it.
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
@@ -1673,7 +1708,9 @@ and the branch as `NoOfferRollback` and `NoBranchRollback`, with replies in ever
 | Absent | Create replies | | Cached | Revision bumped; each of a draft's several attempts replies for itself | `roost--task-made` |
 | Went | Create replies | a list showed it, and it went | Went | Revision bumped; the reply goes only to the command, and nothing opens | `roost--task-made`, `roost--cache-reply` |
 | Cached | List names it | | Cached | Merged by I2; absent measurements carried over | `roost--cache-task` |
-| Cached | Reply or list names it | read before a rename, a look, an offer made or taken, or `B` that Emacs has news of already | Cached | Emacs keeps its own of that; the rest merged by I2 | `roost--cache-task` |
+| Cached | Reply or list names it | read before a rename, a look, an offer made or taken, `B`, or a pull request left, taken back or told of, that Emacs has news of already | Cached | Emacs keeps its own of that; the rest merged by I2 | `roost--cache-task` |
+| Cached | Reply names it | read before its agent showed an image or a page that Emacs has news of already, with the same `updatedAt` | Cached | **The reply's `shown` replaces the newer one**, until the next list | `roost--cache-task` |
+| Cached | Create replies, of a task made from its offer | | Cached | Nothing of it in the reply: its host took the offer, and the draft asks for the host to be listed, so the offer's row goes with that list | `roost-compose-submit`, `roost--refresh-host` |
 | Cached | List lacks it | | Went | All keyed state and its notes go; its key noted in `roost--went` | `roost--apply-snapshot` |
 | Cached | Reply says retired, forgotten or discarded | | Went | Its notes go; its key noted in `roost--went` | `roost--cache-task` |
 | Cached | Host forgotten | | Absent | | `roost-forget-host` |
@@ -1682,7 +1719,16 @@ and the branch as `NoOfferRollback` and `NoBranchRollback`, with replies in ever
 
 Illegal or refused: none.
 
-Open: none. Found by the model and fixed: a reply its host read before `B`, as one
+Open: a reply its host read before the task's agent showed an image or a page, as one
+to opening the task (`inspect`), that comes after the list that read it since has the
+same `updatedAt`, as showing is no event of the agent's, and takes the task back to
+what it showed before, or to nothing, until the next list: the panel no longer names
+the image, and `roost-show-image` says the task has shown none. The image on screen
+stays, and no older one is fetched: `roost--shown-at` only moves on. Found by the
+model, 2026-11-17 (`CachedTasks.finding-shown-rollback.cfg`); in the code since
+`show_image` (#263).
+
+Found by the model and fixed: a reply its host read before `B`, as one
 to stopping the task, that came after `B`'s own had the same `updatedAt`, and brought
 back the branch the task merged into before, until the next poll: `m` asked about
 that branch, and the host merged into the new one. `retarget` now stamps
@@ -2561,7 +2607,8 @@ Invariants:
   its own, a new buffer, only where the draft holds no prompt, or the brief of an offer
   that waits still, as it came, and says nothing of a request and waits on none.
   Opening an offer takes nothing: it waits until its task is made. (`roost--compose-offer`,
-  `roost--compose-looked-p`.)
+  `roost--compose-looked-p`; `NewTaskDraft.looked-with-a-note.cfg` breaks the second,
+  and a draft that got no reply then asks again under a new ID.)
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
@@ -2613,7 +2660,11 @@ Creating and text typed there; neither is refused.
 A conversation (`roost-new-conversation`) has no draft and no creation ID: each `C`
 asks for one, so `C` again after no reply can start a second.
 
-Open: none here. [The creation ID](#the-creation-id) has one, of a draft that named
+Open: an offer's draft that got no reply, asked again and quit before any request
+went (as at the question about the setup command) has no note and keeps its ID, so it
+reads as one you only looked at (I7): `RET` on its offer starts it anew with no ID, and
+`C-c C-c` then makes a second task beside the one the first request made
+(`NewTaskDraft.finding-quit-then-offer.cfg`). [The creation ID](#the-creation-id) has one, of a draft that named
 another attempt.
 
 ### The creation ID

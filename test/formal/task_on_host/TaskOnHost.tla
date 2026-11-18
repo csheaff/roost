@@ -12,7 +12,9 @@
 (* Also, where a config says so (`Also`): you change the branch the task   *)
 (* merges into (`retarget`); the task began as a fork of another, at a     *)
 (* commit only that one's branch has; a fork is made of it, which reads    *)
-(* its worktree; and its agent offers a task, which its record keeps.      *)
+(* its worktree; its agent offers a task, which its record keeps; and you  *)
+(* stop the task, a request of its own, as Emacs does before it retires    *)
+(* one whose agent reports work in the background, or forgets one.         *)
 (*                                                                         *)
 (* Git is cut down to sets of work: each unit is a file someone wrote,     *)
 (* uncommitted, or the commit it became.  A unit that a step of Roost's   *)
@@ -42,14 +44,17 @@ CONSTANTS
                     \* "offer": its agent offers a task;
                     \* "offer once asked": and may do so after you were
                     \*   asked, before the request stops it, as while you
-                    \*   read the question
-    Break           \* "none", or a guard turned off, for a TaskOnHost.<variant>.cfg:
+                    \*   read the question;
+                    \* "stop": you stop the task (`K`), or Emacs does for you
+                    \*   before it asks its host to retire or forget it;
+                    \* "resume": you resume it once stopped (`s`)
+    Break          \* "none", or a guard turned off, for a TaskOnHost.<variant>.cfg:
                     \* "retire_force", "branch_no_cas", "no_safe_check",
                     \* "agent_only_went", "no_stamp", "agent_any_branch", "no_recount",
                     \* "x_not_seen_again", "x_stamp_first", "proof_goes",
                     \* "going_counts", "retarget_own", "fork_no_hold",
                     \* "fork_any_time", "offer_after_stop", "offers_not_named",
-                    \* "offers_named_once"
+                    \* "offers_named_once", "resume_any_time"
 
 Req   == 1..MaxRequests
 Kinds == {"retire", "merge", "discard", "forget"}
@@ -372,6 +377,35 @@ AgentOffers == Aside(
     /\ offers' = 1,
     <<src, integ, base, reading, retargeted, readPartly, untold>>)
 
+\* `stop`, a request of its own, whole under the registry lock: `K`, and
+\* what Emacs sends before `retire` for an agent that reports work in the
+\* background (`roost-retire`), whose record reads active until then, and
+\* before `forget` for one still running.  You were asked first, so the
+\* request that follows names the offers as they were before the stop.
+\* `require_not_removing` refuses it while the task's worktree goes or Git
+\* merges it, and once a removal was cut short.  It closes the pane, so
+\* the agent writes no more, and the record says "stopped", after which
+\* `propose_task` refuses.
+YouStop ==
+    /\ "stop" \in Also /\ regLock = 0 /\ rec /\ wtLock = 0 /\ removing = 0
+    /\ agent # "stopped" \/ status # "stopped"
+    /\ agent' = "stopped" /\ status' = "stopped"
+    /\ UNCHANGED <<gitVars, rec, removing, retiringCommit, noted, regLock, wtLock, req, ghostVars, alsoVars>>
+
+\* `resume`, whole under the registry lock: a stopped task's agent starts
+\* again in its worktree, its record "starting", and may work and offer as
+\* before.  Refused with no worktree, and by `require_not_removing` while
+\* the worktree goes or Git merges it, and once a removal was cut short:
+\* by that no offer comes between a request's `stop` and its record going.
+\* A fork reading the worktree doesn't hold it off.  Broken:
+\* `resume_any_time` resumes it whatever a request is doing to it.
+YouResume ==
+    /\ "resume" \in Also /\ regLock = 0 /\ rec
+    /\ Break = "resume_any_time" \/ (wtLock = 0 /\ removing = 0)
+    /\ agent = "stopped" /\ tw = "there"
+    /\ agent' = "working" /\ status' = "active"
+    /\ UNCHANGED <<gitVars, rec, removing, retiringCommit, noted, regLock, wtLock, req, ghostVars, alsoVars>>
+
 -----------------------------------------------------------------------------
 (* You ask, or ask again: a new helper process, whatever the last one is   *)
 (* doing.  For `m`, Emacs sends the branch as it last measured it          *)
@@ -629,7 +663,7 @@ Next ==
     \/ AgentMakesX \/ AgentEntersX \/ AgentSwitchesX \/ AgentWritesX \/ AgentCommitsX
     \/ OtherMakesX \/ OtherWritesX \/ OtherCommitsX \/ YouRemoveX
     \/ \E b \in Targets : YouRetarget(b)
-    \/ SourceBegins \/ SourceEnds \/ ForkBegins \/ ForkReads \/ AgentOffers
+    \/ SourceBegins \/ SourceEnds \/ ForkBegins \/ ForkReads \/ AgentOffers \/ YouStop \/ YouResume
     \/ \E r \in Req, k \in Kinds : Ask(r, k)
     \/ \E r \in Req : Request(r)
     \/ Finished /\ UNCHANGED vars

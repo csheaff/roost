@@ -50,13 +50,17 @@ CONSTANTS
                       \* or a request, and the offer waits
   GroupKeepsItsWords, \* `make_task` makes no attempt beside one of its group, its draft's
                       \* ID, made from other words (`made_from_other_words`)
+  LookedSaysNothing,  \* `roost--compose-looked-p` is of no draft whose header says what
+                      \* became of a request (`roost--draft-note`)
   \* Scope: what you may do.  A base config turns each on, but for one a
   \* finding's config turns on, until it is fixed.
   SubmitQuitsQuestion, \* C-c C-c with a question left open (`roost--quit-questions-here`)
   EditBack,            \* an edit or move brings back what the draft said before
   CutShort,            \* a quit or an error between the requests of one C-c C-c
-  MixedAttempts        \* a draft that makes several attempts asks again with its ID for
+  MixedAttempts,       \* a draft that makes several attempts asks again with its ID for
                        \* something else, as after you changed it
+  QuitBeforeAsking     \* a quit or an error in C-c C-c before any request goes, as at
+                       \* the question about the project's setup command
 
 None == 0
 What == (1..NDirs) \X (1..NTexts)
@@ -69,6 +73,10 @@ VARIABLES
   draft,       \* "open", "closed" (Roost closed it), "cancelled" (C-c C-k)
   dir, text,   \* what the draft says now: its project, and its prompt and fields
   submitting,  \* `roost--compose-submitting`
+  note,        \* `roost--draft-note`: the header says "Creating…", or what became of
+               \* a request
+  offered,     \* `roost--compose-offered`: what the draft of an offer that waits
+               \* still said as it opened, or Unknown for a draft of your own
   asked,       \* `roost--compose-asked`: (DIRECTORY ID WHAT), WHAT Unknown once mixed
   nextId,      \* `roost--random-id`: never repeats
   mini,        \* a question is open in the minibuffer
@@ -82,8 +90,8 @@ VARIABLES
   closedWhat,  \* what the draft said when Roost closed it
   asks         \* presses that sent a request
 
-vars == <<draft, dir, text, submitting, asked, nextId, mini, held, timers,
-          waits, reqs, tasks, told, closedWhat, asks>>
+vars == <<draft, dir, text, submitting, note, offered, asked, nextId, mini, held,
+          timers, waits, reqs, tasks, told, closedWhat, asks>>
 
 \* What a request made now asks for.
 Now == <<dir, text>>
@@ -123,19 +131,22 @@ DoSubmit ==
   /\ asked' = AskNow
   /\ nextId' = IF Fresh THEN nextId + 1 ELSE nextId
   /\ submitting' = TRUE
+  /\ note' = TRUE
   /\ reqs' = reqs \o Others(AskNow) \o <<Request(AskNow, 1)>>
   /\ waits' = waits \cup {Len(reqs) + Attempts}
   /\ asks' = asks + 1
 
 \* A quit or an error once M of the other attempts went, as C-g while the
-\* next request starts: the flag is cleared, and the ID stays as it asked,
-\* for asking again to name the attempts that went as they were.  (Before
-\* any went, the ID is put back as it was, and nothing has changed.)
+\* next request starts: the flag and the note are cleared, and the ID stays
+\* as it asked, for asking again to name the attempts that went as they
+\* were.  Before any went, the ID is put back as it was, one it asked with
+\* before too, and the note is cleared all the same: SubmitQuit.
 DoSubmitCutShort(m) ==
   /\ asked' = IF KeepAskedOnceSent THEN AskNow ELSE asked
   /\ nextId' = IF Fresh THEN nextId + 1 ELSE nextId
   /\ reqs' = reqs \o SubSeq(Others(AskNow), 1, m)
   /\ asks' = asks + 1
+  /\ note' = FALSE
   /\ UNCHANGED <<submitting, waits>>
 
 \* roost--compose-made: close the draft if it says WHAT, else keep it,
@@ -143,16 +154,17 @@ DoSubmitCutShort(m) ==
 \* (not OWN) while a request of the draft's own is out.  Called by the
 \* closure of roost--task-made once you are out of the minibuffer.
 ComposeMade(c) ==
-  IF draft # "open" THEN UNCHANGED <<draft, submitting, asked, closedWhat>>
+  IF draft # "open" THEN UNCHANGED <<draft, submitting, asked, note, closedWhat>>
   ELSE IF CompareBeforeClose /\ Says # c.what
   THEN /\ IF KeepOwnInFlight /\ submitting /\ c.src = "poll"
-          THEN UNCHANGED <<submitting, asked>>
+          THEN UNCHANGED <<submitting, asked, note>>
           ELSE /\ submitting' = FALSE
                /\ asked' = NoAsk
+               /\ note' = TRUE   \* "Made NAME from what you sent before"
        /\ UNCHANGED <<draft, closedWhat>>
   ELSE /\ draft' = "closed"
        /\ closedWhat' = Now
-       /\ UNCHANGED <<submitting, asked>>
+       /\ UNCHANGED <<submitting, asked, note>>
 
 \* roost--task-made: says "Roost created NAME" at once, then runs the
 \* closure, or holds it while a minibuffer is open.
@@ -160,7 +172,7 @@ TaskMade(c) ==
   /\ told' = told \cup {c.task}
   /\ IF mini
      THEN /\ held' = Append(held, c)
-          /\ UNCHANGED <<draft, submitting, asked, closedWhat>>
+          /\ UNCHANGED <<draft, submitting, asked, note, closedWhat>>
      ELSE /\ ComposeMade(c)
           /\ UNCHANGED held
 
@@ -174,8 +186,8 @@ Edit ==
   /\ \E t \in 1..NTexts :
        /\ IF EditBack THEN t # text ELSE t = text + 1
        /\ text' = t
-  /\ UNCHANGED <<draft, dir, submitting, asked, nextId, mini, held, timers,
-                 waits, reqs, tasks, told, closedWhat, asks>>
+  /\ UNCHANGED <<draft, dir, submitting, note, offered, asked, nextId, mini, held,
+                 timers, waits, reqs, tasks, told, closedWhat, asks>>
 
 \* C-c C-p, or a click on another project (roost--compose with DIRECTORY).
 Move ==
@@ -183,8 +195,8 @@ Move ==
   /\ \E d \in 1..NDirs :
        /\ IF EditBack THEN d # dir ELSE d = dir + 1
        /\ dir' = d
-  /\ UNCHANGED <<draft, text, submitting, asked, nextId, mini, held, timers,
-                 waits, reqs, tasks, told, closedWhat, asks>>
+  /\ UNCHANGED <<draft, text, submitting, note, offered, asked, nextId, mini, held,
+                 timers, waits, reqs, tasks, told, closedWhat, asks>>
 
 \* Scope: a draft that makes several attempts asks with its ID for what
 \* it asked with it before, unless MixedAttempts.
@@ -198,7 +210,8 @@ Submit ==
   /\ MayAsk
   /\ IF ~mini
      THEN /\ DoSubmit
-          /\ UNCHANGED <<draft, dir, text, mini, held, timers, tasks, told, closedWhat>>
+          /\ UNCHANGED <<draft, dir, text, offered, mini, held, timers, tasks, told,
+                         closedWhat>>
      ELSE \* roost--quit-questions-here: the timer that submits comes first,
           \* then quitting runs minibuffer-exit-hook, whose closures each
           \* schedule a timer of their own.
@@ -207,8 +220,8 @@ Submit ==
                        \o held
           /\ held' = <<>>
           /\ mini' = FALSE
-          /\ UNCHANGED <<draft, dir, text, submitting, asked, nextId, waits, reqs,
-                         tasks, told, closedWhat, asks>>
+          /\ UNCHANGED <<draft, dir, text, submitting, note, offered, asked, nextId,
+                         waits, reqs, tasks, told, closedWhat, asks>>
 
 \* C-c C-c, cut short between its requests.  From the timer that submits
 \* once a question is quit it is the same function, left to this press.
@@ -219,14 +232,25 @@ SubmitCutShort ==
   /\ asks < MaxAsks
   /\ MayAsk
   /\ \E m \in 1..(Attempts - 1) : DoSubmitCutShort(m)
-  /\ UNCHANGED <<draft, dir, text, mini, held, timers, tasks, told, closedWhat>>
+  /\ UNCHANGED <<draft, dir, text, offered, mini, held, timers, tasks, told, closedWhat>>
+
+\* C-c C-c, quit before any request goes: `roost-compose-submit`'s handler
+\* clears the flag and the note, and puts the ID back as it was.  The
+\* header then says nothing of a request the ID asked with before.
+SubmitQuit ==
+  /\ QuitBeforeAsking
+  /\ UserCan /\ ~mini
+  /\ ~submitting
+  /\ note' = FALSE
+  /\ UNCHANGED <<draft, dir, text, submitting, offered, asked, nextId, mini, held, timers,
+                 waits, reqs, tasks, told, closedWhat, asks>>
 
 \* Any command that asks in the minibuffer, answered later or left open.
 OpenQuestion ==
   /\ UserCan /\ ~mini
   /\ mini' = TRUE
-  /\ UNCHANGED <<draft, dir, text, submitting, asked, nextId, held, timers,
-                 waits, reqs, tasks, told, closedWhat, asks>>
+  /\ UNCHANGED <<draft, dir, text, submitting, note, offered, asked, nextId, held,
+                 timers, waits, reqs, tasks, told, closedWhat, asks>>
 
 \* RET or C-g: each held closure's `done` schedules its timer, in order.
 EndQuestion ==
@@ -234,29 +258,60 @@ EndQuestion ==
   /\ mini' = FALSE
   /\ timers' = held
   /\ held' = <<>>
-  /\ UNCHANGED <<draft, dir, text, submitting, asked, nextId, waits, reqs,
-                 tasks, told, closedWhat, asks>>
+  /\ UNCHANGED <<draft, dir, text, submitting, note, offered, asked, nextId, waits,
+                 reqs, tasks, told, closedWhat, asks>>
 
-\* RET on an agent's offer, with your draft open: `roost--compose-offer`
-\* leaves a draft that holds a prompt, says what became of a request or
-\* waits on one, and the offer waits.  (One that holds nothing, or only
-\* the brief of another offer that waits still, as it came, gives way to
-\* the offer's, a new buffer with no ID, as at Init: nothing you wrote
-\* goes with it.)  Broken, the offer's draft takes the place of yours.
+\* `roost--compose-looked-p`: the draft is of an offer that waits still,
+\* and says what it did as it opened, its fields too, is not being created
+\* and says nothing of a request.  How many tasks a draft makes is among
+\* what it says, and an offer's opens making one, so a draft that makes
+\* several, as these steps have it from the start, is never one.  An
+\* offer that waits no more (taken, as for a task made from it, or
+\* dismissed) leaves a draft of your own, which is no step here.
+Looked ==
+  /\ Attempts = 1
+  /\ offered # Unknown
+  /\ Says = SeenOf(offered)
+  /\ ~submitting
+  /\ LookedSaysNothing => ~note
+
+\* RET on an agent's offer, with a draft open: `roost--compose-offer`.
+\* A draft you only looked at gives way, to its own offer as it is now or
+\* to another's: `kill-buffer`, then a new buffer, which says what the
+\* offer does and has no ID, no flag and no note.  A request of the old
+\* buffer's still out, and a closure held for it, find it dead and change
+\* nothing; what its host makes of the request stays.  (A draft that
+\* holds no prompt gives way too: here a draft always holds one.)  Any
+\* other draft stays, and the offer waits: its own draft shows again as
+\* you left it, and another offer's is refused.  Broken, the offer's
+\* draft takes the place of yours, whatever it holds.
 OpenOffer ==
-  /\ ~OfferKeepsDraft
   /\ UserCan
-  /\ draft' = "closed"
-  /\ closedWhat' = Now
-  /\ UNCHANGED <<dir, text, submitting, asked, nextId, mini, held, timers,
-                 waits, reqs, tasks, told, asks>>
+  /\ IF Looked /\ ~mini
+     THEN \* With the same words, in this project or another: other words
+          \* are an edit away, before the draft asks for anything.
+          /\ \E d \in 1..NDirs :
+               /\ dir' = d
+               /\ offered' = <<d, text>>
+          /\ UNCHANGED text
+          /\ asked' = NoAsk
+          /\ submitting' = FALSE
+          /\ note' = FALSE
+          /\ waits' = {}
+          /\ held' = <<>>
+          /\ UNCHANGED <<draft, nextId, mini, timers, reqs, tasks, told, closedWhat, asks>>
+     ELSE /\ ~OfferKeepsDraft
+          /\ draft' = "closed"
+          /\ closedWhat' = Now
+          /\ UNCHANGED <<dir, text, submitting, note, offered, asked, nextId, mini, held,
+                         timers, waits, reqs, tasks, told, asks>>
 
 \* C-c C-k, answered yes.  Requests go on; their replies find no draft.
 Cancel ==
   /\ UserCan /\ ~mini
   /\ draft' = "cancelled"
-  /\ UNCHANGED <<dir, text, submitting, asked, nextId, mini, held, timers,
-                 waits, reqs, tasks, told, closedWhat, asks>>
+  /\ UNCHANGED <<dir, text, submitting, note, offered, asked, nextId, mini, held,
+                 timers, waits, reqs, tasks, told, closedWhat, asks>>
 
 -----------------------------------------------------------------------------
 (* Emacs's timers                                                          *)
@@ -269,13 +324,15 @@ Timer ==
             IF draft = "open" /\ ~submitting
             THEN /\ DoSubmit
                  /\ timers' = Tail(timers)
-                 /\ UNCHANGED <<draft, dir, text, mini, held, tasks, told, closedWhat>>
+                 /\ UNCHANGED <<draft, dir, text, offered, mini, held, tasks, told,
+                                closedWhat>>
             ELSE /\ timers' = Tail(timers)
-                 /\ UNCHANGED <<draft, dir, text, submitting, asked, nextId, mini, held,
-                                waits, reqs, tasks, told, closedWhat, asks>>
+                 /\ UNCHANGED <<draft, dir, text, submitting, note, offered, asked, nextId,
+                                mini, held, waits, reqs, tasks, told, closedWhat, asks>>
        ELSE /\ timers' = Tail(timers)
             /\ ComposeMade(c)
-            /\ UNCHANGED <<dir, text, nextId, mini, held, waits, reqs, tasks, told, asks>>
+            /\ UNCHANGED <<dir, text, offered, nextId, mini, held, waits, reqs, tasks, told,
+                           asks>>
 
 -----------------------------------------------------------------------------
 (* The network, as Emacs reads it                                          *)
@@ -294,12 +351,13 @@ Reply(r) ==
   /\ waits' = waits \ {r}
   /\ IF reqs[r].result = "refused"
      THEN /\ submitting' = IF draft = "open" /\ FailureClearsFlag THEN FALSE ELSE submitting
+          /\ note' = IF draft = "open" THEN TRUE ELSE note   \* "Could not create…"
           /\ UNCHANGED <<draft, asked, mini, held, told, closedWhat>>
      ELSE /\ TaskMade([kind |-> "made", task |-> reqs[r].task, src |-> "reply",
                        what |-> IF reqs[r].result = "found" THEN reqs[r].first
                                 ELSE SeenOf(reqs[r].what)])
           /\ UNCHANGED mini
-  /\ UNCHANGED <<dir, text, nextId, timers, reqs, tasks, asks>>
+  /\ UNCHANGED <<dir, text, offered, nextId, timers, reqs, tasks, asks>>
 
 \* No reply in time, or the connection dropped: the failure callback.
 \* The request may still be taken by the host.
@@ -308,8 +366,9 @@ NoReply(r) ==
   /\ r \in waits
   /\ waits' = waits \ {r}
   /\ submitting' = IF draft = "open" /\ FailureClearsFlag THEN FALSE ELSE submitting
-  /\ UNCHANGED <<draft, dir, text, asked, nextId, mini, held, timers, reqs, tasks,
-                 told, closedWhat, asks>>
+  /\ note' = IF draft = "open" THEN TRUE ELSE note   \* "No reply from…"
+  /\ UNCHANGED <<draft, dir, text, offered, asked, nextId, mini, held, timers, reqs,
+                 tasks, told, closedWhat, asks>>
 
 \* A poll lists the ID the draft last asked with, which is its own
 \* task's: roost--compose-listed.
@@ -322,7 +381,7 @@ Poll ==
   /\ \E k \in Tasks :
        /\ tasks[k].cid = asked.id /\ tasks[k].n = 1
        /\ TaskMade([kind |-> "made", task |-> k, src |-> "poll", what |-> asked.first])
-  /\ UNCHANGED <<dir, text, nextId, mini, timers, waits, reqs, tasks, asks>>
+  /\ UNCHANGED <<dir, text, offered, nextId, mini, timers, waits, reqs, tasks, asks>>
 
 -----------------------------------------------------------------------------
 (* The host helper: `create`, `asking_for`, `made_for`, `make_task`        *)
@@ -390,8 +449,8 @@ HostMake(r) ==
 
 Host(r) ==
   /\ (HostTake(r) \/ HostLook(r) \/ HostMake(r))
-  /\ UNCHANGED <<draft, dir, text, submitting, asked, nextId, mini, held, timers,
-                 waits, told, closedWhat, asks>>
+  /\ UNCHANGED <<draft, dir, text, submitting, note, offered, asked, nextId, mini,
+                 held, timers, waits, told, closedWhat, asks>>
 
 -----------------------------------------------------------------------------
 
@@ -399,6 +458,9 @@ Init ==
   /\ draft = "open"
   /\ dir = 1 /\ text = 1
   /\ submitting = FALSE
+  /\ note = FALSE
+  \* Your own, or an agent's offer just opened, which waits.
+  /\ offered \in IF Attempts = 1 THEN {Unknown, <<1, 1>>} ELSE {Unknown}
   /\ asked = NoAsk
   /\ nextId = 1
   /\ mini = FALSE
@@ -417,7 +479,7 @@ NoReplyComes == \E r \in Reqs : NoReply(r)
 HostTakesARequest == \E r \in Reqs : Host(r)
 
 Next ==
-  \/ Edit \/ Move \/ Submit \/ SubmitCutShort \/ OpenQuestion \/ EndQuestion
+  \/ Edit \/ Move \/ Submit \/ SubmitCutShort \/ SubmitQuit \/ OpenQuestion \/ EndQuestion
   \/ OpenOffer \/ Cancel
   \/ Timer \/ Poll \/ AReplyComes \/ NoReplyComes \/ HostTakesARequest
   \/ Settled
@@ -429,7 +491,8 @@ Spec == Init /\ [][Next]_vars
 
 TypeOK ==
   /\ draft \in {"open", "closed", "cancelled"}
-  /\ submitting \in BOOLEAN /\ mini \in BOOLEAN
+  /\ submitting \in BOOLEAN /\ mini \in BOOLEAN /\ note \in BOOLEAN
+  /\ offered \in What \cup {Unknown}
   /\ waits \subseteq Reqs
   /\ told \subseteq Tasks
 

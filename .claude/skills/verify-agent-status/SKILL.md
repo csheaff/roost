@@ -55,15 +55,27 @@ It does if the diff changes any of these, or what an agent sends:
 | `list_tasks` (crash, recovery, `was_interrupted`, `approved_command_running`) | `Poll` |
 | `stop`, `resume`, `spawn` | `StopTask`, `Resume` |
 | `tool_answers`, `claude_answers`, `asking_subagent`, `asks_beside`, and `requestCall` in `update_hook` | `SubagentAsks`: `ToolAnswers`, `Answers`, `Outlasts`, `Hook` |
-| The order of hooks and reports in `test/captures/claude-*`, `codex-*` | each step's script (`Prompt`, `Ask`, `End` ...) |
+| The order of hooks and reports in `test/captures/claude-*`, `codex-*` | each step's script (`StartScript`, `EarlyScript`, `Prompt`, `Ask`, `End` ...), and `StrangerEnds` in `SubagentAsks` |
 
-Last confirmed to describe the code at `4508d8f`, with the changes that
-came with this line: Codex's plan menu, in `CodexAgent.observe` and
-`apply_program_status`, and several requests at once, in `claude_answers`
-and `update_hook`. To see what has changed since:
-`git diff 4508d8f -- scripts/roost_remote.py`. Move this commit forward only
+Last confirmed to describe the code at `047486f`. Nothing from `4508d8f` to
+there changed how a status is written but #260, which the model had: what
+came with this line is what the model lacked of it and of the captures. A
+tool of Claude's that fails, or that you stop (`PostToolUseFailure`, its
+`is_interrupt`), in `Observe`; an agent started on a task's prompt that
+reports its work before its `SessionStart` hook (`EarlyWork`); Codex's
+`working` as you decline a request; and a `SubagentStop` of nobody's, in
+`SubagentAsks`. And the change to `apply_program_status` that came with this
+line, STATUS-13's fix: a report read before `hookAt` makes no run a relayed
+one. To see what has changed since:
+`git diff 047486f -- scripts/roost_remote.py`. Move this commit forward only
 after you have read the diff of the functions above against the model and it
 still describes them.
+
+New code that writes a task's record beside these, and no status: Roost's
+MCP server (`propose_task`, `keep_shown`), `leave` and `tell`, `take_offer`
+and `taken_offers`. Each reads the record afresh under the registry lock
+and leaves `status`, `updatedAt`, `lastEvent` and `hookAt` as they were. A
+new writer that does otherwise belongs in the model.
 
 ## Run it
 
@@ -78,13 +90,14 @@ About a minute; `make formal` runs every model. Each line is one config:
   waiting for the lock as Claude's turn ends.
 - `AgentStatus.No*.cfg` each break the code on purpose (the `Break`
   constant) and must fail on the rule they name, so each rule can still fail.
-- `LatePermissionPrompt`, `LateIdlePrompt` and `PlanMenuClosed` are findings:
-  the code as it is, under timings or moves of yours `AgentStatus.cfg` leaves
-  out. They must fail as they say until the code is fixed.
+- `LatePermissionPrompt`, `LateIdlePrompt` and `PlanMenuClosed` are
+  findings: the code as it is, under timings or moves of yours that
+  `AgentStatus.cfg` leaves out.
+  They must fail as they say until the code is fixed.
 - `SubagentAsks.cfg` must pass, in a second or two: every order of twelve
   asks, answers, tools and ends, with a Claude that says what its turn
   leaves in the background and one that doesn't. `SubagentAsks.*.cfg` each
-  undo a fix and must fail.
+  undo a fix, or break `claude_answers`, and must fail.
 
 `all models as expected` is a pass. Read every result, pass or fail, with
 the pstack `/statechart` skill: a violation as its shortest path in plain
@@ -123,17 +136,36 @@ constant in `AgentStatus.cfg` (say `LagPastTurnEnd = TRUE`), and keep a
 ## What it leaves out
 
 Pi, OpenCode and their report chains; MCP questions, dialogs, `/clear` and
-compaction. `AgentStatus` has no subagents. `SubagentAsks` has them, but no
+compaction. `AgentStatus` has no subagents and no `requestCall`: tools
+called together, and a request beside one a late notification named, are
+`SubagentAsks`'s "several", which no approval ends, where `AgentStatus` lets
+the poll read one. A prompt of Claude's that runs no `PermissionRequest`, as
+a sandboxed command's for a new host, unrelayed: it shows only with its
+notification, six seconds on. `SubagentAsks` has subagents, but no
 reports, poll or Esc, no request that only a notification names, and no
 teammates or `agent_needs_input`, of which no capture says when Claude sends
 them; what an agent says it is doing (`activity`),
 which is no status; a hook Codex kills after 3 s (STATUS-3); a false
 `crashed` from tmux not answering; `seen` and the word Emacs shows. Hooks of
-one agent are taken as awaited, so in order, as the captures show. Bounds:
+one agent are taken as awaited, so in order, as the captures show. No
+capture has Claude's hook for a tool you stop: `Decline` takes it from
+`test_remote.py`, before its `idle`. Bounds:
 ten steps, two runs, a gone agent may read `failed` or `exited` from a hook
 that landed after the crash.
 
-## Findings open at `4508d8f`, with what came with this line
+## Findings open at `047486f`
+
+Fixed: **WorkBeforeStart** (`WorkNotWaiting`), STATUS-13, since #245. A
+relayed Claude started on a task's prompt reports `idle`, then `working`,
+and only then runs its `SessionStart` hook, as 2.1.303 does in its captures
+(2.1.310 runs the hook first). If that hook had the registry lock before the
+recorder, as behind a listing, it counted, as `ready`, and its `hookAt` made
+both reports older news; recording them still made the run relayed, so the
+`UserPromptSubmit` that followed counted for nothing, and the task read
+`ready` while Claude worked. A report older than `hookAt` now leaves
+`programStatusRun` as it was, so the hooks count until a report newer than
+them all is recorded. `EarlyWork` in `AgentStatus.cfg` has both agents, and
+`AgentStatus.NoStaleUnrelayed.cfg` undoes the fix.
 
 Fixed: **StaleReport**. A relayed Claude's `working`, read before its
 `StopFailure` or `Stop` with background work and recorded after, made the
