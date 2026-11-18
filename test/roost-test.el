@@ -5183,6 +5183,36 @@ BODY gets the window and the last task's key."
        (roost--act task "retire")
        (should-not (seq-find (lambda (text) (string-search "left in place" text)) said))))))
 
+;; A retire keeps a commit only a reflog held, and ignored files.
+(ert-deftest roost-retiring-a-task-says-what-it-kept ()
+  (roost-test--isolated
+   (let ((task (roost--cache-task nil (roost-test--task nil "ready")))
+         (kept '((commits . 1) (files . 2) (large . ["local.db"]) (folder . "/state/kept/abc")
+                 (refs . "refs/roost/kept/abc/") (days . 30)))
+         said)
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (_host _action _parameters success &rest _)
+                  (funcall success (append `((status . "retired") (kept . ,kept))
+                                           (roost-test--task nil "ready")))))
+               ((symbol-function 'message)
+                (lambda (format &rest args) (push (apply #'format-message format args) said)))
+               ((symbol-function 'current-message) (lambda () (car said))))
+       (roost--act task "retire" nil (lambda (_) (message "Retired")))
+       (should (equal (car said)
+                      (concat "Retired; kept for 30 days: 1 commit only a reflog held "
+                              "(git log --glob='refs/roost/kept/abc/*') and 2 ignored files, in "
+                              "/state/kept/abc; too large to keep: local.db")))
+       ;; Past ten too large, it counts the rest.
+       (should (string-suffix-p "too large to keep: local.db and 4 more"
+                                (roost--kept-said (cons '(largeMore . 4) kept) nil)))
+       ;; On another host, it names the host the folder is on.
+       (should (string-search "in /state/kept/abc on dev;"
+                              (roost--kept-said kept "dev")))
+       ;; With nothing kept, nothing is said of it.
+       (setq said nil kept nil)
+       (roost--act task "retire")
+       (should-not (seq-find (lambda (text) (string-search "kept" text)) said))))))
+
 (ert-deftest roost-a-merge-under-way-in-a-task-says-so-until-it-is-done ()
   ;; Declining to have the agent resolve an update's conflicts left them,
   ;; while the panel still said the integration branch had moved on.

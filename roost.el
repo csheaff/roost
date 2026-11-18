@@ -5392,6 +5392,32 @@ another task's terminal: nobody asked for that task."
   "What `roost--act' says once each action is done, for a task's name.
 The other actions say more themselves when they finish.")
 
+(defun roost--kept-said (kept host)
+  "What a retire on HOST kept, KEPT as the host's reply says, in words.
+Nil when it kept nothing and nothing was too large to keep."
+  (let* ((commits (or (alist-get 'commits kept) 0))
+         (files (or (alist-get 'files kept) 0))
+         (large (append (alist-get 'large kept) nil))
+         (more (or (alist-get 'largeMore kept) 0))
+         (parts (delq nil (list (when (> commits 0)
+                                  (format "%d %s only a reflog held (git log --glob='%s*')"
+                                          commits (if (= commits 1) "commit" "commits")
+                                          (alist-get 'refs kept)))
+                                (when (> files 0)
+                                  (format "%d ignored %s, in %s%s"
+                                          files (if (= files 1) "file" "files") (alist-get 'folder kept)
+                                          (if (null host) ""
+                                            (concat " on " (roost--host-label host)))))))))
+    (when (or parts large)
+      (string-join
+       (delq nil (list (when parts
+                         (format "kept for %d days: %s"
+                                 (or (alist-get 'days kept) 30) (string-join parts " and ")))
+                       (when large
+                         (concat "too large to keep: " (string-join large ", ")
+                                 (if (> more 0) (format " and %d more" more) "")))))
+       "; "))))
+
 (defun roost--act (task action &optional parameters callback failure replied)
   "Run ACTION on TASK with PARAMETERS, then CALLBACK with the updated task.
 FAILURE, if given, receives the error message instead of Roost reporting it.
@@ -5425,7 +5451,8 @@ terminal the action ended closes."
                    (torn (alist-get 'teardownFailure updated))
                    (output (alist-get 'teardownOutput updated))
                    ;; Forgetting says so itself, and always leaves things.
-                   (left (unless (equal action "forget") (alist-get 'leftBehind updated))))
+                   (left (unless (equal action "forget") (alist-get 'leftBehind updated)))
+                   (kept (alist-get 'kept updated)))
                (setq updated (roost--cache-reply host updated listed))
                (roost--redraw)
                (when-let* ((said (cdr (assoc action roost--action-messages))))
@@ -5436,6 +5463,8 @@ terminal the action ended closes."
                  (message "%s" (string-join (delq nil (list (current-message)
                                                             (concat "left in place: " (string-join left ", "))))
                                             "; ")))
+               (when-let* ((said (and kept (roost--kept-said kept host))))
+                 (message "%s" (string-join (delq nil (list (current-message) said)) "; ")))
                (when torn
                  (display-warning
                   'roost (format "%s's teardown command %s; Roost removed its worktree anyway%s"

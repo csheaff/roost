@@ -655,6 +655,29 @@ commits are all in what was merged. Commits made after its pull request merged
 keep it from saying so. One made on GitHub or GitLab before it merged doesn't, as
 that is in what merged.
 
+Removing a worktree and its branch also deletes what Git doesn't count, and
+retiring keeps that for 30 days first:
+
+- **A commit only a reflog holds**, as when the agent committed, then ran
+  `git reset` back past it to start over. Retiring keeps it by a ref of its
+  own; `git log --glob='refs/roost/kept/<id>/*'` shows it, and
+  `git branch NAME COMMIT` brings it back. Not the old copies a rebase
+  leaves, whose changes the branch has.
+- **Ignored files**, such as `.env.local` or a local database. Retiring
+  copies them into Roost's state folder, `kept/<id>/worktree` (on the task's host),
+  not into Git, so that no push sends them. It leaves out a file the
+  primary checkout has the same copy of, as one your setup command copied,
+  a folder Git ignores whole, as `node_modules/` or `dist/`, which a setup
+  command makes again, and a file past 16 MB, or past 256 MB in all. It
+  names what it left out for its size. A worktree the task's agent made
+  goes with the task too, and its ignored files go in `kept/<id>/agents`.
+  A submodule's ignored files are kept with the worktree's; a commit only
+  a submodule's reflog holds is not.
+
+The message after `x` or `m` says what was kept and where. Discarding a task
+keeps nothing, and drops what a retire that was then refused had kept: you
+chose to lose it.
+
 ### A worktree on another branch
 
 You or a task's agent may make a branch in its worktree and work there, as
