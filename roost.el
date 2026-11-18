@@ -3910,6 +3910,7 @@ Nil too on another host, where reading it would hold up the draft."
   "The offers a request is making a task of now, each as (PARENT OFFER).
 The key of the task that offered it and the offer's ID, as the request
 went: the draft may be moved to another project meanwhile, or cancelled.
+One for each request under way, so one that ends leaves another's.
 `roost-offer-here' refuses one of these.")
 
 (defvar-local roost--compose-asked nil
@@ -5084,10 +5085,15 @@ One of the others that fails says so, and the draft goes on."
            ;; What they are all made from, for their host to keep them to.
            (words (and others (roost--compose-words what)))
            (sent nil)
+           ;; The offer this makes a task of, as it is now: the draft's
+           ;; fields lose it if the draft is moved to another project.
+           (creating (roost--compose-offer-created fields))
            ;; The project's setup command is read for each, and asked about once.
            (roost--project-values (list t)))
-            (when-let* ((creating (roost--compose-offer-created fields)))
-        (cl-pushnew creating roost--offers-being-created :test #'equal))
+      ;; Once for each request, which ends its own: another of the same
+      ;; offer, as from a draft cancelled and opened again, keeps its own.
+      (when creating
+        (push creating roost--offers-being-created))
       (setq roost--compose-submitting t
             roost--draft-note (if others
                                   (format " Creating %s and %d more…" name (length others))
@@ -5121,7 +5127,7 @@ One of the others that fails says so, and the draft goes on."
              (plist-get fields :directory) name (plist-get fields :base) prompt
              (plist-get fields :agent)
              (lambda (task &optional found)
-               (setq roost--offers-being-created (delete (roost--compose-offer-created fields) roost--offers-being-created))
+               (roost--offer-created-done creating)
                ;; Its host took the offer it was made from: list it again,
                ;; so the offer's row goes now.  Not quietly, which a poll
                ;; in flight, read before the task was made, would drop.
@@ -5132,7 +5138,7 @@ One of the others that fails says so, and the draft goes on."
                    ;; offer came while you were busy there.
                    (and (plist-get fields :parent) t)))
              (lambda (err)
-               (setq roost--offers-being-created (delete (roost--compose-offer-created fields) roost--offers-being-created))
+               (roost--offer-created-done creating)
                (when (buffer-live-p buffer)
                  (with-current-buffer buffer
                    (setq roost--compose-submitting nil)
@@ -5165,7 +5171,7 @@ One of the others that fails says so, and the draft goes on."
         ;; Nothing reached the host, as when you quit the question about
         ;; the project's setup command: the draft is ready to create again.
         ((quit error)
-         (setq roost--offers-being-created (delete (roost--compose-offer-created fields) roost--offers-being-created))
+         (roost--offer-created-done creating)
          (setq roost--compose-submitting nil
                roost--draft-note nil)
          ;; Nor was it asked for what it says now; unless an attempt went,
@@ -5179,6 +5185,12 @@ One of the others that fails says so, and the draft goes on."
 As `roost--offers-being-created' holds it."
   (and (plist-get fields :parent) (plist-get fields :offer)
        (list (plist-get fields :parent) (plist-get fields :offer))))
+
+(defun roost--offer-created-done (creating)
+  "Note that one request making a task of the offer CREATING has ended."
+  (when creating
+    (setq roost--offers-being-created
+          (cl-remove creating roost--offers-being-created :test #'equal :count 1))))
 
 (defun roost--attempt-field (group n total words)
   "What a request to create attempt N of TOTAL at one prompt says of it.

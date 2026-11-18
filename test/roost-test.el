@@ -89,6 +89,7 @@ ROOST_TEST_MATCH, a regexp, keeps to the tests whose names match it."
 Terminals are tmux-control's, whose functions most tests stub; those of
 ghostel-tmux, the default, choose it themselves."
   `(let ((roost--tasks (make-hash-table :test 'equal))
+         (roost--offers-being-created nil)
          (roost-terminal-backend 'tmux-control)
          (roost-hosts-file (expand-file-name "hosts.json" (nth 0 ,scratch)))
          (roost-projects-file (expand-file-name "projects.json" (nth 0 ,scratch)))
@@ -15991,8 +15992,7 @@ it of the same ID's, or nil for the first."
   ;; Its draft's Create is on its way: Do it here as well would have the
   ;; agent do the work and a new task do it too.
   (roost-test--isolated
-   (let ((default-directory "/tmp/") (roost--current-task nil) made sent
-         (roost--offers-being-created nil)
+   (let ((default-directory "/tmp/") (roost--current-task nil) made failed sent
          (offer '((id . "0a1b2c3d") (title . "Fix add") (brief . "add() subtracts."))))
      (save-window-excursion
        (delete-other-windows)
@@ -16000,8 +16000,8 @@ it of the same ID's, or nil for the first."
            (cl-letf (((symbol-function 'roost--act) #'ignore)
                      ((symbol-function 'roost--compose-integration) (lambda (&rest _) "main"))
                      ((symbol-function 'roost--create-task)
-                      (lambda (_directory _name _base _prompt _agent &optional on-success &rest _)
-                        (setq made on-success)))
+                      (lambda (_directory _name _base _prompt _agent &optional on-success on-error &rest _)
+                        (setq made on-success failed on-error)))
                      ((symbol-function 'roost--send-text)
                       (lambda (&rest arguments) (setq sent arguments))))
              (let ((task (roost--cache-task "dev" (append `((name . "budget") (repo . "/srv/ledger") (live . t)
@@ -16034,6 +16034,24 @@ it of the same ID's, or nil for the first."
                  (should (string-match-p "Already creating Fix add"
                                          (cadr (should-error (roost-offer-here) :type 'user-error))))
                  (should-not sent)
+                 ;; Opened and created again, a second request is out: the
+                 ;; first one failing leaves that one's.
+                 (let ((first failed))
+                   (save-current-buffer
+                     (roost--compose-offer task offer)
+                     (with-current-buffer roost--compose-buffer (roost-compose-submit)))
+                   (funcall first "Could not create it")
+                   (should (string-match-p "Already creating Fix add"
+                                           (cadr (should-error (roost-offer-here) :type 'user-error))))
+                   ;; Moved to another project, then failed too: the offer
+                   ;; can be done here again.
+                   (with-current-buffer roost--compose-buffer
+                     (roost--compose-move "/tmp/roost-elsewhere/"))
+                   (funcall failed "Could not create it")
+                   (should-not roost--offers-being-created)
+                   (roost-offer-here)
+                   (should sent)
+                   (setq sent nil))
                  ;; Another offer of its agent's can.
                  (roost--cache-task "dev" (append `((name . "budget") (repo . "/srv/ledger") (live . t)
                                                     (integrationBranch . "main")
