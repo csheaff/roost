@@ -134,7 +134,7 @@ microsecond can.
 | `Hidden` | `--kept-p`: a workspace not on screen shows the stand-in; with tab-bar, a tab's window state names it; with perspective.el, another perspective has it |
 | `MiniOpen`, `MiniClose`, `Leave`, `Close`, `ShowOther` | you: a question, a workspace left or closed, another buffer in the window |
 
-Four bases:
+Five bases:
 
 - `TerminalSeam.cfg`: a host, workspaces, one frame; three opens, two drops,
   also while a question holds the attach hook (`HeldEnds`), one release by
@@ -146,6 +146,8 @@ Four bases:
 - `TerminalSeamLocal.cfg`: a session on this machine, with workspaces.
 - `TerminalSeamFrames.cfg`: the task opened in two frames, with workspaces;
   one drop, no release and no switch, for size (1.6 million, about ten seconds).
+- `TerminalSeamClosed.cfg`: the base with workspaces you close (`Closes`) and
+  no window you give another buffer, for size (29 million, about two minutes).
 
 Variants, each a guard of the code turned off, the first seven what
 Copilot's review of #291 found:
@@ -166,6 +168,7 @@ Copilot's review of #291 found:
 | `attach-silent` | `AttachSays` | `--attach` has every stand-in of its place say it connects (VIEWS-18, 19) | EndIsTrue |
 | `give-way-keeps-unseen` | `HiddenOnly` | `--give-way` and the sweep keep only a stand-in a workspace not on screen shows (VIEWS-21) | NoStrayStandIn |
 | `handoff-needs-window` | `ByStandIn` | `--stand-in-gives-way` takes the stand-in its window showed, whether or not it shows it still | NoStrayStandIn |
+| `TerminalSeamClosed.close-leaves-kept` | `SweepOnClose` | `--workspace-closed` sweeps the stand-ins as a tab or perspective closes (VIEWS-23) | NoStrayStandIn |
 | `TerminalSeamFrames.open-kills-hidden` | `OpenKeepsHidden` | an open where the pane has come keeps the stand-in a workspace not on screen shows (VIEWS-20) | KeptForItsWorkspace |
 
 `gives-up-first` breaks DropIsTried as well, and leaves it out: TLC's
@@ -182,7 +185,9 @@ reply even while a minibuffer is open; tiled splits
 ghostel-tmux's own window it fills on an attach that displays (the
 snapshot branch), which shows the session's pane where the snapshot was;
 TRAMP's own failures beyond an attach that signals; the sessions of other
-tasks, but for the sweep their opens run; and takeovers, which Roost never
+tasks, but for the sweep their opens run, and so any stand-in of B, which
+`--follow-session` has wait for a controller switched to B
+(`roost-ghostel-tmux-a-session-switched-to-while-a-question-holds-its-hook-is-the-one-tried`); and takeovers, which Roost never
 makes.
 
 ## A failure: bug or model?
@@ -201,7 +206,7 @@ rules the step out.
 
 ### Findings
 
-Each is a config that fails on purpose, and a patch
+None open. Each is a config that fails on purpose, and a patch
 under `findings/` that adds its replay to `test/roost-test.el`, which fails
 on the code at `SYNC`. To fix one, follow `.claude/skills/fix-a-finding`;
 once fixed, delete the config and the patch, and turn on the scope it
@@ -213,15 +218,12 @@ are `roost-ghostel-tmux-a-connection-that-drops-while-a-question-holds-its-hook-
 `roost-ghostel-tmux-a-stand-in-elsewhere-says-nothing-of-not-attaching-while-the-task-connects`,
 `roost-ghostel-tmux-a-pane-that-came-shows-in-each-workspace-that-waited-for-it`
 and `roost-ghostel-tmux-a-stand-in-you-gave-way-yourself-goes-once-its-pane-comes`.
-- `finding-closed-workspace` (VIEWS-23, scope `Closes` with `MaxOthers = 0`,
-  rule NoStrayStandIn, `findings/closed-workspace.patch`). With workspaces,
-  you open a task, leave its workspace before the pane comes, and the
-  stand-in is kept for it, as it should be. You close that workspace: the
-  stand-in stays, though nothing will show it, until the next open's sweep.
-  A fix would sweep as a tab or perspective closes
-  (`tab-bar-tab-post-close-functions`, `persp-killed-hook`).
+VIEWS-22 and 23, found as those were folded in, are fixed too:
+`roost-ghostel-tmux-a-stand-in-you-cover-while-a-question-holds-its-pane-goes`
+and `roost-ghostel-tmux-a-stand-in-kept-for-a-tab-you-close-goes`. `Close`
+takes `--workspace-closed`'s sweep, from a timer at 0, as one step.
 
-Apart from closing, Roost cannot tell when a perspective that has a
+Roost cannot tell when a perspective that has a
 stand-in no longer shows it: that one goes at the next open made there.
 
 ## When the code changes on purpose
@@ -238,5 +240,5 @@ move `SYNC` in `covered.py` to that commit. Only then.
 
 Last confirmed at `951ce59`, with the fixes of VIEWS-17 to 21 that came
 with this line: `--pane-made`, `--follow-session`, `--attach`, `--kept-p`, `--give-way`,
-`--stand-in-shown`, `--stand-in-gives-way`, the sweep and connect-or-switch's
+`--stand-in-shown`, `--stand-in-gives-way`, `--workspace-closed`, the sweep and connect-or-switch's
 pane branch.

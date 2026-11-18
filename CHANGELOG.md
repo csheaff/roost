@@ -13,15 +13,17 @@ What each release changes, and what to do when upgrading. Newest first.
   in the minibuffer is tried again. It said "Could not attach" of a session
   that had attached, and stayed so until you opened its task again.
 - A terminal waiting for its session no longer says "Could not attach"
-  while it connects: when a try of a dropped host's connection, or an open
-  in another frame, attaches the session, every window waiting for it says
+  while it connects: when a try of a dropped host's connection, an open in
+  another frame, or ghostel-tmux switching another client to the session
+  attaches it, every window waiting for it says
   "Connecting to" it. Its mode line says the same as its text: "Could not
   attach" or "Detached", not "Connecting".
 - With tab-bar or perspective.el workspaces, a task opened in two frames
   while it connects shows its terminal in both, though one was in another
   workspace when it connected. And the buffer that stood in for a terminal
   you put another buffer over, before it connected or while a question was
-  open, goes once it does, rather than staying hidden.
+  open, goes once it does, rather than staying hidden; so does one kept for
+  a tab or perspective you close.
 - A terminal that cannot attach its task's tmux session says so. When the
   session went as you opened the task, or the connection dropped as it
   attached, the window said "Connecting to" the session for good. It now

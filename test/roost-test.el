@@ -12432,6 +12432,9 @@ nil), it is discarded."
          ;; a path too.
          (setq answer "Welcome to the host\nroost-socket /home/me/.tmux/tmux-1000/roost\0/etc/motd: read\n")
          (should (equal (roost-ghostel-tmux--socket "chatty" "roost") "/home/me/.tmux/tmux-1000/roost"))
+         ;; A banner with no newline before the answer.
+         (setq answer "Welcome> roost-socket /home/me/.tmux/tmux-1000/roost\0")
+         (should (equal (roost-ghostel-tmux--socket "banner" "roost") "/home/me/.tmux/tmux-1000/roost"))
          ;; A socket's name, yours, is all of the path, a newline too.
          (setq answer "roost-socket /home/me/.tmux/tmux-1000/two\nlines\0")
          (should (equal (roost-ghostel-tmux--socket "away" "two\nlines") "/home/me/.tmux/tmux-1000/two\nlines"))
@@ -12971,7 +12974,10 @@ nil), it is discarded."
                      ((symbol-function 'run-at-time) #'ignore))
              (delete-other-windows)
              (apply #'roost-ghostel-tmux-connect-or-switch place)
-             (let ((stand-in (window-buffer)))
+             (let ((stand-in (window-buffer))
+                   ;; Two's own, from an open of it that could not attach.
+                   (two (roost-ghostel-tmux--stand-in-for '("far" "main" "two"))))
+               (roost-ghostel-tmux--not-attached '("far" "main" "two"))
                ;; Switched to two, whose panes come; the attach hook waits
                ;; for the question to close.
                (setq session "two" arrived t)
@@ -12980,12 +12986,17 @@ nil), it is discarded."
                  (run-hooks 'ghostel-tmux-pane-mode-hook))
                ;; ssh drops: the sentinel runs the detach hook and kills the
                ;; controller, and the attach hook held for it never runs.
+               ;; Two's stand-in now waits for this client.
+               (should (eq (buffer-local-value 'roost-ghostel-tmux--stands-in-for two) controller))
+               (should (string-match-p "\\`Connecting to two" (with-current-buffer two (buffer-string))))
                (setq live nil)
                (roost-test--ghostel-client-ends controller)
                ;; The session it left is let go of, and it is not tried.
                (should (string-match-p "\\`Detached from one" (with-current-buffer stand-in (buffer-string))))
                (should-not (gethash place roost-ghostel-tmux--lost))
-               (should (gethash '("far" "main" "two") roost-ghostel-tmux--lost)))))
+               (should (gethash '("far" "main" "two") roost-ghostel-tmux--lost))
+               ;; Two's stand-in waits on the tries, rather than saying none come.
+               (should (string-match-p "\\`Connecting to two" (with-current-buffer two (buffer-string)))))))
        (when (buffer-live-p controller) (kill-buffer controller))
        (kill-buffer pane)
        (roost-test--kill-stand-ins)))))
@@ -13151,6 +13162,86 @@ nil), it is discarded."
        (kill-buffer before)
        (roost-test--kill-stand-ins)))))
 
+(ert-deftest roost-ghostel-tmux-a-pane-that-came-shows-in-another-frames-workspace-that-waited ()
+  ;; VIEWS-20 with two frames: the other frame's tab not on screen shows the
+  ;; stand-in as the pane comes in this one.  Back in that tab, it shows
+  ;; the pane.
+  (roost-test--isolated
+   (roost-test--ghostel-backend)
+   (roost-test--with-another-frame other
+     (let ((roost-workspace 'tab-bar)
+           (original-tab-bar-mode tab-bar-mode)
+           (before (generate-new-buffer "before"))
+           (pane (generate-new-buffer "pane"))
+           (controller (generate-new-buffer " controller"))
+           arrived stand-in)
+       (unwind-protect
+           (cl-letf (((symbol-function 'ghostel-tmux-controller)
+                      (lambda (&optional buffer) (and (eq (or buffer (current-buffer)) pane) controller)))
+                     ((symbol-function 'ghostel-tmux-controllers) (lambda () (list controller)))
+                     ((symbol-function 'ghostel-tmux-active-pane) (lambda (&rest _) (and arrived pane)))
+                     ((symbol-function 'ghostel-tmux-panes) (lambda (&rest _) (and arrived (list pane))))
+                     ((symbol-function 'ghostel-tmux-window-id) #'ignore)
+                     ((symbol-function 'ghostel-tmux-session-name) #'ignore)
+                     ((symbol-function 'ghostel-tmux-window-split) #'ignore)
+                     ((symbol-function 'ghostel-tmux-attach) (lambda (&rest _) controller)))
+             (save-window-excursion
+               (delete-other-windows)
+               (switch-to-buffer before)
+               (roost-ghostel-tmux-connect-or-switch nil "main" "roost-notes-123456")
+               (setq stand-in (window-buffer))
+               ;; The other frame opens it in a tab of its own, then goes
+               ;; back to its first tab.
+               (with-selected-frame other
+                 (set-frame-size other 80 24)
+                 (tab-bar-new-tab)
+                 (switch-to-buffer before)
+                 (roost-ghostel-tmux-connect-or-switch nil "main" "roost-notes-123456")
+                 (should (eq (window-buffer) stand-in))
+                 (tab-bar-select-tab 1))
+               (setq arrived t)
+               (with-current-buffer controller (run-hooks 'ghostel-tmux-attach-hook))
+               (should (eq (window-buffer) pane))
+               ;; Kept for the other frame's tab.
+               (should (buffer-live-p stand-in))
+               (with-selected-frame other
+                 (tab-bar-select-tab 2)
+                 (with-current-buffer (window-buffer)
+                   (run-hook-with-args 'window-buffer-change-functions (selected-window)))
+                 (sleep-for 0.05)
+                 (should (eq (window-buffer) pane)))))
+         (tab-bar-mode (if original-tab-bar-mode 1 -1))
+         (kill-buffer controller)
+         (kill-buffer pane)
+         (kill-buffer before)
+         (roost-test--kill-stand-ins))))))
+
+(ert-deftest roost-ghostel-tmux-a-waiting-terminal-joins-the-perspective-it-shows-in ()
+  ;; With tab-bar for Roost and persp-mode on too, a stand-in shown in a
+  ;; perspective is one of its buffers: kept for it, should you switch
+  ;; perspectives before the pane comes.  perspective.el's advice on
+  ;; `switch-to-buffer' adds it, NORECORD or not.
+  (skip-unless (require 'perspective nil t))
+  (roost-test--isolated
+   (roost-test--ghostel-backend)
+   (let ((roost-workspace 'tab-bar)
+         (controller (generate-new-buffer " controller")))
+     (save-window-excursion
+       (persp-mode 1)
+       (unwind-protect
+           (cl-letf (((symbol-function 'ghostel-tmux-controller) #'ignore)
+                     ((symbol-function 'ghostel-tmux-controllers) (lambda () (list controller)))
+                     ((symbol-function 'ghostel-tmux-active-pane) #'ignore)
+                     ((symbol-function 'ghostel-tmux-panes) #'ignore)
+                     ((symbol-function 'ghostel-tmux-session-name) #'ignore)
+                     ((symbol-function 'ghostel-tmux-window-split) #'ignore)
+                     ((symbol-function 'ghostel-tmux-attach) (lambda (&rest _) controller)))
+             (roost-ghostel-tmux-connect-or-switch nil "main" "roost-notes-123456")
+             (should (memq (window-buffer) (persp-buffers (persp-curr)))))
+         (persp-mode -1)
+         (kill-buffer controller)
+         (roost-test--kill-stand-ins))))))
+
 (ert-deftest roost-ghostel-tmux-a-stand-in-you-gave-way-yourself-goes-once-its-pane-comes ()
   ;; VIEWS-21, found by TerminalSeam.tla.  With workspaces, you open a
   ;; task and give its window another buffer before the pane comes.  No
@@ -13185,6 +13276,61 @@ nil), it is discarded."
                (roost-ghostel-tmux--sweep-stand-ins)
                (should-not (and (buffer-live-p stand-in)
                                 (not (get-buffer-window stand-in t)))))))
+       (kill-buffer controller)
+       (kill-buffer pane)
+       (kill-buffer before)
+       (roost-test--kill-stand-ins)))))
+
+(ert-deftest roost-ghostel-tmux-sweeps-its-stand-ins-once-a-perspective-goes ()
+  ;; As for a tab you close, below: perspective.el runs the hook before
+  ;; the perspective goes, so the sweep waits for a timer.
+  (roost-test--isolated
+   (roost-test--ghostel-backend)
+   (let (swept)
+     (cl-letf (((symbol-function 'roost-ghostel-tmux--sweep-stand-ins) (lambda () (setq swept t))))
+       (run-hooks 'persp-killed-hook)
+       (should-not swept)
+       (sleep-for 0.02)
+       (should swept)))))
+
+(ert-deftest roost-ghostel-tmux-a-stand-in-kept-for-a-tab-you-close-goes ()
+  ;; VIEWS-23, found by TerminalSeam.tla.  You open a task in a tab, go to
+  ;; another before its pane comes, and the stand-in is kept for the tab
+  ;; you left.  You close that tab: nothing will show the stand-in again,
+  ;; and it goes then, not at the next open.
+  (roost-test--isolated
+   (roost-test--ghostel-backend)
+   (let ((roost-workspace 'tab-bar)
+         (original-tab-bar-mode tab-bar-mode)
+         (before (generate-new-buffer "before"))
+         (pane (generate-new-buffer "pane"))
+         (controller (generate-new-buffer " controller"))
+         arrived)
+     (unwind-protect
+         (save-window-excursion
+           (cl-letf (((symbol-function 'ghostel-tmux-controller)
+                      (lambda (&optional buffer) (and (eq (or buffer (current-buffer)) pane) controller)))
+                     ((symbol-function 'ghostel-tmux-controllers) (lambda () (list controller)))
+                     ((symbol-function 'ghostel-tmux-active-pane) (lambda (&rest _) (and arrived pane)))
+                     ((symbol-function 'ghostel-tmux-panes) (lambda (&rest _) (and arrived (list pane))))
+                     ((symbol-function 'ghostel-tmux-window-id) #'ignore)
+                     ((symbol-function 'ghostel-tmux-session-name) #'ignore)
+                     ((symbol-function 'ghostel-tmux-window-split) #'ignore)
+                     ((symbol-function 'ghostel-tmux-attach) (lambda (&rest _) controller)))
+             (delete-other-windows)
+             (switch-to-buffer before)
+             (roost-ghostel-tmux-connect-or-switch nil "main" "roost-notes-123456")
+             (let ((stand-in (window-buffer)))
+               (tab-bar-new-tab)
+               (switch-to-buffer before)
+               (setq arrived t)
+               (with-current-buffer controller (run-hooks 'ghostel-tmux-attach-hook))
+               (should (buffer-live-p stand-in))
+               (tab-bar-close-tab 1)
+               (sleep-for 0.05)
+               (should-not (buffer-live-p stand-in)))))
+       (while (cdr (roost--tabs)) (tab-bar-close-tab))
+       (tab-bar-mode (if original-tab-bar-mode 1 -1))
        (kill-buffer controller)
        (kill-buffer pane)
        (kill-buffer before)

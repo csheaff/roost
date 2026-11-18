@@ -459,6 +459,17 @@ it: see `roost-ghostel-tmux--kept-p'."
                          (roost-ghostel-tmux--kept-p buffer)))
           (kill-buffer buffer))))))
 
+(defun roost-ghostel-tmux--workspace-closed (&rest _)
+  "Sweep the stand-ins once a tab or perspective has closed.
+On `tab-bar-tab-pre-close-functions' and `persp-killed-hook'.  One kept
+for the workspace closed has nothing to show it any more.  From a timer:
+both run before the workspace goes, its windows still on screen or in
+its tab."
+  (run-at-time 0 nil #'roost-ghostel-tmux--sweep-stand-ins))
+
+(add-hook 'tab-bar-tab-pre-close-functions #'roost-ghostel-tmux--workspace-closed)
+(add-hook 'persp-killed-hook #'roost-ghostel-tmux--workspace-closed)
+
 (defun roost-ghostel-tmux-connect-or-switch (host socket-name session)
   "Show tmux SESSION from HOST and SOCKET-NAME in the selected window.
 A live connection to the session is reused.  The panes a connection
@@ -536,7 +547,14 @@ Roost do."
       (remhash place roost-ghostel-tmux--lost)
       (roost-ghostel-tmux--not-attached place t)
       (setq place (list (nth 0 place) (nth 1 place) session)
-            roost-ghostel-tmux--place place))
+            roost-ghostel-tmux--place place)
+      ;; What stands in for the session it shows now, as one an open of
+      ;; it could not attach, waits for this controller.
+      (let ((controller (current-buffer)))
+        (dolist (stand-in (roost-ghostel-tmux--stand-ins place))
+          (with-current-buffer stand-in
+            (setq roost-ghostel-tmux--stands-in-for controller))
+          (roost-ghostel-tmux--connecting stand-in))))
     place))
 
 (defun roost-ghostel-tmux--attached ()
@@ -772,6 +790,16 @@ is no task's has its own name for the task's."
                 'help-echo (buffer-name))))
 
 (add-hook 'ghostel-tmux-pane-mode-hook #'roost-ghostel-tmux--pane-made)
+
+(defun roost-ghostel-tmux-unload-function ()
+  "Remove the hooks this file added, for `unload-feature'."
+  (remove-hook 'ghostel-tmux-attach-hook #'roost-ghostel-tmux--attached)
+  (remove-hook 'ghostel-tmux-detach-hook #'roost-ghostel-tmux--detached)
+  (remove-hook 'ghostel-tmux-pane-mode-hook #'roost-ghostel-tmux--pane-made)
+  (remove-hook 'tab-bar-tab-pre-close-functions #'roost-ghostel-tmux--workspace-closed)
+  (remove-hook 'persp-killed-hook #'roost-ghostel-tmux--workspace-closed)
+  ;; And let `unload-feature' go on.
+  nil)
 
 (provide 'roost-ghostel-tmux)
 ;;; roost-ghostel-tmux.el ends here

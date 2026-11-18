@@ -35,7 +35,7 @@ CONSTANTS
   MaxSi,         \* stand-ins, over the whole run
   \* Scope a finding needed, on in the base once fixed:
   HeldEnds,      \* a client ends while ghostel-tmux holds its attach hook
-  Closes,        \* you close a workspace that is not on screen: a finding, VIEWS-23
+  Closes,        \* you close a workspace that is not on screen (VIEWS-23)
   FailsInARow,   \* your open's attach signals while a row of tries is under way
   \* The code as it is: each TRUE.  FALSE is a broken variant.
   OwnSession,    \* `--stand-in-gives-way`: the controller is still the stand-in's place and session
@@ -52,7 +52,8 @@ CONSTANTS
   AttachSays,    \* `--attach`: every stand-in of the place says it connects, and waits for it
   HiddenOnly,    \* `--give-way` and the sweep keep only one a workspace not on screen shows (`--kept-p`)
   OpenKeepsHidden, \* connect-or-switch, the pane there: keeps the stand-in a workspace not on screen shows
-  ByStandIn      \* `--stand-in-gives-way` takes the stand-in its window showed, shown there still or not
+  ByStandIn,     \* `--stand-in-gives-way` takes the stand-in its window showed, shown there still or not
+  SweepOnClose   \* `--workspace-closed`: closing a tab or perspective sweeps the stand-ins
 
 Places == {"A", "B"}
 Wins == 1..Frames
@@ -534,10 +535,22 @@ Leave(w) ==
                  gHeld, gDue, rHeld, rDue, owed, n, bad>>
 
 \* You close the task's workspace in frame W, which is not on screen.
+\* With `--workspace-closed`'s sweep, from a timer at 0, taken here as one
+\* step: what else runs at 0 (`gDue`, `rDue`) kills a stand-in no window of
+\* a closed workspace shows just as the sweep does.
 Close(w) ==
   /\ Calm /\ Closes /\ Workspaces /\ w \in Away
   /\ closed' = closed \cup {w}
-  /\ UNCHANGED <<ctl, si, win, live, snaps, alive, lost, timers, probes, mini,
+  /\ LET C1 == closed \cup {w}
+         hidden(i) == \E v \in Wins \ (live \cup C1) : Shows(win, v, i)
+         keeps(i) == LET c == si[i].f IN
+                       c # 0 /\ Live(c) /\ ctl[c].p = si[i].p
+                       /\ (~ctl[c].rows \/ (SweepKeeps /\ (~HiddenOnly \/ hidden(i))))
+         swept == {i \in Sis : si[i].st = "live" /\ ~(\E v \in live : Shows(win, v, i)) /\ ~keeps(i)}
+     IN si' = IF SweepOnClose
+              THEN [i \in Sis |-> IF i \in swept THEN [si[i] EXCEPT !.st = "dead"] ELSE si[i]]
+              ELSE si
+  /\ UNCHANGED <<ctl, win, live, snaps, alive, lost, timers, probes, mini,
                  gHeld, gDue, rHeld, rDue, owed, n, bad>>
 
 \* You show another buffer in the task's window: `q`, or `C-x b`.
