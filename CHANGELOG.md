@@ -4,6 +4,16 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- One odd file among an agent's conversations no longer stops the task
+  list or a search for every task on its host. A line nested deeper than
+  Python reads, as a tool's input can be, failed the list, the task panel
+  and every search there with "RecursionError", and ended a task's Roost
+  tools for the rest of its session; such a line is now passed over. A
+  session file that was a FIFO held the list of a host with a Pi task, and
+  any search, for good: Roost now reads only regular files, keeps only a
+  session Pi names in the folder Roost gave it for the task, and a search
+  keeps to its time within one long line too. Nothing to do when upgrading.
+
 ## 0.13.0
 
 To upgrade from 0.12:

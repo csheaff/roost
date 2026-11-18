@@ -785,28 +785,47 @@ def claude_hook_settings(store, task):
     return str(path)
 
 
+def json_line(line):
+    """What LINE says as JSON, or None if it is not JSON, or is nested
+    deeper than Python reads, as a tool's input can be. For text Roost did
+    not write: an agent's transcript, what it sends, another program's reply."""
+    try:
+        return json.loads(line)
+    except (ValueError, RecursionError):
+        return None
+
+
+def open_file(path):
+    """The file at PATH, open to read its bytes. Anything else there is an
+    OSError: a FIFO is not waited on for its writer, nor a device read
+    without end. A number is no PATH, where `open' would take it for a
+    file this process has open."""
+    handle = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY)
+    try:
+        if not stat.S_ISREG(os.fstat(handle).st_mode):
+            raise OSError(errno.EINVAL, "Not a file", str(path))
+        return open(handle, "rb")
+    except BaseException:
+        os.close(handle)
+        raise
+
+
 def transcript_tail(path, limit=LAST_MESSAGE_TAIL):
     """Complete JSON lines from the last LIMIT bytes of a transcript, newest last."""
-    with open(path, "rb") as handle:
+    with open_file(path) as handle:
         size = handle.seek(0, os.SEEK_END)
         handle.seek(max(0, size - limit))
         data = handle.read()
     lines = data.splitlines()
     if size > limit and lines:
         lines.pop(0)  # Starts mid-line.
-    entries = []
-    for line in lines:
-        try:
-            entries.append(json.loads(line))
-        except ValueError:
-            pass
-    return entries
+    return [entry for entry in map(json_line, lines) if entry is not None]
 
 
 def lines_backwards(path, limit, chunk=LAST_MESSAGE_TAIL):
     """The complete lines in the last LIMIT bytes of the file at PATH, newest
     first, read a CHUNK at a time so that a search can stop early."""
-    with open(path, "rb") as handle:
+    with open_file(path) as handle:
         end = handle.seek(0, os.SEEK_END)
         stop = max(0, end - limit)
         # The line read in part, newest piece first: joined once its start
@@ -1212,10 +1231,7 @@ class ClaudeAgent:
         if not path or not path.is_file():
             return None
         for line in lines_backwards(path, PROMPT_SEARCH):
-            try:
-                entry = json.loads(line)
-            except ValueError:
-                continue
+            entry = json_line(line)
             found = None if isinstance(entry, dict) and entry.get("isSidechain") else conversation_text(entry)
             if found and found[0] == "user" and not found[1].startswith("[Request interrupted by user"):
                 return later_prompt(task, found[1])
@@ -1653,7 +1669,7 @@ class PiAgent:
         sessions = store.root / "sessions" / task["id"]
         sessions.mkdir(mode=0o700, parents=True, exist_ok=True)
         argv = task["command"] + ["--extension", str(extension), "--session-dir", str(sessions)]
-        if resume_conversation and task.get("agentSession"):
+        if resume_conversation and text(task.get("agentSession")):
             return argv + ["--session", task["agentSession"]]
         if task.get("forkSession"):
             # A copy of another task's session file, made in this task's folder.
@@ -1727,11 +1743,28 @@ class PiAgent:
             updates["lastReply"] = None
         if request:
             updates["request"] = request[:REQUEST_LIMIT]
-        if payload.get("session"):
+        if text(payload.get("session")):
             updates["agentSession"] = payload["session"]
         return updates
 
+    def own_session(self, store, task, session):
+        """Whether SESSION, where a hook says Pi keeps TASK's session, is a
+        file in the folder Roost gave Pi for the task's sessions, or
+        nothing there yet. The helper reads the file a task's record names,
+        and an agent can send a hook of its own."""
+        folder = os.path.realpath(store.root / "sessions" / task["id"])
+        try:
+            path = os.path.realpath(session)
+            kind = os.lstat(path).st_mode
+        except FileNotFoundError:
+            kind = None
+        except (OSError, ValueError):
+            return False
+        return path.startswith(folder + os.sep) and (kind is None or stat.S_ISREG(kind))
+
     def last_message(self, task):
+        # A record from an older helper holds whatever a hook named:
+        # what is no file there is no reply.
         session = task.get("agentSession")
         if not session:
             return None
@@ -2856,9 +2889,8 @@ def jira_query(jql, limit, wanted):
                   ("jira", "workitem", "query", "--jql", jql, "--limit", str(limit),
                    "--fields", wanted, "-o", "json", "--output-summary", "none"),
                   30, "twg is not installed on this host", said=lambda result: twg_error(result.stdout))
-    try:
-        payload = json.loads(output)
-    except ValueError:
+    payload = json_line(output)
+    if payload is None:
         raise RoostError("twg didn't list Jira work items as JSON: " + output.strip()[:200])
     # An envelope around the issues Jira's search returns, each with its fields.
     listed = payload.get("data", payload) if isinstance(payload, dict) else payload
@@ -2907,10 +2939,8 @@ def jira_body(fields):
 def twg_error(output):
     """What twg says to do about the error it gave in OUTPUT, as
     {"ok": false, "error": {"summary": ...}}, or None."""
-    try:
-        error = json.loads(output).get("error")
-    except (ValueError, AttributeError):
-        return None
+    said = json_line(output)
+    error = said.get("error") if isinstance(said, dict) else None
     return (text(error.get("summary")) or text(error.get("message"))) if isinstance(error, dict) else None
 
 
@@ -5131,10 +5161,7 @@ class McpServer:
     def serve(self):
         with contextlib.suppress(BrokenPipeError):
             for line in self.lines():
-                try:
-                    message = json.loads(line)
-                except ValueError:
-                    continue
+                message = json_line(line)
                 if isinstance(message, dict):
                     self.handle(message)
 
@@ -7026,8 +7053,37 @@ SEARCH_TEXT_LIMIT = 1500
 SEARCH_SECONDS = 20
 
 
+# A line of a transcript is read this much at a time, and one longer than
+# the limit, which no message is, is passed over rather than held.
+SEARCH_LINE_PIECE = 1024 * 1024
+SEARCH_LINE_LIMIT = 64 * 1024 * 1024
+
+
 class SearchTimeUp(Exception):
     """A search has used its time."""
+
+
+def transcript_lines(path, deadline=None):
+    """The lines of the transcript at PATH, first to last, with None for
+    one longer than SEARCH_LINE_LIMIT. Past DEADLINE, a `time.monotonic'
+    value, it raises SearchTimeUp, within a line too."""
+    with open_file(path) as handle:
+        while True:
+            pieces, size = [], 0
+            while True:
+                if deadline and time.monotonic() > deadline:
+                    raise SearchTimeUp
+                piece = handle.readline(SEARCH_LINE_PIECE)
+                size += len(piece)
+                if size > SEARCH_LINE_LIMIT:
+                    pieces = None
+                elif piece:
+                    pieces.append(piece)
+                if not piece or piece.endswith(b"\n"):
+                    break
+            if not size:
+                return
+            yield None if pieces is None else b"".join(pieces).decode("utf-8", "replace")
 
 
 def conversation_text(entry):
@@ -7095,40 +7151,35 @@ def search_transcript(path, words, owner, deadline=None, agent="claude"):
     # words are left to the parsed message.
     needles = [json.dumps(word)[1:-1] for word in words if word.isascii()]
     patterns = word_patterns(words)
-    with open(path, encoding="utf-8", errors="replace") as handle:
-        for number, line in enumerate(handle, 1):
-            if deadline and number % 1024 == 0 and time.monotonic() > deadline:
-                raise SearchTimeUp
-            if started_in and number == 1:
-                try:
-                    place = started_in(json.loads(line))
-                except ValueError:
-                    place = None
-                # A session that is no task's: the rest of it is not read.
-                if not place or not owner(place[0]):
-                    return
-                continue
-            lower = line.lower()
-            if not all(needle in lower for needle in needles):
-                continue
-            try:
-                entry = json.loads(line)
-            except ValueError:
-                continue
-            found = adapter.wrote(entry)
-            if not found or not all(pattern.search(found[1].lower()) for pattern in patterns):
-                continue
-            cwd, branch = place or adapter.wrote_in(entry)
-            task = owner(cwd)
-            if not task:
-                continue
-            body = found[1]
-            # The session and line name the message, even where times are equal or missing.
-            yield (task, branch,
-                   dict(at=text(entry.get("timestamp")), role=found[0], agent=agent, session=path.stem,
-                        line=number, snippet=snippet(body, patterns),
-                        text=body if len(body) <= SEARCH_TEXT_LIMIT
-                        else body[:SEARCH_TEXT_LIMIT].rstrip() + "…"))
+    for number, line in enumerate(transcript_lines(path, deadline), 1):
+        if started_in and number == 1:
+            place = started_in(json_line(line)) if line else None
+            # A session that is no task's: the rest of it is not read.
+            if not place or not owner(place[0]):
+                return
+            continue
+        if line is None:
+            continue
+        lower = line.lower()
+        if not all(needle in lower for needle in needles):
+            continue
+        entry = json_line(line)
+        if entry is None:
+            continue
+        found = adapter.wrote(entry)
+        if not found or not all(pattern.search(found[1].lower()) for pattern in patterns):
+            continue
+        cwd, branch = place or adapter.wrote_in(entry)
+        task = owner(cwd)
+        if not task:
+            continue
+        body = found[1]
+        # The session and line name the message, even where times are equal or missing.
+        yield (task, branch,
+               dict(at=text(entry.get("timestamp")), role=found[0], agent=agent, session=path.stem,
+                    line=number, snippet=snippet(body, patterns),
+                    text=body if len(body) <= SEARCH_TEXT_LIMIT
+                    else body[:SEARCH_TEXT_LIMIT].rstrip() + "…"))
 
 
 def search(store, request):
@@ -7187,8 +7238,12 @@ def search(store, request):
             for path in kept(store, tasks, deadline) if kept else ():
                 if time.monotonic() > deadline:
                     raise SearchTimeUp
+                # Only files, and no link to anything: a FIFO would
+                # wait for its writer, and a device have no end.
                 with contextlib.suppress(OSError):
-                    transcripts.append((path.stat().st_mtime, str(path), path, name))
+                    found = path.lstat()
+                    if stat.S_ISREG(found.st_mode):
+                        transcripts.append((found.st_mtime, str(path), path, name))
         except SearchTimeUp:
             incomplete = True
             break
@@ -8071,6 +8126,12 @@ def update_hook(store, task_id, payload, run_id=None):
                 store.save(task)
         concerns = getattr(agent, "concerns", None)
         updates = agent.observe(payload, before) if not concerns or concerns(task, payload) else None
+        # Where the agent says its conversation is, if its adapter says
+        # where that may be: elsewhere, the one recorded before stands.
+        own_session = getattr(agent, "own_session", None)
+        if updates and own_session and "agentSession" in updates and not own_session(
+                store, task, updates["agentSession"]):
+            del updates["agentSession"]
         # Who asked before this event, which may name another.
         asked_before, beside_before = asking_subagent(task), asks_beside(task)
         # News that the agent's end overtook, as Pi and OpenCode don't wait
@@ -9262,7 +9323,7 @@ def main():
                             json.load(sys.stdin), os.environ["ROOST_RUN_ID"])
             else:
                 update_hook(Store(sys.argv[2]), sys.argv[3], json.load(sys.stdin), sys.argv[4])
-        except (OSError, ValueError, KeyError, RoostError):
+        except (OSError, ValueError, KeyError, RoostError, RecursionError):
             pass
     elif mode == "run":
         return runner(sys.argv[2], sys.argv[3], sys.argv[4], len(sys.argv) > 5)

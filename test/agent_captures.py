@@ -133,10 +133,17 @@ def replay(meta, entries):
                     programStatus=bool(meta.get("programStatus")), startedAt=roost.now(),
                     updatedAt=roost.now())
         store.save(task)
+        # A capture's store stands at STATE, and a file an agent names in
+        # it, as Pi its session, is held to be in the task's own store.
+        here = lambda value, old, new: (new + value[len(old):] if isinstance(value, str)
+                                        and value.startswith(old + "/") else value)
         for entry in entries:
             if "hook" in entry:
                 clock[0] = EPOCH + entry["at"]
-                roost.update_hook(store, TASK_ID, entry["hook"], RUN_ID)
+                hook = entry["hook"]
+                if "session" in hook:
+                    hook = dict(hook, session=here(hook["session"], STATE, root))
+                roost.update_hook(store, TASK_ID, hook, RUN_ID)
             elif "report" in entry:
                 clock[0] = EPOCH + entry["at"]
                 report = dict(entry["report"])
@@ -150,7 +157,7 @@ def replay(meta, entries):
                 results.append(None)
                 continue
             task = store.read(TASK_ID)
-            results.append({key: task[key] for key in FIELDS if task.get(key) not in (None, "")})
+            results.append({key: here(task[key], root, STATE) for key in FIELDS if task.get(key) not in (None, "")})
     return results
 
 
