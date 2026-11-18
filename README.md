@@ -105,9 +105,7 @@ Emacs 30:
 
 Ghostel offers to download its native module the first time a terminal
 opens. The [manual](docs/manual.md#install) covers straight.el, Doom, Emacs
-29, Evil and other modal setups, and
-[tmux-control](docs/manual.md#terminals-through-tmux-control), which drew
-the terminals before 0.13.0 and still can.
+29, Evil and other modal setups.
 
 1. `M-x roost-doctor` checks this machine and each host, with a fix for
    anything missing.

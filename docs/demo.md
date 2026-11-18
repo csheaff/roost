@@ -13,7 +13,7 @@ nothing personal distracts: the stock `modus-vivendi` theme and mode line,
 Menlo, and Roost, Ghostel 0.65.0, ghostel-tmux 0.3.0, Magit and nothing
 else. It had `roost-sidebar-mode` and `roost-task-panel-mode` on,
 `roost-animations` off, as it is by default, and `roost-workspace` set to
-`none`. It used a separate state directory and tmux socket named
+nil. It used a separate state directory and tmux socket named
 `roost-demo`; a normal setup shows `~/.local/share/roost`.
 
 `dev` was a Linux machine reached over SSH, with its own helper, tmux server

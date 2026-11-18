@@ -9,7 +9,7 @@ The [manual](docs/manual.md#how-it-works) says how it fits together.
 
 ## Checks
 
-- `make test compile` before each commit: the ERT suite (tmux-control
+- `make test compile` before each commit: the ERT suite (terminals
   stubbed), the Python lifecycle tests against real Git and isolated tmux
   sockets, and a byte-compile with no warnings. CI runs it on Emacs 29.1
   and 30.1. `test/run.py` runs it on every core, about four minutes on
@@ -108,7 +108,7 @@ they can do themselves.
 - Roost supports a few agents well rather than many: a couple from the model
   labs and a couple that work across them (see the manual's Install
   section). Don't add an adapter unless asked; a request for one goes in
-  `docs/roadmap.md` with whether the agent meets the bar there.
+  `docs/roadmap.md` with whether the agent meets that section's bar.
 - Prefer what works the same for every agent, or does nothing for one that
   can't, and what uses data Roost already has or one `git` or `gh` call. A
   new dependency, option or key has to earn its place.

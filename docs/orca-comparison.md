@@ -38,7 +38,7 @@ visible in Emacs. Tiling is now explicit and idempotent. It also found that
 process callbacks could restore focus after selecting the shell. Shell focus is
 applied after tiling settles, with guards for subsequent navigation.
 
-Each agent (Claude Code, Codex and Pi) has a small host-side
+Each agent (Claude Code, Codex, Pi and OpenCode) has a small host-side
 adapter for command validation, launch/resume arguments and hook
 interpretation, while Git, SSH and tmux lifecycle operations stay outside it.
 Older Claude records still resume.
@@ -55,8 +55,8 @@ closer to Orca's surfaces where that helped:
 | Base branch drift | Commits ahead and behind the integration branch; `u` merges it into the task, and the agent can resolve conflicts |
 | Delete, with an explicit force waiver | Retire for finished work; forget drops only Roost's record and never touches Git |
 | Branch prefix setting | `roost-branch-prefix` |
-| Pull requests from a workspace | `P` drafts one from the agent's commit message and creates it with `gh` on the task's host; `P` again pushes review fixes; `x` retires after a squash merge and deletes the branch |
-| Issue imports | `C-c C-t` in the draft starts from a GitHub issue, and the pull request closes it; `roost-new-task` on an Org heading, an agenda line, or a region starts the prompt, and the heading then stands for its task |
+| Pull requests from a workspace | `P` drafts one from the agent's commit message and creates it with `gh`, or `glab` on GitLab, on the task's host; `P` again pushes review fixes; `x` retires after a squash merge and deletes the branch |
+| Issue imports | `C-c C-t` in the draft starts from a GitHub or GitLab issue, which the pull request closes, or a Jira work item; `roost-new-task` on an Org heading, an agenda line, or a region starts the prompt, and the heading then stands for its task |
 
 ## The pinned layout, used end to end
 
@@ -72,7 +72,7 @@ tasks were then taken from creation to merge in it (see
 | Always there by default | Opt-in, since an Emacs package that claims a column of every frame should be asked to; one line in your configuration keeps it |
 | Right sidebar: Source Control with the changed files and their diffs, live | The task panel (`I`, opt-in like the sidebar since 2026-10-09): what to do next, the prompt, the changed files, uncommitted ones first, kept current, each opening its diff in Magit for notes to the agent, commits ahead and behind, and the pull request's review and checks. The agent's replies stay in its terminal beside it, and `?` opens the menu of actions. Staging and committing stay in Magit (`r`) |
 | Checks tab | Pull request checks as passing, failing and pending counts in the panel |
-| Agents tab: past sessions to resume | `s` resumes the task's own conversation; there is no history browser |
+| Agents tab: past sessions to resume | `s` resumes the task's own conversation, and `/` searches every task's, retired ones too |
 | Panels collapse by hand | The panel steps aside by itself when the terminal would drop below 80 columns, and comes back with room; `q` and `I` turn it off and on |
 
 Using it found what a screenshot would not. Changes went stale while agents
@@ -124,7 +124,7 @@ Summoned with `r`, it refreshes only when you ask.
 | Send notes: this file, or all unsent | `@` (or `e`) drafts a prompt holding every unsent note, quoting the lines they are about; sending it clears them |
 | The diff of a whole file in the editor area | `=` (`g=` with Evil) shows the whole file with its changes, as a Magit diff you can still stage from |
 
-Mobile access, embedded browsers, trackers other than GitHub, workflow boards
+Embedded browsers, trackers other than GitHub, GitLab and Jira, workflow boards
 and sparse checkouts remain outside Roost. Emacs already supplies
 file editing, project navigation and Git review. Roost's job is to make those
 tools belong to the same durable task.
