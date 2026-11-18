@@ -11,7 +11,7 @@
 ;; when `roost-terminal-backend' is `ghostel-tmux', its default; with
 ;; tmux-control it is never loaded.
 ;;
-;; It needs Ghostel 0.65.0 and ghostel-tmux 0.3.0 or newer.  Each
+;; It needs Ghostel 0.65.0 and ghostel-tmux 0.4.0 or newer.  Each
 ;; function here has the name and arguments of
 ;; the one of tmux-control it stands for, after the prefix.  A definition
 ;; that still has to work around something in ghostel-tmux says so,
@@ -304,7 +304,8 @@ SHOWN if it is one for PLACE already, else a new one."
   "Have what stands in for the session at PLACE say that no pane is coming.
 Its tmux client ended before a pane came, and none is tried again: the
 session went, the connection dropped as it attached, or, with DETACHED,
-you or Roost detached it.  The buffer says which, and how to leave it or
+its client left a session it had attached: you or Roost detached it, or
+tmux said the session ended.  The buffer says which, and how to leave it or
 try again, as tmux-control's terminal says that its connection was lost;
 it would otherwise say that it is connecting for good.  The echo area
 says so too where a window shows it."
@@ -486,7 +487,9 @@ that ended.  The hook could say which."
              (not (bound-and-true-p ghostel-tmux--closing))
              (or roost-ghostel-tmux--was-attached (gethash place roost-ghostel-tmux--lost)))
         (roost-ghostel-tmux--attach-again place)
-      (roost-ghostel-tmux--not-attached place (bound-and-true-p ghostel-tmux--detaching)))))
+      (roost-ghostel-tmux--not-attached
+       place (or (bound-and-true-p ghostel-tmux--detaching)
+                 (bound-and-true-p ghostel-tmux--closing))))))
 
 (defun roost-ghostel-tmux--attach-again (place)
   "Try the session at PLACE again after a second, then two, up to thirty.

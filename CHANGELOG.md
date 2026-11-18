@@ -12,7 +12,9 @@ What each release changes, and what to do when upgrading. Newest first.
 - A task's terminal shows in its workspace when you go back to it by its
   tab or perspective. If you left the workspace before the terminal had
   connected, it showed some other buffer in the terminal's place.
-- Nothing to do when upgrading.
+- Roost asks for ghostel-tmux 0.4.0, which it has needed since 0.13.0: with
+  0.3.0, opening a task failed with "Wrong number of arguments". When
+  upgrading, update ghostel-tmux if `M-x roost-doctor` says it is older.
 
 ## 0.13.0
 

@@ -81,7 +81,7 @@ keys, sizes and limits.
 ## Get started
 
 Roost needs Emacs 29.1+, and [Ghostel](https://github.com/dakra/ghostel)
-0.65.0+ and [ghostel-tmux](https://github.com/dakra/ghostel-tmux) 0.3.0+ to
+0.65.0+ and [ghostel-tmux](https://github.com/dakra/ghostel-tmux) 0.4.0+ to
 draw the terminals. Each host needs Python 3.9+, Git, tmux 3.1+ and a
 signed-in agent CLI; remote hosts need SSH with keys or an agent. With
 Emacs 30:

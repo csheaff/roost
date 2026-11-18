@@ -12762,7 +12762,7 @@ A test stubs the functions of ghostel-tmux it reaches."
   (roost-test--isolated
    (cl-letf (((symbol-function 'roost--library-version)
               (lambda (library)
-                (pcase library ("ghostel-tmux" "0.3.0") ("ghostel" "0.64.0") ("tmux-control" "0.8.2")))))
+                (pcase library ("ghostel-tmux" "0.4.0") ("ghostel" "0.64.0") ("tmux-control" "0.8.2")))))
      (let* ((roost-terminal-backend 'ghostel-tmux)
             (checks (roost--doctor-local-checks)))
        (should (nth 1 (assoc "ghostel-tmux" checks)))

@@ -3317,9 +3317,6 @@ Open, each a suspected race, none reproduced:
   retired, stays until its controller ends and another task is opened.
 - The host's `inspect` and the attach are two steps: the session can end between
   them. The window then says "Could not attach"; nothing asks the host again.
-- Roost needs functions of ghostel-tmux 0.4.0 (`ghostel-tmux-controllers`, the
-  hooks, the third argument of `ghostel-tmux-attach`), and `Package-Requires` names
-  0.3.0.
 
 ### `n`, the run through waiting tasks
 

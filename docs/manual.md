@@ -15,7 +15,7 @@ day of work, every command and option, and how Roost works.
 
 Requirements: Emacs 29.1+ built with dynamic modules, and the two packages
 that draw a task's terminal: [Ghostel](https://github.com/dakra/ghostel)
-0.65.0+ and [ghostel-tmux](https://github.com/dakra/ghostel-tmux) 0.3.0+.
+0.65.0+ and [ghostel-tmux](https://github.com/dakra/ghostel-tmux) 0.4.0+.
 Ghostel offers to download its native module the first time a terminal
 opens. Each task host needs
 Python 3.9+, Git, tmux 3.1+, and an installed, signed-in agent CLI (Claude Code
@@ -1134,7 +1134,7 @@ for writing a note shows.
 Roost shows a task's tmux session with
 [ghostel-tmux](https://github.com/dakra/ghostel-tmux), which draws it with
 [Ghostel](https://github.com/dakra/ghostel). It needs Ghostel 0.65.0 and
-ghostel-tmux 0.3.0 or newer; `M-x roost-doctor` checks both.
+ghostel-tmux 0.4.0 or newer; `M-x roost-doctor` checks both.
 
 - A terminal's keys are ghostel-tmux's: tmux's own, after `C-t`, such as
   `C-t o` for the next pane.

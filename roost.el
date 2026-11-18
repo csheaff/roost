@@ -4,7 +4,7 @@
 
 ;; Author: Clay Sheaff
 ;; Version: 0.13.0
-;; Package-Requires: ((emacs "29.1") (ghostel "0.65.0") (ghostel-tmux "0.3.0") (transient "0.4.1"))
+;; Package-Requires: ((emacs "29.1") (ghostel "0.65.0") (ghostel-tmux "0.4.0") (transient "0.4.1"))
 ;; Keywords: tools, processes
 ;; URL: https://github.com/csheaff/roost
 ;; SPDX-License-Identifier: GPL-3.0-or-later
@@ -202,7 +202,7 @@ Existing tasks keep their branch."
 (defcustom roost-terminal-backend 'ghostel-tmux
   "The package that shows a task's tmux session in Emacs.
 `ghostel-tmux' draws it through Ghostel, and needs Ghostel 0.65.0 and
-ghostel-tmux 0.3.0 or newer.  `tmux-control' draws it through Eat, and
+ghostel-tmux 0.4.0 or newer.  `tmux-control' draws it through Eat, and
 needs tmux-control 0.8.2 or newer, which Roost does not install.  Set
 it before you open a task: the terminals of one package are not the
 other's."
@@ -15576,7 +15576,7 @@ RESULT is `pending', a list of checks, or (error . MESSAGE).")
 (defconst roost--tmux-control-version "0.8.2"
   "The oldest tmux-control Roost works with, when it is the terminal package.")
 
-(defconst roost--ghostel-tmux-version "0.3.0"
+(defconst roost--ghostel-tmux-version "0.4.0"
   "The oldest ghostel-tmux Roost works with, as its Package-Requires says.")
 
 (defconst roost--ghostel-version "0.65.0"
