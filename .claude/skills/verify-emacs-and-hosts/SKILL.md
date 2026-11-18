@@ -10,9 +10,10 @@ description: >
   roost--cache-reply, roost--newer-events, roost--newer-offers,
   roost--newer-branch, roost--act, roost--create-task, roost--task-made,
   roost--take-offer, roost-retarget, the inspects in roost--open and
-  roost--notify-attention),
+  roost--notify-attention, the refresh roost-compose-submit asks for an
+  offer's draft),
   or the helper's install, prune_helpers, rpc's locking or detach, or what
-  retarget, take_offer or make_task stamp; when the
+  retarget, take_offer, make_task or keep_shown stamp; when the
   "Emacs and its hosts" section of docs/state-machines.md changes; or for
   /verify-emacs-and-hosts.
 ---
@@ -42,6 +43,17 @@ with the shortest path to a broken rule.
   it has held. `B` moves no `updatedAt` either. Harm: `m` asking to merge
   into the old branch, and saying it did, while the host merges into the
   new one.
+- **NoShownRollback.** Nor does a reply take a task back to the image or
+  page it showed before, or to none: a task Emacs lists has the newest
+  `shown.at` it has held. Showing moves no `updatedAt` either. **It fails on
+  the code as it is**, a finding, below. Harm: the panel no longer names
+  the image, and `roost-show-image` says the task has shown none, until
+  the next list.
+- **OfferRowGoes.** Once a task is made from an offer and its draft has
+  asked for the host to be listed, the offer's row goes: with no list in
+  flight, and none asked since that came to nothing, Emacs holds the task
+  that offered it with the offer taken. Harm: an offer whose task you made
+  still under its task, to start again.
 - **OneList.** At most one list per host is in flight, and
   `roost--refreshing` says whether one is; a full refresh owed has a refresh
   to run it. Harm: a host never asked again until Emacs restarts
@@ -65,16 +77,19 @@ with the shortest path to a broken rule.
 python3 test/formal/check.py emacs_and_hosts
 ```
 
-About three minutes; `make formal` runs every model. Java and TLC 1.7.4 come
-from mise. Every line must say `ok`: `CachedTasks.cfg`,
-`CachedTasksRetarget.cfg`, `CachedTasksTwoCreates.cfg` and
-`HostRequests.cfg` pass, and each other config fails the way its first line
-says. `CachedTasksRetarget.tla` and `CachedTasksTwoCreates.tla` are
-`CachedTasks.tla` again at other bounds, as the runner takes one passing
-config per model: `B`, and two tasks asked for at once, each take too long
-beside all that `CachedTasks.cfg` has. Nearly all the time is
-`CachedTasks.cfg`, 24.6 million states; the other two are a million between
-them.
+About three minutes, or six on a machine busy with other work; `make formal`
+runs every model. Java and TLC 1.7.4 come from mise. Every line must say `ok`: `CachedTasks.cfg`,
+`CachedTasksOffer.cfg`, `CachedTasksRetarget.cfg`,
+`CachedTasksTwoCreates.cfg` and `HostRequests.cfg` pass, and each other
+config fails the way its first line says, the finding's too.
+`CachedTasksOffer.tla`, `CachedTasksRetarget.tla` and
+`CachedTasksTwoCreates.tla` are `CachedTasks.tla` again at other bounds, as
+the runner takes one passing config per model: a task made from an offer,
+`B`, and two tasks asked for at once, each take too long beside all that
+`CachedTasks.cfg` has. Nearly all the time is `CachedTasks.cfg`, 24.6
+million states, the same as before the offer's draft and what a task shows
+were added: both are switched off there (`FromOffer`, `MaxShown`). The
+other three are two million between them.
 
 Read every result with the pstack statechart skill (`/pstack:statechart`):
 it tells a failure's shortest path in plain words, and draws a passing
@@ -82,23 +97,25 @@ model as a chart.
 
 ## Does your change touch it?
 
-Coverage, confirmed against the code at **4508d8f**, with the changes that
-came with this line: `retargetedAt` and `roost--newer-branch` for `B`, in
-`retarget` and `roost--cache-task`, and several tasks made at once.
-`git diff 4508d8f -- roost.el scripts/roost_remote.py` and look for these:
+Coverage, confirmed against the code at **047486f**.
+`git diff 047486f -- roost.el scripts/roost_remote.py` and look for these:
 
 | Code | Model step |
 | --- | --- |
-| `roost--refresh-host`: the flag, `finish`, the `unwind-protect`, `revision` read at the start, the quiet poll calling itself | `CachedTasks`: `AskRefresh`, `Finish`, `Succeed` (list) |
+| `roost--refresh-host`: the flag, `finish`, the `unwind-protect`, `revision` read at the start, the quiet poll calling itself; what asks it quietly: the watch timer, and `roost--read-live` once a page is whole | `CachedTasks`: `AskRefresh`, `Finish`, `Succeed` (list) |
 | `roost--apply-snapshot` | `ApplySnapshot` |
 | `roost--cache-task`'s merge, `roost--newer-events` | `CacheTask`, `NewerEvents` |
 | `roost--newer-offers` | `NewerOffers` |
 | `roost--newer-branch` | `NewerBranch` |
-| `roost--take-offer` (asked only of a task listed), the helper's `take_offer` | `AskAct` (take), `HostRun` (take), `Succeed` (take) |
-| `propose_task`, `make_task`'s take of the offer a task was made from, `taken_offers` in `list_tasks` | No step of their own: each moves `offersAt` with no reply about it, as a take that Emacs gave up on and `HostRun` ran all the same |
+| `roost--take-offer` (asked only of a task listed: Do it here, and Dismiss from its row or its draft), the helper's `take_offer` | `AskAct` (take), `HostRun` (take), `Succeed` (take) |
+| `make_task`'s take of the offer a task was made from, under the lock it saves the task with | `HostRun` (create, of a task in `FromOffer`); run in `CachedTasksOffer` |
+| `roost-compose-submit`'s callback for the draft of an offer: `roost--refresh-host`, not quiet, called by `roost--task-made` once you are out of the minibuffer | `Succeed` (create) owes it, `RefreshForOffer`; run in `CachedTasksOffer` |
+| `propose_task`, `taken_offers` in `list_tasks` | No step of their own: each moves `offersAt` with no reply about it, as a take that Emacs gave up on and `HostRun` ran all the same |
+| `keep_shown` (`show_image`, `show_widget`): `shown.at` moves, no `updatedAt`; `roost--cache-task` has no step that goes by it | `AgentShows`; the record's `shown` rides with `NewerEvents`; run in the finding's config |
+| `leave`, `tell` (`roost-leave-pull-request`, `roost--tell-agent` from within `roost--cache-task`), `roost--newer-left` | As a take here, by `roost--act`; their clock, `prLeftAt`, is in `pull_request_left` |
 | `roost-retarget` (asked of a task listed, its callback's refresh), the helper's `retarget` | `AskAct` (retarget), `HostRun` (retarget), `Succeed` (retarget), `OverAndRefresh`; run in `CachedTasksRetarget` |
 | `roost--cache-reply`, `roost--went-p`, `roost--went` | `CacheReply` |
-| `roost--act`: `listed`, the revision bump at the reply | `AskAct`, `Succeed` (stop, retire) |
+| `roost--act`: `listed`, the revision bump at the reply; `roost-retire`'s stop of an agent with work in the background, whose callback asks to retire | `AskAct`, `Succeed` (stop, retire) |
 | inspect in `roost--open` and `roost--notify-attention` | `AskAct` (inspect), `Succeed` |
 | `roost--create-task`'s bump, `roost--task-made` (`roost--cache-reply` with `roost--went`); what asks it: a draft, `roost-compose-submit` once for each attempt, and `roost-new-conversation` | `AskCreate`, `Succeed` (create); two at once in `CachedTasksTwoCreates` |
 | `make_task`, a conversation's and a fork's (`forkFrom`) too | `HostRun` (create) |
@@ -167,10 +184,32 @@ are known to bite:
 - `CreateNoWentCheck`: `roost--task-made` caches create's late reply with
   `roost--cache-task`, bringing back the task you finished meanwhile.
   NoRollback.
+- `QuietOfferRefresh`: the draft of an offer asks for its host to be listed
+  quietly once its task is made, which does nothing while a poll is in
+  flight; that poll, read before the task was made, comes to nothing, and
+  the offer waits on under its task. OfferRowGoes.
 
 ## Findings kept
 
-None. The three the model found are fixed: C-g during `g` leaving its list
+One, which fails until the code is fixed (`.claude/skills/fix-a-finding`):
+
+- `CachedTasks.finding-shown-rollback.cfg`, NoShownRollback, found
+  2026-11-17 and in the code since `show_image` (#263, e9beaa2). Emacs
+  lists the task and asks to open it (`inspect`); its host reads the record
+  for that; the agent shows an image, which moves `shown.at` and no
+  `updatedAt`; a poll reads the record, and its list lands first, so Emacs
+  holds what the task shows; then the inspect's reply lands, with the same
+  `updatedAt`, and `roost--cache-task` takes its `shown`, the older one or
+  none. Until the next list the panel has no line for the image, or names
+  the one before, and `roost-show-image` says the task has shown none. The
+  image on screen stays, and nothing older is fetched: `roost--shown-at`
+  only moves on. The fix is a step that goes by `shown.at`, as
+  `roost--newer-offers` goes by `offersAt`; then `MaxShown` goes into the
+  configs that pass, and the step gets a variant. The docs call the same
+  of `pr` after `P` "mentioned, not a finding", so this may be let be:
+  then say so there and drop the config.
+
+The three the model found before are fixed: C-g during `g` leaving its list
 running and create's late reply bringing back a task that went, which the
 main config allows (`Allow`) and `QuitLeavesProcess` and `CreateNoWentCheck`
 undo; and a reply read before `B` bringing back the branch a task merged
@@ -185,7 +224,12 @@ undoes.
   inspect or take, on the first task, one create, `updatedAt` moving twice.
   Agents' events on the first task only. Taking the first task's offer,
   which moves `offersAt` once (`MaxOver`), and no `B` (`MaxBase` 0): with
-  it the run takes twice as long.
+  it the run takes twice as long. The task you create is from no offer
+  (`FromOffer` empty), and nothing is shown (`MaxShown` 0).
+- `CachedTasksOffer.cfg`: one task there from the start, and one you create
+  from its offer, which its host takes as it makes the task. Two refresh
+  asks beside the one the draft asks for, and one of stop, retire,
+  inspect or take, on the task that offered it.
 - `CachedTasksRetarget.cfg`: the one task, and none made. `B` on it, which
   moves `retargetedAt`, twice, so that two `B`s' replies can cross, beside
   two refresh asks and those `B`'s replies ask for, and two of stop,
@@ -197,10 +241,16 @@ undoes.
   `B`.
 - What else moves `offersAt` and `retargetedAt` reaches Emacs through the
   same merge, and has no step of its own: the agent's own offers, the
-  offer a creation or a listing takes, and another Emacs's `B`. Each is as
+  offer a listing takes, and another Emacs's `B`. Each is as
   a take or a retarget of yours that Emacs gave up on and the host ran.
+- OfferRowGoes excuses a list that came to nothing (failed, timed out,
+  dropped for a mutation's reply, or unable to start): the next poll asks
+  again, and polls coming round are not in the model. So it says the draft
+  asks in a way a list in flight can't swallow, not that the row goes
+  whatever fails.
 - The variants run with `MaxOver` and `MaxBase` 0, as before each, but for
-  `NoNewerOffers` and `NoNewerBranch`. Three requests through the helper.
+  `NoNewerOffers`, `QuietOfferRefresh` and `NoNewerBranch`. Three requests
+  through the helper.
   The variants run smaller.
 - Left out: forgetting a host, what is owed to measure
   (`roost--measures-owed`, `roost--measures-due`), back-off and Offline,
@@ -211,7 +261,12 @@ undoes.
   asking again for a task with the creation ID it had, which `NewTaskDraft`
   in `what_you_do_in_emacs` has; and how many offers wait, three or a
   conversation's eight, and the project each names: only `offersAt` orders
-  replies.
+  replies. Also the fetch of what a task shows (`roost--note-shown`'s and
+  `roost-show-image`'s `shown` request, `roost--take-shown`), a request
+  that only looks and writes no task: its buffer goes by
+  `roost--shown-image-at`, read in the code and not modelled. And Do it
+  here on an offer while its draft's task is being made, which sends the
+  prompt and makes the task both: the offer waits until then by design.
 - A refusal of an action is modelled as a timeout with nothing run: Emacs
   does the same with both. So is a fork refused because the task it would
   go on from went.
