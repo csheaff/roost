@@ -102,8 +102,10 @@ Magit is optional (review falls back to Dired).
   merging, discarding or forgetting a task closes its workspace; files you
   opened in it stay open. Set `roost-workspace` to choose.
 - **Evil.** Roost's dashboard and panels start in Emacs state so their keys work
-  (`roost-evil-state`); `j`/`k` move between tasks. Drafts start in insert
-  state. In Magit, Roost's keys work in normal state, with the whole file's
+  (`roost-evil-state`); `j`/`k` move between tasks. So do several images
+  or a page an agent shows, and a terminal still connecting; over one
+  image, `q`, `z`, `n` and `p` are Roost's in normal state too. Drafts
+  start in insert state. In Magit, Roost's keys work in normal state, with the whole file's
   diff on `g=` (evil-collection uses `=`). A terminal is Ghostel's, with
   the Evil setup you give Ghostel;
   [`roost-task-opened-functions`](#configuration) can enter a state when a

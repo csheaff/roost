@@ -63,6 +63,9 @@
 
 (define-derived-mode roost-ghostel-tmux-connecting-mode special-mode "Connecting"
   "For the buffer a window shows until its tmux session's pane arrives."
+  ;; As a panel, or else where `q' is not Evil's: it goes back from one
+  ;; that could not attach.
+  (roost--evil-state 'roost-ghostel-tmux-connecting-mode (or roost-evil-state 'motion))
   (add-hook 'window-buffer-change-functions #'roost-ghostel-tmux--stand-in-shown nil t)
   ;; A tab not on screen can still show it, with tab-bar and perspective.el
   ;; both on: killing the perspective it was shown in leaves it to that tab.
