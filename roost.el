@@ -4311,6 +4311,8 @@ window is a tiled terminal's pane, which BUFFER would not keep."
                                 ;; a text terminal.
                                 (not (or (window-parameter window 'window-side)
                                          (window-dedicated-p window)
+                                         ;; Nor one of an image an agent showed.
+                                         (roost--shown-window-p window)
                                          (with-current-buffer (window-buffer window)
                                            (roost--tmux-buffer-p)))))
                               (window-list nil 'nomini))))
@@ -15079,7 +15081,8 @@ hosts it can't reach, stays as long as it can.  In the sidebar's buffer."
 As windows that were put away come back, as they were then: the
 sidebar's among them kept where it was in text a redraw has replaced
 since, and comes back at its top or elsewhere.  For
-`tab-bar-tab-post-select-functions' and `persp-switch-hook' too."
+`tab-bar-tab-post-select-functions', or after `tab-bar-select-tab'
+before Emacs 30, and `persp-switch-hook' too."
   (when-let* ((buffer (get-buffer roost--sidebar-buffer)))
     (with-current-buffer buffer
       (dolist (shown (get-buffer-window-list buffer nil (selected-frame)))
@@ -15303,7 +15306,10 @@ Called when Roost first shows a side window, rather than when it loads;
 `roost-unload-function' stops it."
   (add-hook 'window-configuration-change-hook #'roost--layout-changed)
   (add-hook 'after-delete-frame-functions #'roost--frame-deleted)
-  (add-hook 'tab-bar-tab-post-select-functions #'roost--sidebar-show-current)
+  ;; Emacs 30 has the hook; before it, after the command it runs.
+  (if (boundp 'tab-bar-tab-post-select-functions)
+      (add-hook 'tab-bar-tab-post-select-functions #'roost--sidebar-show-current)
+    (advice-add 'tab-bar-select-tab :after #'roost--sidebar-show-current))
   (add-hook 'persp-switch-hook #'roost--sidebar-show-current))
 
 (defun roost--frame-deleted (_frame)
@@ -15424,6 +15430,7 @@ Requests under way go too, as their replies would find no Roost to take them."
   (remove-hook 'window-configuration-change-hook #'roost--layout-changed)
   (remove-hook 'after-delete-frame-functions #'roost--frame-deleted)
   (remove-hook 'tab-bar-tab-post-select-functions #'roost--sidebar-show-current)
+  (advice-remove 'tab-bar-select-tab #'roost--sidebar-show-current)
   (remove-hook 'persp-switch-hook #'roost--sidebar-show-current)
   (when (timerp roost--layout-timer) (cancel-timer roost--layout-timer))
   (when (timerp roost--opening-timer) (cancel-timer roost--opening-timer))

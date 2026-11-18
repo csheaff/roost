@@ -3841,6 +3841,7 @@ BODY gets the window and the last task's key."
        (remove-hook 'window-configuration-change-hook #'roost--layout-changed)
        (remove-hook 'after-delete-frame-functions #'roost--frame-deleted)
        (remove-hook 'tab-bar-tab-post-select-functions #'roost--sidebar-show-current)
+       (advice-remove 'tab-bar-select-tab #'roost--sidebar-show-current)
        (remove-hook 'persp-switch-hook #'roost--sidebar-show-current)
        (unless tab-bar-mode-was (tab-bar-mode -1))))))
 
@@ -18022,20 +18023,25 @@ report.py, and the third alone changes src/totals.py."
       (evil-initialize-state)
       (should (eq (key-binding "q") #'quit-window))))))
 
-(ert-deftest roost-magit-opened-beside-the-image-its-task-shows ()
-  ;; A task's agent shows an image beside its terminal; you review the
-  ;; task in Magit from the terminal.  Magit, by default, shows its status
-  ;; in another window: in a frame too narrow to split, the image's, sized
-  ;; for the image, and the image is gone from view.
-  (roost-test--with-magit-task
+(defmacro roost-test--magit-beside-image (tiled)
+  "Open Magit from a task's terminal with an image beside it; check both show.
+With TILED, the terminal is a pane of a tiled tmux window."
+  `(roost-test--with-magit-task
     (let* ((key (roost--key task))
            (buffer (generate-new-buffer "*roost image: budget*"))
+           (roost-terminal-backend (if ,tiled 'ghostel-tmux roost-terminal-backend))
            terminal)
       (unwind-protect
           (cl-letf (((symbol-function 'roost--shown-size) (lambda (_buffer) '(30 . 4)))
                     ((symbol-function 'roost--draw-shown) #'ignore)
                     ((symbol-function 'roost--task-terminal-window)
                      (lambda (shown) (and (equal (roost--key shown) key) (window-live-p terminal) terminal)))
+                    ((symbol-function 'roost--tiled-pane-window-p)
+                     (lambda (window) (and ,tiled (eq window terminal))))
+                    ((symbol-function 'roost--tmux-buffer-p)
+                     (lambda () (and ,tiled (window-live-p terminal) (eq (current-buffer) (window-buffer terminal)))))
+                    ;; The pane is of no task's session.
+                    ((symbol-function 'roost--tmux-buffer-session) #'ignore)
                     ((symbol-function 'message) #'ignore))
             (with-current-buffer buffer (setq roost--shown-task key))
             (delete-other-windows)
@@ -18043,8 +18049,24 @@ report.py, and the third alone changes src/totals.py."
             (let ((window (roost--display-shown buffer terminal)))
               (roost--in-task-frame task (lambda () (roost--magit-status-here task)))
               (should (get-buffer-window (magit-get-mode-buffer 'magit-status-mode)))
-              (should (eq (window-buffer window) buffer))))
+              (should (eq (window-buffer window) buffer))
+              (when ,tiled
+                ;; Nor in the pane's place.
+                (should (window-live-p terminal))
+                (should-not (eq (window-buffer terminal) (magit-get-mode-buffer 'magit-status-mode))))))
         (kill-buffer buffer)))))
+
+(ert-deftest roost-magit-opened-beside-the-image-its-task-shows ()
+  ;; A task's agent shows an image beside its terminal; you review the
+  ;; task in Magit from the terminal.  Magit, by default, shows its status
+  ;; in another window: in a frame too narrow to split, the image's, sized
+  ;; for the image, and the image is gone from view.
+  (roost-test--magit-beside-image nil))
+
+(ert-deftest roost-magit-opened-from-a-tiled-pane-beside-the-image ()
+  ;; From a pane of a tiled tmux window, Magit goes to a window no
+  ;; terminal is in: the image's was one.
+  (roost-test--magit-beside-image t))
 
 (ert-deftest roost-perspective-a-pane-that-came-while-you-were-away-shows-in-its-perspective ()
   ;; As `roost-ghostel-tmux-a-pane-that-came-while-you-were-away-shows-in-its-workspace',
