@@ -212,18 +212,17 @@ tmux, and ghostel-tmux has no command to run first."
     (or (gethash (cons host socket) roost-ghostel-tmux--socket-paths)
         (let ((default-directory (format "/ssh:%s:" host)))
           (with-temp-buffer
-            ;; stdout alone, the line it marks: what a login script or
-            ;; the host writes besides is no part of the path, which is
-            ;; kept for as long as Emacs runs.
+            ;; stdout alone, the record it marks and ends with a NUL: what
+            ;; a login script or the host writes besides is no part of the
+            ;; path, which is kept for as long as Emacs runs.
             (and (eql 0 (process-file
                          "sh" nil '(t nil) nil "-c"
                          (concat roost--remote-tmux-socket-setup
-                                 " && printf 'roost-socket %s\\n' \"$TMUX_TMPDIR/tmux-$(id -u)/$1\"")
+                                 " && printf 'roost-socket %s\\0' \"$TMUX_TMPDIR/tmux-$(id -u)/$1\"")
                          "sh" socket))
-                 (when-let* ((line (seq-find (lambda (line) (string-prefix-p "roost-socket /" line))
-                                             (reverse (split-string (buffer-string) "\n" t "\r"))))
-                             (path (substring line (length "roost-socket "))))
-                   (puthash (cons host socket) path roost-ghostel-tmux--socket-paths)))))
+                 (progn (goto-char (point-max))
+                        (re-search-backward "roost-socket \\(/[^\0]*\\)\0" nil t))
+                 (puthash (cons host socket) (match-string 1) roost-ghostel-tmux--socket-paths))))
         socket)))
 
 (defun roost-ghostel-tmux--find-controller (place)

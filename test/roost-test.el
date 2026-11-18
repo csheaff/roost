@@ -12425,13 +12425,16 @@ nil), it is discarded."
                  ((symbol-function 'process-file)
                   (lambda (_program _in out _display &rest _)
                     (roost-test--stderr-too out answer) 0)))
-         (setq answer "roost-socket /home/me/.tmux/tmux-1000/roost\n")
+         (setq answer "roost-socket /home/me/.tmux/tmux-1000/roost\0")
          (should (equal (roost-ghostel-tmux--socket "away" "roost") "/home/me/.tmux/tmux-1000/roost"))
          (should (equal (roost-test--host-setting "away" 'ghostel-tmux-program) "/usr/bin/tmux"))
          ;; A login script that prints on stdout, before the answer or after,
          ;; a path too.
-         (setq answer "Welcome to the host\nroost-socket /home/me/.tmux/tmux-1000/roost\n/etc/motd: read\n")
+         (setq answer "Welcome to the host\nroost-socket /home/me/.tmux/tmux-1000/roost\0/etc/motd: read\n")
          (should (equal (roost-ghostel-tmux--socket "chatty" "roost") "/home/me/.tmux/tmux-1000/roost"))
+         ;; A socket's name, yours, is all of the path, a newline too.
+         (setq answer "roost-socket /home/me/.tmux/tmux-1000/two\nlines\0")
+         (should (equal (roost-ghostel-tmux--socket "away" "two\nlines") "/home/me/.tmux/tmux-1000/two\nlines"))
          ;; A host that answers with something else than a path is asked again.
          (setq answer "sh: printf: not found\n")
          (should (equal (roost-ghostel-tmux--socket "other" "roost") "roost"))
@@ -12786,6 +12789,20 @@ nil), it is discarded."
                (perspective "current" (list stand-in))
                (perspective "other" nil)
                (should-not (roost-ghostel-tmux--kept-p stand-in))
+               ;; A tab not on screen in the perspective you are in, with
+               ;; tab-bar on too, which `auto' does not pick.
+               (let ((tabs (frame-parameter nil 'tabs)))
+                 (unwind-protect
+                     (progn
+                       (set-frame-parameter
+                        nil 'tabs (list '(current-tab (name . "here"))
+                                        `(tab (name . "away")
+                                              (ws . ,(save-window-excursion
+                                                       (delete-other-windows)
+                                                       (switch-to-buffer stand-in)
+                                                       (window-state-get nil t))))))
+                       (should (roost-ghostel-tmux--kept-p stand-in)))
+                   (set-frame-parameter nil 'tabs tabs)))
                (perspective "other" (list stand-in))
                (should (roost-ghostel-tmux--kept-p stand-in))))
          (unless real (fmakunbound 'persp-buffers))
