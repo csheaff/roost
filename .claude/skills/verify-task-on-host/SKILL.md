@@ -210,7 +210,12 @@ task's worktree: it closes the agent's and shell's panes, then ends what
 they left running (`end_left_running`), by the one ownership rule that
 "Finishing a task" in docs/state-machines.md and `left_running` state.
 Only a process that rule doesn't reach, or yours outside the task, writes
-into those milliseconds. And what you delete by hand is yours:
+into those milliseconds. When such a write stops Git partway, Git forgets the
+worktree all the same: `remove_worktrees` makes it one again, on its
+branch, with the files Git deleted put back (`relink_removed`), and keeps
+its `removing` mark until it has, so that the next request's
+`put_back_removed` does it: the model's `PutBack` of a removal cut short,
+with what was written there kept, as changes. And what you delete by hand is yours:
 a branch you delete with Git while a request counts on it for the task's
 commits, as the agent's worktree's once its agent switched it to another.
 

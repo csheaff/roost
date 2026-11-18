@@ -966,7 +966,10 @@ header line. A failed creation keeps the draft.
   is stopped after two minutes; to take longer, it can leave work outside the
   worktree running in the background (`rm -rf "$ob" &`). If it fails, Roost
   warns, with what it printed, and removes the worktree anyway. A file it
-  leaves in the worktree keeps the task from retiring, as yours would.
+  leaves in the worktree keeps the task from retiring, as yours would, and
+  Roost names it: have the command clean up after itself, or ignore what it
+  leaves (in `.gitignore`, or the primary checkout's `.git/info/exclude`), as it runs again each time
+  you retire.
   Emacs counts a command from `.dir-locals.el` as risky, so it asks each time
   Roost reads that file, as you create or finish a task. To trust one, add it to `safe-local-variable-values`, such as
   `(add-to-list 'safe-local-variable-values '(roost-teardown-command . "make clean"))`,

@@ -454,6 +454,47 @@ class Crashes(unittest.TestCase):
         self.assertTrue(reply["ok"], reply)
         self.assertTrue((worktree / "hello").exists())
         self.assertFalse(ran.exists())
+        box.git("config", "--unset", "core.fsmonitor")
+        # Nor when Git forgot the worktree, stopped partway by a folder it
+        # can't delete, and Roost makes it one again: killed as Git stopped,
+        # or once the relink's spare has an index, which is read then.
+        box.disarm()
+        box.git("config", "--unset", "core.fsmonitor", check=False)
+        (box.repo / "stuck").mkdir()
+        (box.repo / "stuck" / "kept").write_text("x\n")
+        box.git("add", "stuck")
+        box.git("commit", "-qm", "Stuck")
+        for at in ("worktree remove", "reset -q"):
+            with self.subTest(at=at):
+                box.git("config", "--unset", "core.fsmonitor", check=False)
+                other = box.create("other " + at.split()[0])
+                folder = Path(other["worktree"])
+                box.helper("stop", id=other["id"])
+                (folder / "stuck").chmod(0o555)
+                self.addCleanup(lambda folder=folder: (folder / "stuck").exists() and (folder / "stuck").chmod(0o755))
+                box.arm("after", match=at)
+                self.assertIsNone(box.helper("retire", id=other["id"]))
+                box.disarm()
+                (folder / "stuck").chmod(0o755)
+                self.assertTrue(folder.is_dir())
+                if at == "reset -q":
+                    self.assertTrue(list(folder.parent.glob(".relink-*/*/.git")), "no spare with its link")
+                # Written meanwhile, which keeps it from going once it is back.
+                (folder / "written").write_text("x\n")
+                box.git("config", "core.fsmonitor", str(program))
+                # Nor a hook, which Git runs on writing an index.
+                hooks = away / "hooks"
+                hooks.mkdir(exist_ok=True)
+                (hooks / "post-index-change").write_text("#!/bin/sh\ntouch '%s'\n" % (away / "hooked"))
+                (hooks / "post-index-change").chmod(0o755)
+                box.git("config", "core.hooksPath", str(hooks))
+                reply = box.helper("retire", id=other["id"])
+                box.git("config", "--unset", "core.hooksPath")
+                self.assertFalse(reply["ok"], reply)
+                self.assertIn("Uncommitted or untracked", reply["error"])
+                self.assertTrue((folder / "hello").exists())
+                self.assertFalse(ran.exists())
+                self.assertFalse((away / "hooked").exists())
 
     def test_a_window_nothing_knows_of_closes(self):
         box = self.box()
