@@ -57,8 +57,10 @@ CONSTANTS
   SubmitQuitsQuestion, \* C-c C-c with a question left open (`roost--quit-questions-here`)
   EditBack,            \* an edit or move brings back what the draft said before
   CutShort,            \* a quit or an error between the requests of one C-c C-c
-  MixedAttempts        \* a draft that makes several attempts asks again with its ID for
+  MixedAttempts,       \* a draft that makes several attempts asks again with its ID for
                        \* something else, as after you changed it
+  QuitBeforeAsking     \* a quit or an error in C-c C-c before any request goes, as at
+                       \* the question about the project's setup command
 
 None == 0
 What == (1..NDirs) \X (1..NTexts)
@@ -136,8 +138,9 @@ DoSubmit ==
 
 \* A quit or an error once M of the other attempts went, as C-g while the
 \* next request starts: the flag and the note are cleared, and the ID stays
-\* as it asked, for asking again to name the attempts that went as they were.  (Before
-\* any went, the ID is put back as it was, and nothing has changed.)
+\* as it asked, for asking again to name the attempts that went as they
+\* were.  Before any went, the ID is put back as it was, one it asked with
+\* before too, and the note is cleared all the same: SubmitQuit.
 DoSubmitCutShort(m) ==
   /\ asked' = IF KeepAskedOnceSent THEN AskNow ELSE asked
   /\ nextId' = IF Fresh THEN nextId + 1 ELSE nextId
@@ -230,6 +233,17 @@ SubmitCutShort ==
   /\ MayAsk
   /\ \E m \in 1..(Attempts - 1) : DoSubmitCutShort(m)
   /\ UNCHANGED <<draft, dir, text, offered, mini, held, timers, tasks, told, closedWhat>>
+
+\* C-c C-c, quit before any request goes: `roost-compose-submit`'s handler
+\* clears the flag and the note, and puts the ID back as it was.  The
+\* header then says nothing of a request the ID asked with before.
+SubmitQuit ==
+  /\ QuitBeforeAsking
+  /\ UserCan /\ ~mini
+  /\ ~submitting
+  /\ note' = FALSE
+  /\ UNCHANGED <<draft, dir, text, submitting, offered, asked, nextId, mini, held, timers,
+                 waits, reqs, tasks, told, closedWhat, asks>>
 
 \* Any command that asks in the minibuffer, answered later or left open.
 OpenQuestion ==
@@ -465,7 +479,7 @@ NoReplyComes == \E r \in Reqs : NoReply(r)
 HostTakesARequest == \E r \in Reqs : Host(r)
 
 Next ==
-  \/ Edit \/ Move \/ Submit \/ SubmitCutShort \/ OpenQuestion \/ EndQuestion
+  \/ Edit \/ Move \/ Submit \/ SubmitCutShort \/ SubmitQuit \/ OpenQuestion \/ EndQuestion
   \/ OpenOffer \/ Cancel
   \/ Timer \/ Poll \/ AReplyComes \/ NoReplyComes \/ HostTakesARequest
   \/ Settled

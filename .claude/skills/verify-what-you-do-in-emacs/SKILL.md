@@ -176,7 +176,9 @@ requests) and `MixedAttempts` (a draft that makes several attempts asks
 again with its ID for something else), on in `NewTaskAttempts.cfg`, the
 second since finding 3 was fixed; `Drops` (a dropped connection, after
 which the helper goes on) and `KillAfterPaste` (a helper killed between
-paste and record), off in `PromptDraft.cfg`.
+paste and record), off in `PromptDraft.cfg`; `QuitBeforeAsking` (C-c C-c
+quit before any request goes, as at the question about the setup command:
+`SubmitQuit`), off in the base configs until finding 6 is fixed.
 
 What the draft says is one value, a version of its prompt and fields. So
 `C-c C-x`, `C-c C-f` and the task an offer's draft shows under are edits
@@ -250,6 +252,21 @@ Each is a config here that fails as named.
    3. You add a line and C-c C-c: another text, ID2. The agent gets P, then
       P and the line. Rests on sshd leaving the helper running, which
       Checked and found sound lists as not proved.
+
+6. **An offer's draft that asked, then quit asking again, starts anew and
+   makes a second task** (`NewTaskDraft.finding-quit-then-offer.cfg`,
+   `AtMostOnce`). Turn on `QuitBeforeAsking` in the base configs once fixed.
+   1. You open an agent's offer and C-c C-c: `roost-compose-submit`, ID1.
+      No reply comes; the draft keeps ID1 and says "No reply…". Its host
+      makes the task later, or has.
+   2. C-c C-c again, and you quit the question about the project's setup
+      command: the handler in `roost-compose-submit` clears the flag and
+      the note, and puts `roost--compose-asked` back, with ID1.
+   3. The draft says what the offer did, the offer waits, and nothing says
+      a request went: `roost--compose-looked-p` holds. RET on the offer
+      (`roost--compose-offer`) kills the draft and opens a new one, with
+      no ID. C-c C-k and Dismiss offer close it unasked, too.
+   4. C-c C-c: ID2, and a second task from the same words.
 
 Not a finding, a check added at 047486f: `NewTaskDraft.looked-with-a-note.cfg`
 breaks `roost--compose-looked-p` to take a draft that got no reply for one
