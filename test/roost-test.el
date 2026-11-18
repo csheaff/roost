@@ -12619,7 +12619,10 @@ A test stubs the functions of ghostel-tmux it reaches."
                (puthash place 8 roost-ghostel-tmux--lost)
                (roost-ghostel-tmux--attach-again place)
                (should (string-match-p "\\`Connecting to one" (shown)))
-               (should-not (gethash place roost-ghostel-tmux--lost))
+               ;; And is tried again should its connection drop.
+               (should (gethash place roost-ghostel-tmux--lost))
+               (roost-ghostel-tmux--try-again place)
+               (should (gethash place roost-ghostel-tmux--lost))
                ;; ghostel-tmux's own command switches the controller to
                ;; another session: the pane that comes is not this one's.
                (let ((stand-in (window-buffer)))

@@ -510,9 +510,9 @@ attaches it."
   (let ((tries (gethash place roost-ghostel-tmux--lost 0)))
     (cond
      ;; Attaching already, as when you opened its task while the host was
-     ;; asked: that try says how it went.
-     ((roost-ghostel-tmux--find-controller place)
-      (remhash place roost-ghostel-tmux--lost))
+     ;; asked: that try says how it went.  The count stays until it has
+     ;; attached, so that its connection dropping is tried again.
+     ((roost-ghostel-tmux--find-controller place))
      ((>= tries 8)
       (remhash place roost-ghostel-tmux--lost)
       (roost-ghostel-tmux--not-attached place))
@@ -529,8 +529,8 @@ when you opened its task, or once none of its panes is left to bring
 back, as when Roost has put them away."
   (cond
    ((not (gethash place roost-ghostel-tmux--lost)))
-   ((roost-ghostel-tmux--find-controller place)
-    (remhash place roost-ghostel-tmux--lost))
+   ;; Attaching already: `roost-ghostel-tmux--attached' forgets the count.
+   ((roost-ghostel-tmux--find-controller place))
    ((not (roost-ghostel-tmux--snapshots place))
     (remhash place roost-ghostel-tmux--lost)
     (roost-ghostel-tmux--not-attached place))
