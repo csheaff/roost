@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -327,6 +328,23 @@ class Kept(unittest.TestCase):
         result = self.retire(task)
         self.assertEqual((Path(result["kept"]["folder"]) / "worktree" / "library" / ".env.local").read_text(),
                          "module's\n")
+
+    def test_pruning_reads_a_records_age_under_the_lock(self):
+        box = self.box
+        store = roost.Store(box.state)
+        record = store.kept("0123456789abcdef").with_suffix(".json")
+        record.parent.mkdir(parents=True)
+        record.write_text(json.dumps(dict(repo=str(box.repo), refs={}, files=[])))
+        past = time.time() - (roost.KEPT_DAYS + 1) * 86400
+        os.utime(record, (past, past))
+        # A retry renews it while pruning waits for the lock.
+        with roost.kept_locked(store):
+            pruning = threading.Thread(target=roost.prune_kept, args=(store,))
+            pruning.start()
+            time.sleep(0.2)
+            os.utime(record)
+        pruning.join(10)
+        self.assertTrue(record.exists(), "pruning dropped a copy renewed meanwhile")
 
 
 if __name__ == "__main__":

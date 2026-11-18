@@ -7146,9 +7146,22 @@ def kept_target(folder, path):
     return target
 
 
+@contextlib.contextmanager
+def kept_locked(store):
+    """Hold the lock on what retiring keeps, which keeping, pruning and a
+    discard's drop share: a retry renewing a task's copy and another
+    task's pruning of it as it was, expired, are never at once."""
+    folder = store.root / "kept"
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with (folder / ".lock").open("a") as lock:
+        os.chmod(lock.name, 0o600)
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
 def drop_kept(store, task_id):
     """Forget what retiring TASK_ID kept: its refs, only where they still
-    point where they did, and its files."""
+    point where they did, and its files. Under `kept_locked`."""
     folder = store.kept(task_id)
     record = folder.with_suffix(".json")
     try:
@@ -7165,15 +7178,19 @@ def drop_kept(store, task_id):
 
 
 def prune_kept(store):
-    """Forget what retiring kept more than KEPT_DAYS ago."""
+    """Forget what retiring kept more than KEPT_DAYS ago, as each record's
+    age reads under the lock."""
     folder = store.root / "kept"
-    for record in sorted(folder.glob("*.json")) if folder.is_dir() else ():
-        try:
-            if time.time() - record.stat().st_mtime < KEPT_DAYS * 86400:
-                continue
-            drop_kept(store, record.stem)
-        except (OSError, RoostError):
-            continue  # A name of no task's.
+    if not folder.is_dir():
+        return
+    with kept_locked(store):
+        for record in sorted(folder.glob("*.json")):
+            try:
+                if time.time() - record.stat().st_mtime < KEPT_DAYS * 86400:
+                    continue
+                drop_kept(store, record.stem)
+            except (OSError, RoostError):
+                continue  # A name of no task's, or gone since.
 
 
 # Paths of what was too large to keep that a reply names.
@@ -7211,6 +7228,17 @@ def keep_before_removing(store, task, worktree, commit=None, going=(), prune=Tru
             keep, too_large, total = ignored_to_keep(primary, where, total)
             files += [(where, under, path) for path in keep]
             large += [under + "/" + path for path in too_large]
+    if not (commits or files or large or store.kept(task["id"]).with_suffix(".json").exists()):
+        return None
+    with kept_locked(store):
+        return keep_found(store, task, commits, files, large)
+
+
+def keep_found(store, task, commits, files, large):
+    """Keep COMMITS and FILES, (FOLDER, UNDER, PATH), for TASK, beside what
+    was kept for it before, and say what is kept in all, as
+    `keep_before_removing`. Under `kept_locked`."""
+    repo, branch = task["repo"], task["branch"]
     folder = store.kept(task["id"])
     record = folder.with_suffix(".json")
     try:
@@ -7772,7 +7800,8 @@ def discard(store, task, expect=None, dry_run=False, teardown=None, told=None, o
         delete_branch(repo, branch, commit)
     left = agent_left(task)
     # What a retire refused after it kept them had kept: you chose to lose it.
-    drop_kept(store, task["id"])
+    with kept_locked(store):
+        drop_kept(store, task["id"])
     store.remove(task["id"])
     task.update(status="discarded", updatedAt=now(), live=False, leftBehind=left)
     return task
