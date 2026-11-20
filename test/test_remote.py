@@ -141,6 +141,41 @@ class Lifecycle(unittest.TestCase):
         self.assertFalse(Path(task["worktree"]).exists())
         self.assertEqual(self.request("list")["result"], [])
 
+    def timed_steps(self, task):
+        return [entry["step"] for entry in roost.History(self.state / "timings").read(0) if entry["id"] == task["id"]]
+
+    def test_each_step_of_starting_and_finishing_a_task_is_timed(self):
+        task = self.create(setup="true")
+        # Once its agent is up, its launch is no longer recorded.
+        self.assertNotIn("launched", self.wait(task, "ready"))
+        self.assertTrue(self.request("retire", id=task["id"])["ok"])
+        steps = self.timed_steps(task)
+        for step in ("create.prepare", "create.worktree", "create.spawn", "create.reply", "create.setup",
+                     "create.agent", "create.total", "retire.forge", "retire.checks", "retire.stop",
+                     "retire.remove", "retire.branch", "retire.reply"):
+            self.assertEqual(steps.count(step), 1, (step, steps))
+        # No step that didn't run: it has no teardown command, nor submodules.
+        self.assertFalse({"create.submodules", "create.copy", "retire.teardown", "retire.merge"} & set(steps))
+        report = roost.timings_report(str(self.state))
+        self.assertIn("for the last 1 task timed", report)
+        self.assertLess(report.index("create.reply"), report.index("retire.reply"))
+
+    def test_a_resumed_or_discarded_task_is_timed_as_that(self):
+        task = self.create()
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        self.assertTrue(self.request("resume", id=task["id"])["ok"])
+        self.wait(task, "ready")
+        losses = self.request("discard", id=task["id"], dryRun=True)
+        self.assertTrue(losses["ok"], losses)
+        self.assertTrue(self.request("discard", id=task["id"], expect=losses["result"]["discard"]["commit"],
+                                     told=losses["result"]["discard"])["ok"])
+        steps = self.timed_steps(task)
+        for step in ("resume.agent", "resume.reply", "discard.checks", "discard.remove", "discard.reply"):
+            self.assertIn(step, steps)
+        # Started anew is no new task.
+        self.assertEqual(steps.count("create.total"), 1)
+        self.assertNotIn("resume.total", steps)
+
     def test_a_conversation_needs_no_project_and_retires_as_a_task(self):
         # Wherever Emacs says it is, it goes in the helper's own repository.
         first = self.create(name="Conversation 09:15", directory="/nowhere", conversation=True)
@@ -12189,6 +12224,48 @@ class History(unittest.TestCase):
         (self.folder / "2026-10-01.jsonl").write_text('{"at": 1\n' + json.dumps(dict(at=5.0, id="t0")) + "\n")
         (self.folder / "2026-10-02.jsonl").write_text(json.dumps(dict(at=9.0, id="t0")) + "\n")
         self.assertEqual(self.history.begun(), 5.0)
+
+
+class Timings(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.store = roost.Store(self.temp.name)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def test_the_report_keeps_to_the_last_tasks_slowest_first(self):
+        self.store.phase = "create"
+        for n, seconds in enumerate((9.0, 1.0, 2.0, 3.0)):
+            task = dict(id="%016x" % n, repo="/r")
+            self.store.note_time(task, "worktree", seconds)
+            self.store.note_time(task, "spawn", 0.5)
+            self.store.note_time(task, "reply", seconds + 1, "retire")
+        report = roost.timings_report(self.temp.name, 3).splitlines()
+        self.assertIn("last 3 tasks", report[0])
+        # The first task's nine seconds are older than the last three.
+        self.assertEqual(report[2].split(), ["create.worktree", "3", "2.00", "3.00"])
+        self.assertEqual(report[3].split()[0], "create.spawn")
+        self.assertEqual(report[4].split(), ["retire.reply", "3", "3.00", "4.00"])
+
+    def test_nothing_is_timed_outside_a_phase_and_damage_is_skipped(self):
+        self.store.note_time(dict(id="a" * 16), "remove", 1.0)
+        self.assertIn("No task has been timed", roost.timings_report(self.temp.name))
+        (Path(self.temp.name) / "timings").mkdir()
+        (Path(self.temp.name) / "timings" / "2026-11-20.jsonl").write_text(
+            json.dumps(dict(at=time.time(), id="a" * 16, step="create.worktree", seconds="slow")) + "\n")
+        self.assertIn("No task has been timed", roost.timings_report(self.temp.name))
+
+    def test_an_agent_that_ends_before_it_is_up_is_not_timed(self):
+        task = dict(id="b" * 16, status="failed", launched=dict(at=time.time() - 5, phase="create"))
+        self.store.save(task)
+        self.assertNotIn("launched", self.store.read(task["id"]))
+        self.assertIn("No task has been timed", roost.timings_report(self.temp.name))
+        up = dict(id="c" * 16, status="ready", startedAt=roost.now(), launched=dict(at=time.time() - 2, phase="create"))
+        self.store.save(up)
+        steps = {entry["step"]: entry["seconds"] for entry in self.store.timings.read(0)}
+        self.assertGreaterEqual(steps["create.agent"], 2)
+        self.assertIn("create.total", steps)
 
 
 class RemoteGit(unittest.TestCase):

@@ -44,6 +44,15 @@ CRASH_SWEEP ?= commands
 crash:
 	ROOST_CRASH_SWEEP=$(CRASH_SWEEP) python3 -m unittest discover -s test -p 'test_crash.py' -v
 
+# How long each step of starting and finishing the last TASKS tasks took,
+# slowest first, from the timings the helper keeps in a state directory.
+ROOST_STATE ?= ~/.local/share/roost
+TASKS ?= 20
+
+.PHONY: timings
+timings:
+	python3 scripts/roost_remote.py timings $(ROOST_STATE) $(TASKS)
+
 # Roost used as you would, in a GUI Emacs of its own with a fake agent,
 # each step checked and captured: see test/qa/qa.py.  Emacs needs Ghostel
 # and ghostel-tmux, and Magit for review, as in

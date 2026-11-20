@@ -4,6 +4,13 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- The helper times each step of starting and finishing a task, from
+  `git worktree add` and the setup command to the agent coming up, and
+  from the checks before deleting to removing the worktree, in the state
+  directory's `timings/`. `make timings` shows the slowest steps over the
+  last 20 tasks; the manual's Development section says how on an SSH host.
+  Nothing to do when upgrading: tasks started by an older helper are
+  timed from their next request.
 - The sidebar and the task panel keep one width across tasks. Dragged in one
   task, either is that wide in every task, rather than each workspace putting
   back the width it saved. `roost-sidebar-width` and `roost-task-panel-width`
