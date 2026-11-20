@@ -127,6 +127,7 @@ ghostel-tmux, the default, choose it themselves."
          (roost--requests nil) (roost-notify nil) (roost--current-task nil) (roost--next-unblocked nil)
          (roost--next-run nil)
          (roost--held-notices nil) (roost--notice-timer nil) (roost--resuming nil)
+         (roost--side-widths nil)
          (roost--perspectives (make-hash-table :test 'equal)))
      (set-frame-parameter nil 'roost-task nil)
      ;; Seeing an agent is recorded on its host too, and so is what of its
@@ -4222,6 +4223,42 @@ BODY gets the window and the last task's key."
        (cl-letf (((symbol-function 'frame-parameter)
                   (lambda (_frame parameter) (eq parameter 'unsplittable))))
          (should-not (roost--side-frame-p)))))))
+
+;; Each task's workspace saves its layout, sidebar and all, but the
+;; sidebar is every task's: dragged in one, it is that wide in each.
+(ert-deftest roost-sidebar-keeps-one-width-across-workspaces ()
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (set-frame-parameter nil 'roost-side-widths nil)
+     (let ((roost-sidebar-mode t) (roost-task-panel-mode nil) (roost-sidebar-width 30)
+           (current "one") (columns 200))
+       (cl-letf (((symbol-function 'frame-width) (lambda (&rest _) columns))
+                 ((symbol-function 'roost--sidebar-wanted-p) (lambda () t))
+                 ((symbol-function 'roost--current-workspace) (lambda () current)))
+         (roost--sync-side-windows)
+         (let ((sidebar (get-buffer-window roost--sidebar-buffer))
+               (resize (lambda (window width)
+                         (window-resize window (- width (window-total-width window))
+                                        t 'preserved))))
+           (should (= (window-total-width sidebar) 30))
+           ;; You drag its edge: every task shares the new width.
+           (funcall resize sidebar 36)
+           (roost--sync-side-windows)
+           (should (= (window-total-width sidebar) 36))
+           (should (= (roost--side-width 'left) 36))
+           ;; Another workspace brings back the width it saved: undone.
+           (setq current "two")
+           (funcall resize sidebar 30)
+           (roost--sync-side-windows)
+           (should (= (window-total-width sidebar) 36))
+           (should (= (roost--side-width 'left) 36))
+           ;; A frame resized squeezes it: not yours, so not shared.
+           (setq columns 150)
+           (funcall resize sidebar 33)
+           (roost--sync-side-windows)
+           (should (= (roost--side-width 'left) 36))
+           (should (= (window-total-width sidebar) 36))))))))
 
 (ert-deftest roost-task-panel-docks-beside-the-terminal-when-there-is-room ()
   (roost-test--isolated

@@ -4,6 +4,10 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- The sidebar and the task panel keep one width across tasks. Dragged in one
+  task, either is that wide in every task, rather than each workspace putting
+  back the width it saved. `roost-sidebar-width` and `roost-task-panel-width`
+  are where they start. Nothing to do when upgrading.
 - Retiring a task keeps, for 30 days, what removing its worktree and branch
   would delete without counting: a commit only a reflog held, as after the
   agent reset back past it, by a ref under `refs/roost/kept/`, and ignored

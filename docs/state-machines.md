@@ -3559,12 +3559,18 @@ Invariants:
   `roost--layout-changed`.)
 - I2. One timer at a time: it clears itself first, so an error can't stop the next.
 - I3. A panel names keys for where the terminal is. (`roost--redraw-moved-panels`.)
+- I4. Every task shows the sidebar, and the panel, at one width: the last you
+  dragged it to, else its option. A workspace's saved layout doesn't change it.
+  (`roost--keep-side-width`, which tells a drag by the window, workspace and
+  frame width it last saw, in the frame parameter `roost-side-widths`.)
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
 | Idle | layout changes | no timer | Pending | timer | `roost--layout-changed` |
 | Pending | layout changes | | Pending | | same |
 | Pending | fires | | Idle | sync, redraw moved panels | timer |
+| (in sync) | side window wider or narrower | same window, workspace, frame width | | width shared from now on | `roost--keep-side-width` |
+| (in sync) | side window wider or narrower | otherwise | | resized to the shared width | same |
 | any | mode off | | Idle | windows close | modes |
 | any | panel `q` | docked | mode off | | `roost-task-info-quit` |
 
