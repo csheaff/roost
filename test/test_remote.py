@@ -158,7 +158,22 @@ class Lifecycle(unittest.TestCase):
         self.assertFalse({"create.submodules", "create.copy", "retire.teardown", "retire.merge"} & set(steps))
         report = roost.timings_report(str(self.state))
         self.assertIn("for the last 1 task timed", report)
+        # A creation refused before its worktree is made has no steps.
+        refused = self.request("create", directory=str(self.repo), name="task", socket=self.socket,
+                               command=[sys.executable, str(FAKE)], base="no-such-branch")
+        self.assertFalse(refused["ok"])
+        self.assertIn("for the last 1 task timed", roost.timings_report(str(self.state)))
         self.assertLess(report.index("create.reply"), report.index("retire.reply"))
+
+    def test_a_merge_and_its_teardown_are_timed(self):
+        task = self.create()
+        (Path(task["worktree"]) / "new").write_text("x\n")
+        self.git("add", "new", cwd=task["worktree"])
+        self.git("commit", "-m", "new", cwd=task["worktree"])
+        self.assertTrue(self.request("merge", id=task["id"], teardown="true")["ok"])
+        steps = self.timed_steps(task)
+        for step in ("merge.merge", "merge.teardown", "merge.remove", "merge.reply"):
+            self.assertIn(step, steps)
 
     def test_a_resumed_or_discarded_task_is_timed_as_that(self):
         task = self.create()

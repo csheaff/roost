@@ -452,12 +452,11 @@ class Store:
             self.timings.append(dict(id=task["id"], repo=task.get("repo"), step=phase + "." + step,
                                      seconds=round(seconds, 3)))
 
-    def note_agent_up(self, record):
-        """Once RECORD's agent, launched as its `launched` says, is up, as
-        its first status but starting says, note how long that took, and
-        for a new task how long since it was asked for. One that ended
-        first came up at no time to note."""
-        launched = record.pop("launched", None)
+    def note_agent_up(self, record, launched):
+        """Once RECORD's agent, launched as LAUNCHED says, is up, as its
+        first status but starting says, note how long that took, and for a
+        new task how long since it was asked for. One that ended first
+        came up at no time to note."""
         if not isinstance(launched, dict) or record.get("status") in ENDED + ("retired",):
             return
         at, phase = launched.get("at"), text(launched.get("phase"))
@@ -553,11 +552,14 @@ class Store:
 
     def save(self, task):
         before = self.recorded(task["id"])
-        if "launched" in task and task.get("status") != "starting":
-            self.note_agent_up(task)
+        # Noted once saved without it: a record left with it is noted next time.
+        up = "launched" in task and task.get("status") != "starting"
+        launched = task.pop("launched") if up else None
         record = {key: value for key, value in task.items() if key not in TRANSIENT}
         atomic_json(self.path(task["id"]), record)
         self.history.note(task["id"], before, record)
+        if up:
+            self.note_agent_up(record, launched)
 
     def note(self, task):
         """Save what looking at TASK found, if there is room: looking will
@@ -2881,7 +2883,7 @@ def make_task(store, request, create_id):
         task["forkSession"] = source.get("agentSession") or source.get("claudeSession")
         task["forkedFrom"] = dict(id=source["id"], name=source["name"])
     existed, there = ref_exists(repo, branch), worktree.exists()
-    store.note_time(task, "prepare", time.monotonic() - began)
+    prepared = time.monotonic() - began
     with noting_creation(store, task):
         try:
             with store.timed(task, "worktree"):
@@ -2902,6 +2904,8 @@ def make_task(store, request, create_id):
             raise RoostError("The repository's post-checkout hook failed in the task's new worktree, so the task "
                              "didn't start%s: %s" % ("; its worktree is kept, as the hook left files there"
                                                      if worktree.exists() else "", said))
+        # Once there is a worktree: a creation refused before has no steps.
+        store.note_time(task, "prepare", prepared)
         # `git worktree add` leaves them out. Its runner checks them out, in
         # its terminal, as that fetches.
         if (worktree / ".gitmodules").is_file():
@@ -10304,7 +10308,11 @@ def main():
         # The agent's own server, which it starts and ends with itself.
         McpServer(Store(sys.argv[2]), sys.argv[3]).serve()
     elif mode == "timings":
-        print(timings_report(sys.argv[2], int(sys.argv[3]) if len(sys.argv) > 3 else 20))
+        tasks = sys.argv[3] if len(sys.argv) > 3 else "20"
+        if not tasks.isdigit() or int(tasks) < 1:
+            print("Name how many tasks to show the timings of, 1 or more, not %r" % tasks, file=sys.stderr)
+            return 2
+        print(timings_report(sys.argv[2], int(tasks)))
     else:
         raise RoostError("Unknown mode")
     return 0
