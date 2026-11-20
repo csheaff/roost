@@ -174,6 +174,10 @@ class Lifecycle(unittest.TestCase):
         steps = self.timed_steps(task)
         for step in ("merge.merge", "merge.teardown", "merge.remove", "merge.reply"):
             self.assertIn(step, steps)
+        # A teardown command that fails isn't timed.
+        other = self.create(name="other")
+        self.assertTrue(self.request("retire", id=other["id"], teardown="exit 3")["ok"])
+        self.assertNotIn("retire.teardown", self.timed_steps(other))
 
     def test_a_resumed_or_discarded_task_is_timed_as_that(self):
         task = self.create()
@@ -185,8 +189,10 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(self.request("discard", id=task["id"], expect=losses["result"]["discard"]["commit"],
                                      told=losses["result"]["discard"])["ok"])
         steps = self.timed_steps(task)
-        for step in ("resume.agent", "resume.reply", "discard.checks", "discard.remove", "discard.reply"):
+        for step in ("resume.spawn", "resume.agent", "resume.reply", "discard.checks", "discard.remove"):
             self.assertIn(step, steps)
+        # Its dry run is no discard.
+        self.assertEqual(steps.count("discard.reply"), 1)
         # Started anew is no new task.
         self.assertEqual(steps.count("create.total"), 1)
         self.assertNotIn("resume.total", steps)
@@ -12276,11 +12282,11 @@ class Timings(unittest.TestCase):
         self.store.save(task)
         self.assertNotIn("launched", self.store.read(task["id"]))
         self.assertIn("No task has been timed", roost.timings_report(self.temp.name))
-        up = dict(id="c" * 16, status="ready", startedAt=roost.now(), launched=dict(at=time.time() - 2, phase="create"))
+        up = dict(id="c" * 16, status="ready", askedAt=time.time() - 3, launched=dict(at=time.time() - 2, phase="create"))
         self.store.save(up)
         steps = {entry["step"]: entry["seconds"] for entry in self.store.timings.read(0)}
         self.assertGreaterEqual(steps["create.agent"], 2)
-        self.assertIn("create.total", steps)
+        self.assertGreaterEqual(steps["create.total"], 3)
 
 
 class RemoteGit(unittest.TestCase):

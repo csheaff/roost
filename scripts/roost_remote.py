@@ -462,9 +462,9 @@ class Store:
         at, phase = launched.get("at"), text(launched.get("phase"))
         if isinstance(at, (int, float)) and phase:
             self.note_time(record, "agent", time.time() - at, phase)
-            started = parse_time(record.get("startedAt"))
-            if phase == "create" and started:
-                self.note_time(record, "total", time.time() - started.timestamp(), phase)
+            asked = record.get("askedAt")
+            if phase == "create" and isinstance(asked, (int, float)) and not isinstance(asked, bool):
+                self.note_time(record, "total", time.time() - asked, phase)
 
     @contextlib.contextmanager
     def locked(self):
@@ -2721,7 +2721,7 @@ def make_task(store, request, create_id):
     attempt asked for beside one of its group made from other words is not
     made: the reply is that other task, marked `alreadyMade`, as `create`
     answers for a creation ID asked with before."""
-    began = time.monotonic()
+    began, asked = time.monotonic(), time.time()
     conversation = request.get("conversation") is True
     # Before anything is made.
     attempt = attempt_of(request)
@@ -2829,7 +2829,10 @@ def make_task(store, request, create_id):
                 integrationRef="refs/heads/" + integration if integration else None,
                 session=session_name(repo, task_id),
                 agent=agent_name, command=command, setup=setup, prompt=prompt,
-                status="starting", startedAt=now(), updatedAt=now(), claudeSession=None, agentMade=[])
+                status="starting", startedAt=now(), updatedAt=now(), claudeSession=None, agentMade=[],
+                # When it was asked for, before the reading `startedAt` follows,
+                # for the time until its agent is up (`note_agent_up`).
+                askedAt=asked)
     if create_id:
         task["createId"] = create_id
     if conversation:
@@ -4968,7 +4971,8 @@ def resume(store, task, program_status=None, size=(), terminal_images=None):
         task["terminalImages"] = terminal_images
     elif terminal_images is False:
         task.pop("terminalImages", None)
-    spawn(store, task, resume=True, size=size)
+    with store.timed(task, "spawn"):
+        spawn(store, task, resume=True, size=size)
     return task
 
 
@@ -8807,8 +8811,10 @@ def remove_worktrees(store, task, worktree, agents, force=False, teardown=None, 
             with store.released():
                 failure = None
                 if worktree and teardown:
-                    with store.timed(task, "teardown"):
-                        failure = run_teardown(task, worktree, teardown)
+                    tearing = time.monotonic()
+                    failure = run_teardown(task, worktree, teardown)
+                    if not failure:
+                        store.note_time(task, "teardown", time.monotonic() - tearing)
                 if failure:
                     task["teardownFailure"], task["teardownOutput"] = failure
                 if keep:
@@ -10071,8 +10077,9 @@ def rpc(request):
     reply = answer(request)
     action = request.get("action") if isinstance(request, dict) else None
     result = reply.get("result")
+    # Not a discard's dry run, which only counts what it would lose.
     if (action in TIMED and reply.get("ok") and isinstance(result, dict) and isinstance(result.get("id"), str)
-            and not result.get("alreadyMade")):
+            and not result.get("alreadyMade") and not request.get("dryRun")):
         with contextlib.suppress(OSError, RoostError, KeyError, TypeError):
             Store(request["root"]).note_time(result, "reply", time.monotonic() - began, action)
     return reply

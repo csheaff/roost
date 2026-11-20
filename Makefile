@@ -51,7 +51,7 @@ TASKS ?= 20
 
 .PHONY: timings
 timings:
-	python3 scripts/roost_remote.py timings $(ROOST_STATE) $(TASKS)
+	python3 scripts/roost_remote.py timings "$(ROOST_STATE)" "$(TASKS)"
 
 # Roost used as you would, in a GUI Emacs of its own with a fake agent,
 # each step checked and captured: see test/qa/qa.py.  Emacs needs Ghostel
