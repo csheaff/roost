@@ -15367,24 +15367,42 @@ at these widths, though a workspace saved each one's layout.")
   "Keep WINDOW, the side window on SIDE, at the width every task shares.
 A change of width in the window last seen there, in the same workspace
 and frame size, is yours, as by dragging its edge: it becomes the width
-every task shares.  Any other, as from a workspace's saved layout coming
-back, is undone."
+every task shares.  One with the frame resized is the frame's, and stays.
+Any other, as from a workspace's saved layout coming back, is undone."
   (let ((seen (frame-parameter nil 'roost-side-widths)))
-    (when window
-      (let ((before (alist-get side seen))
-            (now (list window (roost--current-workspace) (frame-width)))
-            (width (window-total-width window)))
-        (if (and (equal (butlast before) now) (/= width (car (last before))))
-            (setf (alist-get side roost--side-widths) width)
-          (let ((delta (window-resizable window (- (roost--side-width side) width)
-                                         t 'preserved)))
-            (unless (zerop delta)
-              (window-resize window delta t 'preserved)
-              (setq width (window-total-width window)))))
-        (setf (alist-get side seen) (append now (list width)))))
-    (unless window
-      (setf (alist-get side seen nil t) nil))
+    (if (not window)
+        (setf (alist-get side seen nil t) nil)
+      (let* ((before (alist-get side seen))
+             (place (list window (roost--side-workspace)))
+             (width (window-total-width window))
+             (same (equal (car before) place))
+             (changed (and same (/= width (nth 2 before)))))
+        (cond ((and changed (= (frame-width) (nth 1 before)))
+               (setf (alist-get side roost--side-widths) width))
+              ;; Resized with the frame, or as it was since: left be, while
+              ;; no drag elsewhere changed the width they share.
+              ((and same (= (nth 3 before) (roost--side-width side))))
+              ((/= width (roost--side-width side))
+               (let ((delta (window-resizable window (- (roost--side-width side) width)
+                                              t 'preserved)))
+                 (unless (zerop delta)
+                   (window-resize window delta t 'preserved)
+                   (setq width (window-total-width window))))))
+        ;; Preserved at its width now, so that other windows' changes
+        ;; leave it be, and aren't taken for yours.
+        (window-preserve-size window t t)
+        (setf (alist-get side seen)
+              (list place (frame-width) width (roost--side-width side)))))
     (set-frame-parameter nil 'roost-side-widths seen)))
+
+(defun roost--side-workspace ()
+  "The selected frame's workspace, as `roost--keep-side-width' tells them.
+A tab is told by its place: one you didn't name is named after the
+buffer it shows, which changes as you work."
+  (if (eq (roost--workspace-backend) 'tab-bar)
+      (let ((tabs (funcall tab-bar-tabs-function)))
+        (seq-position tabs (assq 'current-tab tabs)))
+    (roost--current-workspace)))
 
 (defun roost--sync-all-frames ()
   "Apply `roost--sync-side-windows' to every frame but child frames.
