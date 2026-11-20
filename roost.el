@@ -361,7 +361,8 @@ project = PROJ AND statusCategory != Done ORDER BY rank."
   :safe #'string-or-null-p)
 
 (defcustom roost-sidebar-width 30
-  "Width in columns of the task sidebar; see `roost-sidebar-mode'."
+  "Width in columns of the task sidebar; see `roost-sidebar-mode'.
+Drag its edge to change it for every task until Emacs exits."
   :type 'natnum)
 
 (defcustom roost-sidebar-recent-projects 3
@@ -372,7 +373,8 @@ starts a task there.  0 lists none."
 
 (defcustom roost-task-panel-width 44
   "Width in columns of the task panel beside a task's terminal.
-See `roost-task-panel-mode'."
+Drag its edge to change it for every task until Emacs exits.  See
+`roost-task-panel-mode'."
   :type 'natnum)
 
 (defcustom roost-workspace 'auto
@@ -1230,7 +1232,7 @@ terminal.  TASK is nil for one not yet created."
         (if (and (not shown) roost-task-panel-mode (roost--side-frame-p)
                  (not (roost--task-panel-window)) (roost--task-panel-fits-p nil)
                  (= (window-total-width area) (window-total-width (window-main-window))))
-            `((width . ,(max 10 (- (alist-get 'width size) roost-task-panel-width)))
+            `((width . ,(max 10 (- (alist-get 'width size) (roost--side-width 'right))))
               (height . ,(alist-get 'height size)))
           size)))))
 
@@ -15260,7 +15262,7 @@ That is, in its widest window.  PANEL is the panel already docked, if
 any; its columns count as free."
   (>= (- (+ (apply #'max 0 (mapcar #'window-body-width (roost--main-windows)))
             (if panel (window-total-width panel) 0))
-         roost-task-panel-width)
+         (roost--side-width 'right))
       80))
 
 (defun roost--close-extra-panels (task buffer docked)
@@ -15324,8 +15326,8 @@ scrolled stays where you left it."
     (let ((sidebar (get-buffer-window roost--sidebar-buffer))
           (wanted (roost--sidebar-wanted-p)))
       (cond ((and wanted (not sidebar)
-                  (>= (frame-width) (+ roost-sidebar-width 80)))
-             (roost--show-side-window (roost--sidebar-get-buffer) 'left roost-sidebar-width))
+                  (>= (frame-width) (+ (roost--side-width 'left) 80)))
+             (roost--show-side-window (roost--sidebar-get-buffer) 'left (roost--side-width 'left)))
             ;; A saved workspace can bring back a sidebar after the mode is
             ;; off, or into a workspace that is no task's.
             ((and sidebar (not wanted))
@@ -15341,12 +15343,69 @@ scrolled stays where you left it."
                                (roost--key task))))
             (t
              (let* ((buffer (roost--task-info-buffer task))
-                    (docked (roost--show-side-window buffer 'right roost-task-panel-width)))
+                    (docked (roost--show-side-window buffer 'right (roost--side-width 'right))))
                (roost--close-extra-panels task buffer docked)
                ;; Lay it out for its window now rather than at the next resize.
                (with-current-buffer buffer (roost--render-task-info)))
              (unless (assq 'diff task)
-               (roost--refresh-host (roost--field task 'host) nil)))))))
+               (roost--refresh-host (roost--field task 'host) nil)))))
+    (roost--keep-side-width 'left (when-let* ((window (get-buffer-window roost--sidebar-buffer)))
+                                    (and (window-parameter window 'window-side) window)))
+    (roost--keep-side-width 'right (roost--task-panel-window))))
+
+(defvar roost--side-widths nil
+  "Widths you dragged the side windows to, as an alist from side to columns.
+`left' is the sidebar and `right' the task panel.  Every task shows them
+at these widths, though a workspace saved each one's layout.")
+
+(defun roost--side-width (side)
+  "Columns for the side window on SIDE in every task."
+  (or (alist-get side roost--side-widths)
+      (if (eq side 'left) roost-sidebar-width roost-task-panel-width)))
+
+(defun roost--keep-side-width (side window)
+  "Keep WINDOW, the side window on SIDE, at the width every task shares.
+A change of width in the window last seen there, in the same workspace
+and frame size, is yours, as by dragging its edge: it becomes the width
+every task shares.  One with the frame resized is the frame's, and stays.
+Any other, as from a workspace's saved layout coming back, is undone."
+  (let ((seen (frame-parameter nil 'roost-side-widths)))
+    (if (not window)
+        (setf (alist-get side seen nil t) nil)
+      (let* ((before (alist-get side seen))
+             (place (list window (roost--side-workspace)))
+             (width (window-total-width window))
+             (same (equal (car before) place))
+             (changed (and same (/= width (nth 2 before)))))
+        (cond ((and changed (= (frame-width) (nth 1 before)))
+               (setf (alist-get side roost--side-widths) width)
+               ;; Frames synced before this one have the old width.
+               (when (cdr (frame-list))
+                 (roost--layout-changed)))
+              ;; Resized with the frame, or as it was since: left be, while
+              ;; no drag elsewhere changed the width they share.
+              ((and same (= (nth 3 before) (roost--side-width side))))
+              ((/= width (roost--side-width side))
+               (let ((delta (window-resizable window (- (roost--side-width side) width)
+                                              t 'preserved)))
+                 (unless (zerop delta)
+                   (window-resize window delta t 'preserved)
+                   (setq width (window-total-width window))))))
+        ;; Preserved at its width now, so that other windows' changes
+        ;; leave it be, and aren't taken for yours.
+        (window-preserve-size window t t)
+        (setf (alist-get side seen)
+              (list place (frame-width) width (roost--side-width side)))))
+    (set-frame-parameter nil 'roost-side-widths seen)))
+
+(defun roost--side-workspace ()
+  "The selected frame's workspace, as `roost--keep-side-width' tells them.
+A tab is told by its place: one you didn't name is named after the
+buffer it shows, which changes as you work."
+  (if (eq (roost--workspace-backend) 'tab-bar)
+      (let ((tabs (funcall tab-bar-tabs-function)))
+        (seq-position tabs (assq 'current-tab tabs)))
+    (roost--current-workspace)))
 
 (defun roost--sync-all-frames ()
   "Apply `roost--sync-side-windows' to every frame but child frames.
@@ -15439,7 +15498,7 @@ columns go without."
                    ((get-buffer-window roost--sidebar-buffer) "Sidebar on")
                    ((not (roost--sidebar-wanted-p)) "Sidebar on; it shows where a task is open")
                    (t (format "Sidebar on, in frames at least %d columns wide"
-                              (+ roost-sidebar-width 80)))))))
+                              (+ (roost--side-width 'left) 80)))))))
 
 (defalias 'roost-sidebar #'roost-sidebar-mode)
 

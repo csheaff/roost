@@ -1062,7 +1062,8 @@ header line. A failed creation keeps the draft.
 - `roost-socket-name`: the tmux socket (default `main`). Each task has a
   session of its own, named after its project and task.
 - `roost-sidebar-width` (30), `roost-task-panel-width` (44): the sidebar and
-  the panel docked beside a task's terminal.
+  the panel docked beside a task's terminal. Drag either's edge to change it
+  for every task, until Emacs exits; a task's workspace doesn't keep its own.
 - `roost-sidebar-recent-projects` (3): how many projects with no tasks the
   sidebar lists on each host for a new task; 0 lists none, nor "Other
   directory…".
