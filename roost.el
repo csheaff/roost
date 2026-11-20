@@ -15378,7 +15378,10 @@ Any other, as from a workspace's saved layout coming back, is undone."
              (same (equal (car before) place))
              (changed (and same (/= width (nth 2 before)))))
         (cond ((and changed (= (frame-width) (nth 1 before)))
-               (setf (alist-get side roost--side-widths) width))
+               (setf (alist-get side roost--side-widths) width)
+               ;; Frames synced before this one have the old width.
+               (when (cdr (frame-list))
+                 (roost--layout-changed)))
               ;; Resized with the frame, or as it was since: left be, while
               ;; no drag elsewhere changed the width they share.
               ((and same (= (nth 3 before) (roost--side-width side))))
