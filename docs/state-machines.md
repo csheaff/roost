@@ -1472,7 +1472,7 @@ Invariants:
 | Setup | done | | Agent | flag saved | `runner` |
 | any stage | fails | | Ended, `failed` | `error` shown in the pane | `runner` |
 | any stage | SIGHUP, as `stop` | | gone | flag stays False; next run redoes it | |
-| Worktree | SIGHUP, as `stop` | Git needs over a second to remove what it made | gone | part of the folder stays, which Git no longer lists; the next run refuses it, and a discard takes it (LC-11) | `stop`, `end_left_running` |
+| Worktree | SIGHUP, as `stop` | Git needs over a second to remove what it made | gone, its worktree partly there | part of the folder stays, which Git no longer lists; the next run refuses it, and a discard takes it (LC-11) | `stop`, `end_left_running` |
 | Agent | ends | this run, not `stopped` | Ended | see [Agent status](#agent-status) | `runner` |
 
 Checked: a stop or kill in each stage, then resume. Sound, but for a stop as Git

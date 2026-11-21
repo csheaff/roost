@@ -282,7 +282,7 @@ as any does, one unit of work, two requests, and two things killed, each a
 request or the run as Git makes the worktree.
 
 Checked once and in no config: `TaskOnHostUnmade.cfg` passes with a task
-that may be a fork (15 million states), and with two units of work (17
+that may be a fork (30 million states), and with two units of work (33
 million).
 
 Left out, by design or as covered elsewhere: creating a task (`make crash`'s

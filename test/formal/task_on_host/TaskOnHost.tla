@@ -587,7 +587,8 @@ PutBack == IF removing # 0 /\ tw = "partly" THEN "there" ELSE tw
 \* `require_not_removing` refuses every finishing action while a request
 \* holds the worktree lock, or a fork holds it shared, or the run making
 \* the task's worktree does.  Broken: `run_no_hold` has the run take no
-\* hold of it.
+\* hold of it; a request that then stops the task leaves `making` as it
+\* was, where `MadeAlone` has already failed.
 Held == wtLock # 0 \/ reading = "held" \/ (making # "no" /\ Break # "run_no_hold")
 
 \* `require_offers_named`, under the registry lock: a request is refused

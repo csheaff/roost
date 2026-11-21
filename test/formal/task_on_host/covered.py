@@ -16,6 +16,9 @@ from pathlib import Path
 SYNC = "c1616b6"
 
 ROOT = Path(__file__).resolve().parents[3]
+# Top-level functions only: `Store.remove`, `Store.read_to_act_on` and
+# `ClaudeAgent.made_worktree`, which the skill's table also names, are methods,
+# and are read by hand.
 COVERED = {
     "scripts/roost_remote.py": [
         # Start: the lock, the record read, and each action's refusals.
@@ -29,16 +32,16 @@ COVERED = {
         "safe_to_delete", "branches_going", "started_at",
         # Stop, YouStop, YouResume, Poll.
         "stop", "close_panes", "pane_sessions", "left_running", "end_left_running", "resume", "spawn",
-        "list_tasks",
+        "list_tasks", "owned_pane", "asks_about_plan",
         # RemoveBegin to RemoveEnd.
         "remove_worktrees", "holding_worktree", "worktree_holder", "remove_agent_worktrees",
         "agent_worktree_seen", "run_teardown", "trash_worktree", "relink_removed", "unlock_unmade",
         # DeleteBranch, RemoveRecord.
         "delete_branch", "unregister_gone",
         # AsMade, Ahead, Losses, Going.
-        "is_as_made", "made_since", "agent_work",
+        "is_as_made", "made_since", "agent_work", "agent_branch",
         # Hook, AgentMakesX, AgentEntersX.
-        "update_hook", "agent_worktree",
+        "update_hook", "agent_worktree", "claude_hook_settings",
         # YouRetarget.
         "retarget",
         # ForkBegins, ForkReads: `make_task` up to its fork's snapshot.
