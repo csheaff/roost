@@ -664,6 +664,11 @@ class Lifecycle(unittest.TestCase):
                         self.assertFalse(reply["ok"])
                         self.assertTrue(reply["error"].startswith("Git was cut short making the task's worktree"),
                                         reply)
+                    # So too when cut short before Git wrote its link, and
+                    # HEAD can't be read there.
+                    (worktree / ".git").unlink()
+                    reply = self.request("retire", id=task["id"])
+                    self.assertTrue(reply["error"].startswith("Git was cut short making the task's worktree"), reply)
                     self.assertTrue((worktree / "file0.bin").exists())
                     continue
                 self.assertFalse(os.path.lexists(worktree))

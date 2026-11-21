@@ -7975,12 +7975,14 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
     repo = task["repo"]
     branch = task["branch"]
     put_back_removed(store, task)
+    # Rather than call what Git checked out uncommitted, or its lock yours;
+    # and before its branch is read, which Git, cut short early, never wrote.
+    check_worktree(store, task, branch=False)
+    if cut_short(task):
+        raise RoostError(cut_short_refusal(task))
     worktree = check_worktree(store, task)
     worktree_exists = worktree.exists()
     branch_exists = ref_exists(repo, branch)
-    # Rather than call what Git checked out uncommitted, or its lock yours.
-    if cut_short(task):
-        raise RoostError(cut_short_refusal(task))
     if worktree_exists:
         require_clean(str(worktree))
         # Before stopping the agent, rather than fail halfway through.
