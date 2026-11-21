@@ -17576,6 +17576,21 @@ it of the same ID's, or nil for the first."
                  (should (eq (alist-get 'pagesAsWritten asked) :false)))))
            (should (eq (alist-get 'remoteControl asked) (if setting :false t)))))))))
 
+(ert-deftest roost-a-new-task-asks-for-a-worktree-made-ahead-as-the-project-sets-it ()
+  (roost-test--isolated
+   (let (asked)
+     (dolist (setting '(t nil))
+       (cl-letf (((symbol-function 'roost--request)
+                  (lambda (_host _action parameters &rest _) (setq asked parameters)))
+                 ((symbol-function 'roost--directory-host) (lambda (_) nil))
+                 ((symbol-function 'roost--project-value)
+                  (lambda (_ variable) (and (eq variable 'roost-ready-worktrees) setting))))
+         (roost--create-task "/tmp/repo/" "task" nil "Look" "claude")
+         (should (eq (alist-get 'ready asked) (if setting t :false)))
+         ;; A conversation is in no project of yours.
+         (roost--create-task "/tmp/repo/" "task" nil "Look" "claude" nil nil '((conversation . t)))
+         (should (eq (alist-get 'ready asked) :false)))))))
+
 (ert-deftest roost-shows-a-page-where-emacs-can-draw-one ()
   ;; A page an agent wrote is shown as an image is, in the same buffer,
   ;; where this Emacs has a web view; elsewhere Roost says it can't.

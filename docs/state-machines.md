@@ -402,6 +402,7 @@ Invariants:
 | Preparing | an attempt, saying its wording | another of its group was made from other words | Made, of that other | nothing made; that task returned, as one made before | `made_from_other_words`, `make_task` |
 | Preparing | a fork | its source is not Merging, Removing or Removal cut short | Preparing | the source's work read, its worktree lock shared meanwhile | `conversation_to_fork`, `snapshot` |
 | Preparing | | | Noted | note locked before it is in place | `noting_creation` |
+| Noted | asked with `ready` | a worktree made ahead for the repository is Ready | Noted | moved to the task's path, locked `initializing`, branched at the start, checked clean, unlocked; else removed, its branch deleted, and Git makes one | `take_ready_for`, `take_ready` |
 | Noted | Git and spawn done | | Made | note unlinked under its lock | `noting_creation` |
 | Noted | an attempt, as its record is saved | another of its group was recorded meanwhile from other words | Made, of that other | undone as a failed creation is; that task returned | `made_from_other_words`, `abandon` |
 | Noted | Git refused | nothing there | Failed | branch deleted | `make_task` |
@@ -415,6 +416,46 @@ has Emacs's side: what a retry with an edited draft gets.
 Left over, harmless: `<createId>.lock` after a failure, `.roost-*` temporary
 files from a kill before the rename.
 Open: none.
+
+### Worktree made ahead
+
+Kind: explicit. Lives in: `ready/<repo-hash>-<id>/` (the worktree, detached),
+`ready/<repo-hash>-<id>.json` (its mark: repository, commit, `madeAt`, `ready`),
+`ready/.lock` (taking or marking one), `ready/.tending` (one run tending).
+Lets a new task skip checking out every file.
+
+| State | Meaning | How you can tell |
+| --- | --- | --- |
+| Making | Git makes it, or moves it to a new commit | mark with `ready: false`, `.tending` held |
+| Ready | clean, at the mark's commit, for the next task to take | mark with `ready: true` |
+| Taken | moved to a task's path, its mark gone | no mark; Git lists it at the task's worktree |
+| Going | not ready, and no run at it: cut short, taken and not moved, stale, its repository gone | mark with `ready: false`, `.tending` free |
+
+Invariants:
+- I1. None is taken twice: a take marks it not ready, under `ready/.lock`, before
+  Git moves it.
+- I2. A task takes only one holding nothing but Git's checkout: it is checked clean
+  after its branch is made, as no one may write in a folder Roost made ahead.
+- I3. A task taken from one starts as `git worktree add` would make it: on its new
+  branch, tracking nothing, at its start, with the `post-checkout` hook run. Cut
+  short meanwhile, it is locked `initializing`, which `undo_creation` forces away
+  as it does a worktree Git was stopped making.
+- I4. What a crash leaves goes on the next run, and all of it when turned off:
+  holds by `make crash`'s `CreateFromReady`, which tends with nothing kept after
+  each recovery and finds no worktree left.
+
+| From | Event | Guard | To | Effect | Code |
+| --- | --- | --- | --- | --- | --- |
+| | a creation asked with `ready` replies | none for the repository | Making | a run in the background makes one at the task's start | `tend_ready_later`, `tend_ready` |
+| Making | Git done | clean | Ready | mark says `ready` | `tend_ready` |
+| Making | Git fails, or leaves files | | gone | removed | `drop_ready` |
+| Ready | a creation asked with `ready` replies | at another commit | Making | Git checks out what differs | `tend_ready` |
+| Ready | a creation asked with `ready` | | Taken | moved to the task's path (Creation's table) | `take_ready` |
+| Ready | a creation replies | not asked with `ready`, or a second for the repository, or made over READY_DAYS ago, or its repository gone | Going | | `tend_ready` |
+| Going | the same run | | gone | removed, Git's record of it too | `drop_ready` |
+| Making | helper dies | | Going, on the next run | | `tend_ready` |
+
+Open: not modelled yet; a model would follow "Adding a machine".
 
 ### Registry lock
 

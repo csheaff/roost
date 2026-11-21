@@ -4,6 +4,13 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Starting a task in a project no longer checks out every file. Each
+  project keeps a worktree made ahead in the background, which the next
+  task takes, checking out only the files that changed: in a 37,000-file
+  project Emacs hears back in under half a second rather than 2.8 s. It costs one
+  more checkout per project, shown by `git worktree list`; set
+  `roost-ready-worktrees` to `nil`, globally or per project, to turn it
+  off. Nothing to do when upgrading.
 - Retiring or discarding a task no longer waits for its worktree to be
   deleted. Once the checks pass, the worktree is moved into the state
   folder's `trash/` in one rename and its files are deleted in the

@@ -200,6 +200,126 @@ class Lifecycle(unittest.TestCase):
     def trash(self):
         return sorted((self.state / "trash").iterdir()) if (self.state / "trash").is_dir() else []
 
+    def ready_worktrees(self):
+        """The paths of the worktrees made ahead that are ready."""
+        return [mark.with_suffix("") for mark, said in roost.ready_marks(roost.Store(str(self.state)))
+                if said.get("ready") is True]
+
+    def tend(self, keep=True):
+        head = self.git("rev-parse", "HEAD")
+        roost.tend_ready(roost.Store(str(self.state)), str(self.repo.resolve()), head, keep)
+
+    def listed_worktrees(self):
+        return [str(Path(line.split(" ", 1)[1]).resolve())
+                for line in self.git("worktree", "list", "--porcelain").splitlines() if line.startswith("worktree ")]
+
+    def test_a_task_starts_from_a_worktree_made_ahead_on_its_own_branch(self):
+        self.tend()
+        [ready] = self.ready_worktrees()
+        self.assertTrue((ready / "hello").is_file())
+        # Since it was made, the branch moved on.
+        (self.repo / "hello").write_text("moved on\n")
+        (self.repo / "new").write_text("new\n")
+        self.git("add", ".")
+        self.git("commit", "-m", "moved on")
+        task = self.create(ready=True)
+        worktree = Path(task["worktree"])
+        self.assertFalse(os.path.lexists(ready))
+        self.assertEqual(self.ready_worktrees(), [])
+        self.assertEqual(self.git("rev-parse", "--abbrev-ref", "HEAD", cwd=worktree), task["branch"])
+        self.assertEqual(self.git("rev-parse", "HEAD", cwd=worktree), self.git("rev-parse", "HEAD"))
+        self.assertEqual((worktree / "hello").read_text(), "moved on\n")
+        self.assertEqual(self.git("status", "--porcelain", cwd=worktree), "")
+        self.assertNotIn(str(ready.resolve()), self.listed_worktrees())
+        # It tracks nothing, as `git worktree add` would leave it.
+        self.assertEqual(roost.git(self.repo, "config", "--get", "branch.%s.merge" % task["branch"],
+                                   check=False).stdout, "")
+        steps = [entry["step"] for entry in roost.History(self.state / "timings").read(0) if entry["id"] == task["id"]]
+        self.assertIn("create.ready", steps)
+        self.assertNotIn("create.worktree", steps)
+        # And retires as any task does.
+        self.assertTrue(self.request("retire", id=task["id"])["ok"])
+        self.assertFalse(os.path.lexists(worktree))
+        self.assertNotIn(str(worktree.resolve()), self.listed_worktrees())
+
+    def test_a_task_not_asked_to_starts_as_before_and_leaves_the_one_made_ahead(self):
+        self.tend()
+        [ready] = self.ready_worktrees()
+        task = self.create()
+        self.assertEqual(self.ready_worktrees(), [ready])
+        steps = [entry["step"] for entry in roost.History(self.state / "timings").read(0) if entry["id"] == task["id"]]
+        self.assertIn("create.worktree", steps)
+
+    def test_tending_moves_the_one_made_ahead_to_the_new_commit_and_keeps_one(self):
+        self.tend()
+        [ready] = self.ready_worktrees()
+        (self.repo / "hello").write_text("moved on\n")
+        self.git("commit", "-qam", "moved on")
+        self.tend()
+        self.assertEqual(self.ready_worktrees(), [ready])
+        self.assertEqual((ready / "hello").read_text(), "moved on\n")
+        self.assertEqual(self.git("rev-parse", "HEAD", cwd=ready), self.git("rev-parse", "HEAD"))
+        # Turned off, it goes.
+        self.tend(keep=False)
+        self.assertEqual(self.ready_worktrees(), [])
+        self.assertFalse(os.path.lexists(ready))
+        self.assertEqual(self.listed_worktrees(), [str(self.repo.resolve())])
+        self.assertEqual(sorted(path.name for path in (self.state / "ready").iterdir()), [".lock", ".tending"])
+
+    def test_one_made_ahead_that_was_written_in_is_not_taken(self):
+        self.tend()
+        [ready] = self.ready_worktrees()
+        (ready / "hello").write_text("someone's\n")
+        task = self.create(ready=True)
+        worktree = Path(task["worktree"])
+        self.assertEqual((worktree / "hello").read_text(), "base\n")
+        self.assertEqual(self.git("status", "--porcelain", cwd=worktree), "")
+        self.assertEqual(self.listed_worktrees(), [str(self.repo.resolve()), str(worktree.resolve())])
+        self.assertEqual(self.ready_worktrees(), [])
+
+    def test_tending_clears_what_a_run_cut_short_left_and_one_not_taken_for_a_week(self):
+        store = roost.Store(str(self.state))
+        repo = str(self.repo.resolve())
+        self.tend()
+        [old] = self.ready_worktrees()
+        mark = old.with_suffix(".json")
+        roost.atomic_json(mark, dict(json.loads(mark.read_text()), madeAt=time.time() - 8 * 86400))
+        # Killed as Git made one, and as it began another.
+        cut = self.state / "ready" / ("0" * 10 + "-" + "a" * 12)
+        roost.atomic_json(cut.with_suffix(".json"), dict(repo=repo, commit="0" * 40, madeAt=time.time(), ready=False))
+        self.git("worktree", "add", "-q", "--detach", str(cut))
+        begun = self.state / "ready" / ("0" * 10 + "-" + "b" * 12)
+        begun.mkdir()
+        self.tend()
+        [ready] = self.ready_worktrees()
+        self.assertNotIn(ready, (old, cut))
+        for path in (old, cut, begun):
+            self.assertFalse(os.path.lexists(path), path)
+        self.assertEqual(self.listed_worktrees(), [repo, str(ready.resolve())])
+
+    def test_a_post_checkout_hook_runs_in_the_task_taken_from_one_made_ahead(self):
+        self.tend()
+        log = self.root / "hook.log"
+        hook = self.repo / ".git" / "hooks" / "post-checkout"
+        hook.write_text("#!/bin/sh\necho \"$1 $2 $3 $(git rev-parse --abbrev-ref HEAD)\" >> %s\n"
+                        % shlex.quote(str(log)))
+        hook.chmod(0o755)
+        task = self.create(ready=True)
+        [line] = log.read_text().splitlines()
+        self.assertTrue(line.endswith(" 1 " + task["branch"]), line)
+
+    def test_the_reply_comes_before_the_next_worktree_is_made_ahead(self):
+        request = json.dumps(dict(root=str(self.state), action="create", directory=str(self.repo), name="task",
+                                  socket=self.socket, command=[sys.executable, str(FAKE)], ready=True))
+        done = subprocess.run([sys.executable, roost.__file__, "rpc"], input=request, capture_output=True,
+                              text=True, timeout=30)
+        self.assertTrue(json.loads(done.stdout)["ok"], done)
+        deadline = time.monotonic() + 15
+        while not self.ready_worktrees() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        [ready] = self.ready_worktrees()
+        self.assertEqual(self.git("rev-parse", "HEAD", cwd=ready), self.git("rev-parse", "HEAD"))
+
     def test_finishing_moves_the_worktree_into_the_trash_to_be_emptied_later(self):
         for action in ("retire", "discard"):
             with self.subTest(action=action):

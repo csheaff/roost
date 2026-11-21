@@ -2889,9 +2889,13 @@ def make_task(store, request, create_id):
     prepared = time.monotonic() - began
     with noting_creation(store, task):
         try:
-            with store.timed(task, "worktree"):
+            making = time.monotonic()
+            if request.get("ready") is True and not conversation and take_ready_for(store, task, existed):
+                store.note_time(task, "ready", time.monotonic() - making)
+            else:
                 git_with_hooks(repo, "-c", "branch.autoSetupMerge=false", "worktree", "add", "-b", branch,
                                str(worktree), commit)
+                store.note_time(task, "worktree", time.monotonic() - making)
         except RoostError as exc:
             said = "\n".join(line for line in str(exc).splitlines() if not line.startswith("Preparing worktree"))
             if there or not worktree.exists():
@@ -2948,6 +2952,33 @@ def make_task(store, request, create_id):
                 with contextlib.suppress(RoostError, OSError):
                     take_offer(store, store.read(parent), offer)
     return task
+
+
+def take_ready_for(store, task, existed):
+    """Start TASK's worktree from one made ahead for its repository, as
+    `git worktree add` would make it: on its new branch at its start, with
+    the repository's post-checkout hook run. Whether it did; else nothing
+    is left of what it took, nor the branch, unless that EXISTED."""
+    repo, worktree, branch, commit = task["repo"], Path(task["worktree"]), task["branch"], task["baseCommit"]
+    if not take_ready(store, repo, worktree):
+        return False
+    # Locked as Git locks one it makes until its checkout is done: cut
+    # short meanwhile, it holds only Git's checkout (`undo_creation`).
+    locked = git(repo, "worktree", "lock", "--reason", "initializing", str(worktree), check=False).returncode == 0
+    made = git_with_hooks(worktree, "-c", "branch.autoSetupMerge=false", "checkout", "-q", "-b", branch, commit,
+                          check=False)
+    # Nothing there but Git's checkout, as written by nobody meanwhile.
+    if (locked and made.returncode == 0 and git(worktree, "status", "--porcelain", check=False).stdout == ""
+            and git(repo, "worktree", "unlock", str(worktree), check=False).returncode == 0):
+        return True
+    git(repo, "worktree", "remove", "--force", "--force", str(worktree), check=False)
+    if os.path.lexists(worktree):
+        shutil.rmtree(worktree, ignore_errors=True)
+    with contextlib.suppress(RoostError):
+        unregister_gone(repo, worktree.resolve())
+        if not existed:
+            delete_branch(repo, branch, commit)
+    return False
 
 
 def abandon(store, task):
@@ -6946,6 +6977,12 @@ def empty_trash_later(root):
     except OSError:
         # No trash, or a run already at it.
         return
+    in_background(lambda: empty_trash(store))
+
+
+def in_background(work):
+    """Call WORK in a process of its own, in a session of its own, with
+    nothing of this one's open, so that neither Emacs nor ssh waits for it."""
     sys.stdout.flush()
     sys.stderr.flush()
     child = os.fork()
@@ -6960,9 +6997,150 @@ def empty_trash_later(root):
         null = os.open(os.devnull, os.O_RDWR)
         for fd in (0, 1, 2):
             os.dup2(null, fd)
-        empty_trash(store)
+        work()
     finally:
         os._exit(0)
+
+
+READY = "ready"
+READY_ENTRY = re.compile(r"[a-f0-9]{10}-[a-f0-9]{12}")
+# A worktree made ahead and not taken in this long goes.
+READY_DAYS = 7
+
+
+@contextlib.contextmanager
+def ready_locked(store, blocking=True):
+    """Hold the lock under which a worktree made ahead is taken, or marked
+    as going, so that no two take one. Without BLOCKING, yield False when
+    another holds it."""
+    folder = store.root / READY
+    folder.mkdir(mode=0o700, exist_ok=True)
+    with (folder / ".lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+        except BlockingIOError:
+            yield False
+            return
+        yield True
+
+
+def ready_marks(store, repo=None):
+    """(mark, what it says) of each worktree made ahead, REPO's alone if
+    given: a file beside its folder, saying its repository and commit,
+    and `ready` once Git has made it and nothing has taken it."""
+    marks = []
+    with contextlib.suppress(OSError):
+        for mark in sorted((store.root / READY).glob("*.json")):
+            if not READY_ENTRY.fullmatch(mark.stem):
+                continue
+            try:
+                said = json.loads(mark.read_text())
+            except (OSError, ValueError):
+                said = None
+            if not isinstance(said, dict):
+                said = {}
+            if repo is None or said.get("repo") == repo:
+                marks.append((mark, said))
+    return marks
+
+
+def take_ready(store, repo, worktree):
+    """Move a worktree made ahead for REPO to WORKTREE, by Git, which
+    renames its folder: whether there was one. It is detached at the
+    commit it was made at, holding nothing but Git's checkout."""
+    if not (store.root / READY).is_dir():
+        return False
+    with ready_locked(store):
+        for mark, said in ready_marks(store, repo):
+            if said.get("ready") is not True:
+                continue
+            # Not ready from now on, whatever happens: never taken twice.
+            atomic_json(mark, dict(said, ready=False))
+            if git(repo, "worktree", "move", str(mark.with_suffix("")), str(worktree), check=False).returncode == 0:
+                mark.unlink(missing_ok=True)
+                return True
+    return False
+
+
+def drop_ready(store, mark, said):
+    """Remove the worktree made ahead that MARK, not ready, says of: none
+    takes it now. Its folder may be partly made, or gone."""
+    entry, repo = mark.with_suffix(""), said.get("repo")
+    if os.path.lexists(entry) and isinstance(repo, str) and Path(repo).is_dir():
+        git(repo, "worktree", "remove", "--force", "--force", str(entry), check=False)
+    if os.path.lexists(entry):
+        shutil.rmtree(entry, ignore_errors=True)
+    if not os.path.lexists(entry):
+        if isinstance(repo, str) and Path(repo).is_dir():
+            with contextlib.suppress(RoostError, OSError):
+                unregister_gone(repo, entry.resolve())
+        mark.unlink(missing_ok=True)
+
+
+def tend_ready(store, repo, commit, keep=True):
+    """Have one worktree made ahead for REPO, at COMMIT, for the next task
+    to take: made, or moved there, as Git checks out only the files that
+    differ. Without KEEP, none. One run at a time; what a run cut short
+    left goes, as does one made ahead and not taken in READY_DAYS, or for
+    a repository gone."""
+    folder = store.root / READY
+    folder.mkdir(mode=0o700, exist_ok=True)
+    with (folder / ".tending").open("a") as tending:
+        try:
+            fcntl.flock(tending, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
+        old = time.time() - READY_DAYS * 86400
+        going, kept = [], None
+        with ready_locked(store):
+            for mark, said in ready_marks(store):
+                made = said.get("madeAt")
+                stale = not isinstance(made, (int, float)) or made < old
+                gone = not isinstance(said.get("repo"), str) or not Path(said["repo"]).is_dir()
+                if said.get("repo") == repo and said.get("ready") is True and keep and kept is None and not stale:
+                    kept = (mark, said)
+                    # Not taken while it moves.
+                    atomic_json(mark, dict(said, ready=False))
+                elif said.get("ready") is not True or stale or gone or said.get("repo") == repo:
+                    # Not ready is cut short, or taken and not moved: no
+                    # other run is at it now.
+                    atomic_json(mark, dict(said, ready=False))
+                    going.append((mark, said))
+            # A folder with no mark is what a run cut short left as it began.
+            with contextlib.suppress(OSError):
+                for entry in folder.iterdir():
+                    if READY_ENTRY.fullmatch(entry.name) and not entry.with_suffix(".json").exists():
+                        shutil.rmtree(entry, ignore_errors=True)
+        for mark, said in going:
+            drop_ready(store, mark, said)
+        if not keep:
+            return
+        if kept:
+            mark, said = kept
+            if said.get("commit") != commit:
+                moved = git_with_hooks(mark.with_suffix(""), "checkout", "-q", "--detach", commit, check=False)
+                if moved.returncode or git(mark.with_suffix(""), "status", "--porcelain", check=False).stdout:
+                    drop_ready(store, mark, said)
+                    kept = None
+            if kept:
+                atomic_json(mark, dict(said, commit=commit, ready=True))
+                return
+        mark = folder / (hashlib.sha256(repo.encode()).hexdigest()[:10] + "-" + uuid.uuid4().hex[:12] + ".json")
+        said = dict(repo=repo, commit=commit, madeAt=time.time(), ready=False)
+        atomic_json(mark, said)
+        made = git_with_hooks(repo, "worktree", "add", "-q", "--detach", str(mark.with_suffix("")), commit, check=False)
+        if made.returncode or git(mark.with_suffix(""), "status", "--porcelain", check=False).stdout:
+            drop_ready(store, mark, said)
+            return
+        atomic_json(mark, dict(said, ready=True))
+
+
+def tend_ready_later(root, repo, commit, keep=True):
+    """`tend_ready` in a process of its own, once this request has replied."""
+    store = Store(root)
+    if not keep and not ready_marks(store, repo):
+        return
+    in_background(lambda: tend_ready(store, repo, commit, keep))
 
 
 def unregister_gone(repo, worktree):
@@ -10516,6 +10694,13 @@ def main():
         if isinstance(request, dict) and request.get("action") in FINISHING + ("list",):
             with contextlib.suppress(OSError, RoostError, KeyError, TypeError):
                 empty_trash_later(request["root"])
+        # A worktree made ahead for the next task in this one's repository.
+        made = answered.get("result") if isinstance(answered, dict) and answered.get("ok") else None
+        if (isinstance(request, dict) and request.get("action") == "create" and isinstance(made, dict) and not made.get("alreadyMade")
+                and not made.get("conversation") and not made.get("forkedFrom")):
+            with contextlib.suppress(OSError, RoostError, KeyError, TypeError):
+                tend_ready_later(request["root"], made["repo"], made["startCommit"],
+                                 keep=request.get("ready") is True)
     elif mode in ("hook", "hook-env"):
         # Observational hooks never emit decision-control JSON or fail
         # the coding session just because its status dashboard is unavailable.
