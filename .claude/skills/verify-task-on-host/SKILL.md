@@ -83,7 +83,7 @@ or `discard` calls them, needs the model checked against it.
 | Model | Code in scripts/roost_remote.py |
 | --- | --- |
 | `Ask` | what Emacs read before it asked, and the request carries: `expect`, `told`, and `offers`, the offers its question named (`roost--offers-named` in roost.el), which `TASK_ACTIONS` hands each action |
-| `Start` | `rpc` (lock, `read_to_act_on`), `require_not_removing`, `forget`, `retire` up to `merging_in`, `integration_branch`, `discard` up to `stop`, `discard_losses`, `put_back_removed`, `require_offers_named` in each |
+| `Start` | `rpc` (lock, `read_to_act_on`), `require_not_removing`, `forget` (with `untrash`), `retire` up to `merging_in`, `integration_branch`, `discard` up to `stop`, `discard_losses`, `put_back_removed`, `require_offers_named` in each |
 | `GitMerge`, `AfterMerge`, `MergeFailed` | `integrating`, `merge_task`, `retire` after the merge, `require_offers_named` again among its checks |
 | `Checkpoint` | `safe_to_delete`, `branches_going`, `retiringCommit` in `retire` |
 | `Stop` | `stop`, the list of agent worktrees `retire` passes to `remove_worktrees`, with `seen` |

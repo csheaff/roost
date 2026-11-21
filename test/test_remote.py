@@ -277,12 +277,55 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(self.request("stop", id=task["id"])["ok"])
         worktree = Path(task["worktree"])
         gitdir = self.repo / ".git" / "worktrees" / worktree.name
+        # As the repositories of its submodules would be, which Git keeps there.
+        (gitdir / "modules" / "lib").mkdir(parents=True)
         entry = self.state / "trash" / (task["id"] + "-" + "a" * 12)
         entry.mkdir(parents=True)
         os.rename(worktree, entry / "tree")
-        self.request("discard", id=task["id"], dryRun=True)
+        reply = self.request("discard", id=task["id"], dryRun=True)
+        self.assertTrue(reply["ok"], reply)
         self.assertTrue(gitdir.is_dir())
         self.assertEqual([path.name for path in entry.iterdir()], ["tree"])
+        # Which the discard it previewed then finishes.
+        told = reply["result"]["discard"]
+        reply = self.request("discard", id=task["id"], expect=told["commit"], told=told)
+        self.assertTrue(reply["ok"], reply)
+        self.assertFalse(gitdir.exists())
+        self.assertNotIn(str(worktree), self.git("worktree", "list", "--porcelain"))
+
+    def test_forgetting_a_task_puts_back_what_the_trash_holds_of_it(self):
+        task = self.create()
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        worktree = Path(task["worktree"])
+        gitdir = self.repo / ".git" / "worktrees" / worktree.name
+        # As a retire that stopped after moving it, as at its branch.
+        entry = self.state / "trash" / (task["id"] + "-" + "a" * 12)
+        entry.mkdir(parents=True)
+        os.rename(worktree, entry / "tree")
+        os.rename(gitdir, entry / "git")
+        reply = self.request("forget", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertIn("worktree " + str(worktree), reply["result"]["leftBehind"])
+        self.assertTrue((worktree / "hello").is_file())
+        self.assertIn(str(worktree.resolve()), self.git("worktree", "list", "--porcelain"))
+        self.assertEqual(self.git("status", "--porcelain", cwd=worktree), "")
+        self.assertEqual(self.trash(), [])
+
+    def test_forgetting_keeps_what_the_trash_cant_put_back(self):
+        task = self.create()
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        worktree = Path(task["worktree"])
+        entry = self.state / "trash" / (task["id"] + "-" + "a" * 12)
+        entry.mkdir(parents=True)
+        os.rename(worktree, entry / "tree")
+        # Something else took its place meanwhile.
+        worktree.mkdir()
+        reply = self.request("forget", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        left = self.state / "trash" / (roost.LEFT + entry.name)
+        self.assertIn("worktree " + str(left / "tree"), reply["result"]["leftBehind"])
+        roost.empty_trash(roost.Store(str(self.state)))
+        self.assertTrue((left / "tree" / "hello").is_file())
 
     def test_the_trash_keeps_an_entry_whose_record_is_damaged(self):
         task = self.create()

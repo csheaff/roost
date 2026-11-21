@@ -570,7 +570,7 @@ What each step leaves if it stops there, and what asking again does.
 | 1 | read record, ask forge | none, then none | nothing changed |
 | 2 | `require_not_removing` | registry | refused, nothing changed |
 | 3 | `require_finished`, pane ownership; `permission` at Codex's plan menu counts as finished. Then `require_offers_named`: the record holds no offer but those the request says its question named (`offers`) | registry | refused, nothing changed |
-| 4 | `put_back_removed`: first `finish_trashed`, a move into the trash cut short finished; then, if `removing`, Git's removal cut short put back | registry | Git forgets a worktree in the trash; restores tracked files, its link |
+| 4 | `put_back_removed`: first, but on a dry run, `finish_trashed`, a move into the trash cut short finished, which a dry run's `require_nothing_kept` passes over (`pending_trash`); then, if `removing`, Git's removal cut short put back | registry | Git forgets a worktree in the trash; restores tracked files, its link |
 | 5 | `check_worktree`, clean, submodules, Git lock, agent work | registry | refused, nothing changed |
 | 6 | branch moved from `expect`, then merge, into `integrationBranch` as the record has it then; the record read again after, with `require_finished`, `require_clean` and `require_offers_named` again | registry, released while Git merges | see next machine; a second merge finds it there. Refused after: merged, and not retired |
 | 7 | `safe_to_delete`, by `integrationBranch` and `startCommit` as the record has them now; save `retiringCommit` | registry | |
@@ -589,8 +589,10 @@ again, `offers` against the offers the record holds (`require_offers_named`),
 there (refused then with the agent stopped), removal with force, branch, record. No checkpoint: `expect`, `told` and
 `offers` are the guards, and a retry asks Emacs for a new dry run.
 
-`forget`: step 2, then no live pane, `require_offers_named`, the window closed and
-`Store.remove`, in one hold of the registry lock.
+`forget`: step 2, then no live pane, `require_offers_named`, the window closed,
+what the trash holds of the task put back at its worktree's path, or kept as
+`.left-…` where something took it (`untrash`), and `Store.remove`, in one hold
+of the registry lock.
 
 What `stop` ends, the one rule (`left_running`, with `pane_sessions`), read before the panes close:
 - the agent's and the shell's panes' own sessions;

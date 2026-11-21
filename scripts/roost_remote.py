@@ -6816,20 +6816,57 @@ def finish_trashed(store, task):
     the trash beside it, or, on another file system, is deleted, as
     `unregister_gone` deletes it. Nothing for a worktree back at its path,
     or never moved."""
+    entry = pending_trash(store, task)
+    if entry is None or not Path(task["repo"]).is_dir():
+        return
+    gitdir = kept_of_gone(task["repo"], Path(task["worktree"]).resolve())
+    if gitdir is None:
+        return
+    try:
+        os.rename(gitdir, entry / "git")
+    except OSError:
+        shutil.rmtree(gitdir)
+
+
+def pending_trash(store, task):
+    """The trash entry of a move of TASK's worktree that a crash cut short
+    between its two renames, which `finish_trashed` completes, or None."""
+    if os.path.lexists(task["worktree"]):
+        return None
+    return next((entry for entry in trash_entries(store, task["id"])
+                 if (entry / "tree").is_dir() and not os.path.lexists(entry / "git")), None)
+
+
+def untrash(store, task):
+    """Before TASK's record goes without a retire, as `forget` drops it:
+    put back what the trash holds of its worktree, which the record kept
+    from being deleted, where nothing has taken its place; or else keep it
+    there as LEFT, which no run deletes. The paths it is at now."""
     worktree = Path(task["worktree"])
-    if os.path.lexists(worktree) or not Path(task["repo"]).is_dir():
-        return
+    at = []
     for entry in trash_entries(store, task["id"]):
-        if not (entry / "tree").is_dir():
-            continue
-        gitdir = kept_of_gone(task["repo"], worktree.resolve())
-        if gitdir is None:
-            return
+        tree, kept = entry / "tree", entry / "git"
+        with contextlib.suppress(OSError, ValueError):
+            if tree.is_dir() and not os.path.lexists(worktree):
+                said = (tree / ".git").read_bytes()
+                if not said.startswith(b"gitdir:"):
+                    raise ValueError
+                gitdir = worktree / os.fsdecode(said[len(b"gitdir:"):].strip())
+                if os.path.lexists(kept):
+                    if os.path.lexists(gitdir):
+                        raise ValueError
+                    os.rename(kept, gitdir)
+                os.rename(tree, worktree)
+                entry.rmdir()
+                at.append(worktree)
+                continue
+        left = entry.with_name(LEFT + entry.name)
         try:
-            os.rename(gitdir, entry / "git")
+            os.rename(entry, left)
+            at.append(left / "tree" if (left / "tree").is_dir() else left)
         except OSError:
-            shutil.rmtree(gitdir)
-        return
+            at.append(entry)
+    return at
 
 
 def unrecorded_entry(store, path):
@@ -7989,7 +8026,9 @@ def discard(store, task, expect=None, dry_run=False, teardown=None, told=None, o
     ref = "refs/heads/" + branch
     commit = git(repo, "rev-parse", ref + "^{commit}").stdout.strip() if branch_exists else None
     unlinked = worktree_exists and not linked(worktree)
-    if unlinked or not worktree_exists:
+    # A preview leaves a move into the trash cut short for the discard to
+    # finish, which began with nothing there to keep.
+    if (unlinked or not worktree_exists) and not (dry_run and pending_trash(store, task)):
         require_nothing_kept(repo, worktree, unlinked, bool(task.get("removing")))
     # The worktrees its agent made go with it.
     work = [entry for entry in agent_work(task, seen=not dry_run) if entry["made"]]
@@ -8046,8 +8085,10 @@ def forget(store, task, offers=None):
     if inventory:
         close_panes(task, inventory, check=False)
     left = []
+    trashed = untrash(store, task)
     if Path(task["worktree"]).exists():
         left.append("worktree " + task["worktree"])
+    left += ["worktree " + str(path) for path in trashed if str(path) != task["worktree"]]
     if Path(task["repo"]).is_dir() and ref_exists(task["repo"], task.get("branch")):
         left.append("branch " + task["branch"])
     store.remove(task["id"])
