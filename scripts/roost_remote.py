@@ -58,7 +58,7 @@ ENDED = ("stopped", "exited", "failed", "crashed")
 TRANSIENT = ("live", "diff", "dirty", "files", "size", "ahead", "behind", "update", "worktreeMissing",
              "prStatus", "unpushed", "lastMessage", "gitStamp", "agentWork", "merging", "landed", "conflicts",
              "sinceLooked", "teardownFailure", "teardownOutput", "worktreePr", "worktreeHead", "branchTip",
-             "leftBehind", "note", "kept")
+             "leftBehind", "note", "kept", "worktreeCutShort")
 LAST_MESSAGE_TAIL = 256 * 1024
 LAST_MESSAGE_LIMIT = 2000
 INTERRUPT_TAIL = 64 * 1024
@@ -678,6 +678,22 @@ def unmade(task):
 
 
 UNMADE = "Roost is still making the task's worktree, in its terminal"
+
+
+def cut_short(task):
+    """Whether Git was cut short making TASK's worktree, as when its host
+    restarts, which its `initializing` lock says: no run makes it now, and
+    nothing proves only Git wrote there since, so only a discard takes it."""
+    repo = task["repo"]
+    with contextlib.suppress(RoostError, OSError):
+        return (unmade(task) and Path(repo).is_dir() and os.path.lexists(task["worktree"])
+                and initializing(repo, Path(task["worktree"]).resolve()))
+    return False
+
+
+def cut_short_refusal(task):
+    return ("Git was cut short making the task's worktree, as when its host restarts, so what is there may not be "
+            "Git's alone; look at %s, then discard the task" % shown(task["worktree"]))
 
 
 def require_worktree(task, gone="Task worktree is gone"):
@@ -3482,6 +3498,10 @@ def list_tasks(store, request):
                 changed = True
         if changed:
             store.note(task)
+        # Said of each task yet to have its worktree, whether so or not,
+        # as Emacs keeps the last that was said.
+        if unmade(task) and not task["live"]:
+            task["worktreeCutShort"] = cut_short(task)
     return tasks
 
 
@@ -7024,10 +7044,10 @@ def empty_trash(store):
     none is left: under a lock of its own, so one run at a time does it.
     What a run cut short was deleting, it finishes. An entry of a task
     still recorded stays, as a retire that failed after moving its worktree
-    there. A folder made read-only, as Go's module cache makes them, is
-    made writable to delete what is in it. What still can't be deleted, as
-    files a container made as root, is set aside as LEFT, and the rest
-    deleted."""
+    there. A folder made read-only, as Go's module cache makes them, or
+    that can't be read, as a test leaves one, is made writable to delete
+    what is in it. What still can't be deleted, as files a container made
+    as root, is set aside as LEFT, and the rest deleted."""
     folder = store.root / TRASH
     if not folder.is_dir():
         return
@@ -7036,12 +7056,21 @@ def empty_trash(store):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return
+        listed = set()
         def writable(function, path, _):
             with contextlib.suppress(OSError):
                 os.chmod(os.path.dirname(path), 0o700)
                 if os.path.isdir(path) and not os.path.islink(path):
                     os.chmod(path, 0o700)
-                function(path)
+                    # One it couldn't list, which rmtree passes over: what
+                    # is in it, now that it can, tried once.
+                    if function in (os.open, os.scandir, os.listdir) and path not in listed:
+                        listed.add(path)
+                        shutil.rmtree(path, onerror=writable)
+                        return
+                # Not os.open, os.close or the like, which take more than a path.
+                if function in (os.rmdir, os.unlink, os.remove):
+                    function(path)
         while True:
             going = []
             with contextlib.suppress(OSError):
@@ -7231,35 +7260,80 @@ def tend_ready(store, repo, commit, keep=True):
     tend_wanted(store)
 
 
-def tend_one(store, repo, commit, keep):
-    """Have one worktree made ahead for REPO, at COMMIT: made, or moved
-    there, as Git checks out only the files that differ; without KEEP,
-    none. What a run cut short left goes, as does one made ahead and not
-    taken in READY_DAYS, or for a repository gone. Under `.tending`."""
+def unwanted_ready(said, old):
+    """Whether the worktree made ahead whose mark says SAID goes, with no
+    run at it: not ready, as one a run cut short, or taken and not moved;
+    made before OLD, a time; or of a repository gone."""
+    made = said.get("madeAt")
+    return (said.get("ready") is not True or not isinstance(made, (int, float)) or made < old
+            or not isinstance(said.get("repo"), str) or not Path(said["repo"]).is_dir())
+
+
+def sweep_ready(store, repo=None, keep=False):
+    """Remove each worktree made ahead that `unwanted_ready` says goes,
+    and REPO's, if given, but one to KEEP, which is returned, as (mark,
+    what it says), marked not ready while it moves. A folder with no mark
+    goes too. Under `.tending`, so that no run is at any of them."""
     folder = store.root / READY
     old = time.time() - READY_DAYS * 86400
     going, kept = [], None
     with ready_locked(store):
         for mark, said in ready_marks(store):
-            made = said.get("madeAt")
-            stale = not isinstance(made, (int, float)) or made < old
-            gone = not isinstance(said.get("repo"), str) or not Path(said["repo"]).is_dir()
-            if said.get("repo") == repo and said.get("ready") is True and keep and kept is None and not stale:
+            mine = repo is not None and said.get("repo") == repo
+            if mine and keep and kept is None and not unwanted_ready(said, old):
                 kept = (mark, said)
                 # Not taken while it moves.
                 atomic_json(mark, dict(said, ready=False))
-            elif said.get("ready") is not True or stale or gone or said.get("repo") == repo:
-                # Not ready is cut short, or taken and not moved: no
-                # other run is at it now.
+            elif mine or unwanted_ready(said, old):
                 atomic_json(mark, dict(said, ready=False))
                 going.append((mark, said))
-        # A folder with no mark is what a run cut short left as it began.
+        # What a run cut short left as it began.
         with contextlib.suppress(OSError):
             for entry in folder.iterdir():
                 if READY_ENTRY.fullmatch(entry.name) and not entry.with_suffix(".json").exists():
                     shutil.rmtree(entry, ignore_errors=True)
     for mark, said in going:
         drop_ready(store, mark, said)
+    return kept
+
+
+def prune_ready_later(root):
+    """Remove, in a process of its own, the worktrees made ahead that no
+    task will take, as a listing finds them (`sweep_ready`): one not taken
+    in READY_DAYS goes even if no task starts in its project again. Only
+    when there is one, and no run is at them, which would remove it."""
+    store = Store(root)
+    folder = store.root / READY
+    old = time.time() - READY_DAYS * 86400
+    try:
+        if not (any(unwanted_ready(said, old) for _, said in ready_marks(store))
+                or any(READY_ENTRY.fullmatch(entry.name) and not entry.with_suffix(".json").exists()
+                       for entry in folder.iterdir())):
+            return
+        with (folder / ".tending").open("a") as tending:
+            fcntl.flock(tending, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        # None made ahead, or a run at them.
+        return
+    def work():
+        with contextlib.suppress(OSError):
+            os.nice(10)
+        with (folder / ".tending").open("a") as tending:
+            try:
+                fcntl.flock(tending, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return
+            sweep_ready(store)
+    in_background(work)
+
+
+def tend_one(store, repo, commit, keep):
+    """Have one worktree made ahead for REPO, at COMMIT: made, or moved
+    there, as Git checks out only the files that differ; without KEEP,
+    none. What a run cut short left goes, as does one made ahead and not
+    taken in READY_DAYS, or for a repository gone. Under `.tending`."""
+    folder = store.root / READY
+    kept = sweep_ready(store, repo, keep)
     if not keep or not runs_hooks_alone():
         return
     if kept:
@@ -7282,8 +7356,23 @@ def tend_one(store, repo, commit, keep):
     atomic_json(mark, dict(said, ready=True))
 
 
-def tend_ready_later(root, repo, commit, keep=True):
-    """`tend_ready` in a process of its own, once this request has replied."""
+# How long a run tending the worktrees made ahead waits, at most, for the
+# task it follows to start: one held at a startup prompt waits for you.
+READY_WAIT_SECONDS = 600
+
+
+def started(store, task_id):
+    """Whether the task TASK_ID is past what its terminal shows before its
+    agent starts, as Git's checkout, submodules and setup, or is gone."""
+    record = store.recorded(task_id)
+    return not record or record.get("status") != "starting" or "launched" in record
+
+
+def tend_ready_later(root, repo, commit, keep=True, after=None):
+    """`tend_ready` in a process of its own, once this request has replied,
+    and once AFTER, the ID of the task it follows, has started, if given:
+    a checkout ahead, beside the one in that task's terminal or its setup,
+    slows what you wait for there."""
     store = Store(root)
     # Nothing to turn off where none was ever made or wished for.
     if not keep and not (store.root / READY).is_dir():
@@ -7293,6 +7382,9 @@ def tend_ready_later(root, repo, commit, keep=True):
         # Behind what the task it follows is starting.
         with contextlib.suppress(OSError):
             os.nice(10)
+        deadline = time.monotonic() + READY_WAIT_SECONDS
+        while after and not started(store, after) and time.monotonic() < deadline:
+            time.sleep(0.25)
         tend_wanted(store)
     in_background(work)
 
@@ -7879,6 +7971,9 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
     worktree = check_worktree(store, task)
     worktree_exists = worktree.exists()
     branch_exists = ref_exists(repo, branch)
+    # Rather than call what Git checked out uncommitted, or its lock yours.
+    if cut_short(task):
+        raise RoostError(cut_short_refusal(task))
     if worktree_exists:
         require_clean(str(worktree))
         # Before stopping the agent, rather than fail halfway through.
@@ -10448,8 +10543,7 @@ def make_worktree(store, task_id, run_id, env):
         if not ref_exists(repo, branch):
             raise RoostError("The task's branch %s is gone, so it has no worktree; discard the task" % branch)
         if initializing(repo, worktree.resolve()):
-            raise RoostError("Making the task's worktree stopped partway, as when its host restarts, and what is "
-                             "there may not be Git's alone; look at %s, then discard the task" % shown(str(worktree)))
+            raise RoostError(cut_short_refusal(task))
         if not os.path.lexists(worktree):
             unregister_gone(repo, worktree.resolve())
             worktree.parent.mkdir(parents=True, exist_ok=True)
@@ -10929,13 +11023,17 @@ def main():
         if isinstance(request, dict) and request.get("action") in FINISHING + ("list",):
             with contextlib.suppress(OSError, RoostError, KeyError, TypeError):
                 empty_trash_later(request["root"])
+        # And worktrees made ahead that no task will take, as one not taken in a week.
+        if isinstance(request, dict) and request.get("action") == "list":
+            with contextlib.suppress(OSError, RoostError, KeyError, TypeError):
+                prune_ready_later(request["root"])
         # A worktree made ahead for the next task in this one's repository.
         made = answered.get("result") if isinstance(answered, dict) and answered.get("ok") else None
         if (isinstance(request, dict) and request.get("action") == "create" and isinstance(made, dict)
                 and not made.get("alreadyMade") and not made.get("conversation")):
             with contextlib.suppress(OSError, RoostError, KeyError, TypeError):
                 tend_ready_later(request["root"], made["repo"], made["startCommit"],
-                                 keep=request.get("ready") is True)
+                                 keep=request.get("ready") is True, after=made["id"])
     elif mode in ("hook", "hook-env"):
         # Observational hooks never emit decision-control JSON or fail
         # the coding session just because its status dashboard is unavailable.

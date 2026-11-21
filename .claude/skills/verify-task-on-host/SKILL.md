@@ -126,7 +126,15 @@ the worktree "partly" there between them; a rename is the same two steps
 with nothing between, a subset of the runs checked, and Git's removal
 stays as the fallback, so no step changed. What is in the trash holds
 nothing to keep: it went there only after the checks that `RemoveWorktree`
-stands for.
+stands for. How `empty_trash` deletes it, a folder it can't list made
+writable first, is after the record has gone, and has no step either.
+
+A task whose worktree its runner makes in its terminal (`make_worktree`)
+starts with none, and one Git was cut short making, as when its host
+restarts, has Git's `initializing` lock on it. `retire` and `merge` refuse
+that one first, saying so (`cut_short`), and only `discard` removes it, as
+any worktree, its contents counted (`unlock_unmade`). Both belong to
+creation, which this model leaves out, so it has no step for them yet.
 
 Last confirmed against the code at commit `951ce59`, with the change that
 came after it: `stop` ends what its agent and shell left running

@@ -442,6 +442,30 @@ class Lifecycle(unittest.TestCase):
             self.assertFalse(os.path.lexists(path), path)
         self.assertEqual(self.listed_worktrees(), [repo, str(ready.resolve())])
 
+    def test_a_listing_clears_one_not_taken_for_a_week_with_no_task_started(self):
+        repo = str(self.repo.resolve())
+        self.tend()
+        [old] = self.ready_worktrees()
+        mark = old.with_suffix(".json")
+        listing = json.dumps(dict(root=str(self.state), action="list"))
+        def listed():
+            done = subprocess.run([sys.executable, roost.__file__, "rpc"], input=listing, capture_output=True,
+                                  text=True, timeout=30)
+            self.assertTrue(json.loads(done.stdout)["ok"], done)
+        # One made this week stays, for the next task.
+        listed()
+        time.sleep(0.5)
+        self.assertEqual(self.ready_worktrees(), [old])
+        roost.atomic_json(mark, dict(json.loads(mark.read_text()), madeAt=time.time() - 8 * 86400))
+        listed()
+        deadline = time.monotonic() + 10
+        # Its folder goes first, then its mark.
+        while (os.path.lexists(old) or mark.exists()) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertFalse(os.path.lexists(old))
+        self.assertFalse(mark.exists())
+        self.assertEqual(self.listed_worktrees(), [repo])
+
     def test_a_post_checkout_hook_runs_in_the_task_taken_from_one_made_ahead(self):
         self.tend()
         log = self.root / "hook.log"
@@ -466,6 +490,25 @@ class Lifecycle(unittest.TestCase):
             time.sleep(0.05)
         [ready] = self.ready_worktrees()
         self.assertEqual(self.git("rev-parse", "HEAD", cwd=ready), self.git("rev-parse", "HEAD"))
+
+    def test_the_next_worktree_is_made_ahead_once_the_task_has_started(self):
+        # Not beside the checkout in the task's terminal, which you wait for.
+        self.slow_checkout(files=3)
+        request = json.dumps(dict(root=str(self.state), action="create", directory=str(self.repo), name="task",
+                                  socket=self.socket, command=[sys.executable, str(FAKE)], ready=True,
+                                  worktreeInTerminal=True))
+        done = subprocess.run([sys.executable, roost.__file__, "rpc"], input=request, capture_output=True,
+                              text=True, timeout=30)
+        task = json.loads(done.stdout)["result"]
+        store = roost.Store(str(self.state))
+        while store.read(task["id"]).get("worktreeComplete") is False:
+            self.assertEqual(list((self.state / "ready").glob("*.json")), [])
+            time.sleep(0.05)
+        self.wait(task, "ready", seconds=15)
+        deadline = time.monotonic() + 15
+        while not self.ready_worktrees() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertEqual(len(self.ready_worktrees()), 1)
 
     def slow_checkout(self, files=6, smudge="sleep 1; cat"):
         """Make each of FILES files take a while to check out, as Git LFS's do."""
@@ -548,7 +591,7 @@ class Lifecycle(unittest.TestCase):
                     (worktree / "yours").write_text("written since\n")
                     self.assertTrue(self.request("resume", id=task["id"])["ok"])
                     record = self.wait(task, "failed")
-                    self.assertIn("stopped partway", record["error"])
+                    self.assertIn("cut short", record["error"])
                     self.assertEqual((worktree / "yours").read_text(), "written since\n")
                     told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
                     self.assertEqual((worktree / "yours").read_text(), "written since\n")
@@ -580,8 +623,10 @@ class Lifecycle(unittest.TestCase):
                 os.killpg(pid, signal.SIGKILL)
                 self.wait_for_pane_exit(task)
                 self.assertTrue(roost.initializing(str(self.repo), worktree.resolve()))
-                # As Emacs's next refresh finds it: its runner gone.
-                self.request("list")
+                # As Emacs's next refresh finds it: its runner gone, and Git
+                # cut short, which says that only a discard takes it.
+                listed = {entry["id"]: entry for entry in self.request("list")["result"]}[task["id"]]
+                self.assertIs(listed["worktreeCutShort"], True)
                 if action == "discard":
                     told = self.request("discard", id=task["id"], dryRun=True)
                     self.assertTrue(told["ok"], told)
@@ -591,8 +636,13 @@ class Lifecycle(unittest.TestCase):
                     reply = self.request("discard", id=task["id"], expect=told["commit"], told=told)
                     self.assertTrue(reply["ok"], reply)
                 else:
-                    # Retiring keeps what may be yours, as for any worktree.
-                    self.assertFalse(self.request("retire", id=task["id"])["ok"])
+                    # Retiring keeps what may be yours, as for any worktree,
+                    # and says why, rather than call Git's files yours.
+                    for refused in ("retire", "merge"):
+                        reply = self.request(refused, id=task["id"])
+                        self.assertFalse(reply["ok"])
+                        self.assertTrue(reply["error"].startswith("Git was cut short making the task's worktree"),
+                                        reply)
                     self.assertTrue((worktree / "file0.bin").exists())
                     continue
                 self.assertFalse(os.path.lexists(worktree))
@@ -607,6 +657,9 @@ class Lifecycle(unittest.TestCase):
                                     command=[sys.executable, str(FAKE)], worktreeInTerminal=True)["result"]
                 self.assertTrue(self.request("stop", id=task["id"])["ok"])
                 self.wait_for_pane_exit(task)
+                # Git took back what it made: nothing was cut short.
+                listed = {entry["id"]: entry for entry in self.request("list")["result"]}[task["id"]]
+                self.assertIs(listed["worktreeCutShort"], False)
                 if action == "discard":
                     told = self.request("discard", id=task["id"], dryRun=True)
                     self.assertTrue(told["ok"], told)
@@ -836,6 +889,14 @@ class Lifecycle(unittest.TestCase):
         locked = Path(task["worktree"]) / "cache"
         (locked / "pkg").mkdir(parents=True)
         (locked / "pkg" / "file").write_text("x\n")
+        # And folders that can't be listed, one inside another, as a test
+        # of permissions leaves them: in one run, not one a refresh.
+        hidden = [locked / "secret", locked / "secret" / "deeper", locked / "other"]
+        for folder in hidden:
+            folder.mkdir()
+            (folder / "file").write_text("x\n")
+        for folder in reversed(hidden):
+            folder.chmod(0o000)
         (self.repo / ".git" / "info" / "exclude").write_text("cache/\n")
         (locked / "pkg").chmod(0o555)
         locked.chmod(0o555)

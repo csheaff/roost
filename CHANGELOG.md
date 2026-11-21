@@ -11,7 +11,8 @@ What each release changes, and what to do when upgrading. Newest first.
   checkout runs in the terminal instead. Until the worktree is made,
   Magit, the files and the diff say it is still being made, and retiring
   or discarding is refused until it's done. Stopped partway, resuming the task (`s`) makes it again; cut short
-  by a host restarting, it is kept for you to discard. Nothing to do when upgrading.
+  by a host restarting, it is kept for you to discard, which the panel says
+  and `x` offers, rather than calling Git's files your changes. Nothing to do when upgrading.
 - Starting a task in a project whose `.dir-locals.el` sets a risky
   variable, such as `roost-teardown-command`, asks about it once again,
   rather than twice since the worktrees made ahead.
@@ -21,13 +22,16 @@ What each release changes, and what to do when upgrading. Newest first.
   project Emacs hears back in under half a second rather than 2.8 s. It costs one
   more checkout per project, shown by `git worktree list`; set
   `roost-ready-worktrees` to `nil`, globally or per project, to turn it
-  off. Nothing to do when upgrading.
+  off. It is made once the task before has started, so as not to slow the
+  checkout or setup in that task's terminal, and one not taken in a week
+  goes at the next refresh. Nothing to do when upgrading.
 - Retiring or discarding a task no longer waits for its worktree to be
   deleted. Once the checks pass, the worktree is moved into the state
   folder's `trash/` in one rename and its files are deleted in the
   background: on a 37,000-file worktree, retiring went from 2.2 s to
   0.6 s. A worktree on another file system than the state folder is
-  removed by Git, as before. Nothing to do when upgrading.
+  removed by Git, as before. Folders that can't be listed, as a test of
+  permissions leaves them, are deleted in the same run. Nothing to do when upgrading.
 - The helper times each step of starting and finishing a task, from
   `git worktree add` and the setup command to the agent coming up, and
   from the checks before deleting to removing the worktree, in the state

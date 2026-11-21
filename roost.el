@@ -1566,9 +1566,10 @@ A reply to create read before then can come after.")
     ;; Quiet polls skip Git and the latest reply; keep the last full refresh's.
     ;; Not what GitHub said of a pull request since recorded otherwise, as
     ;; by another Emacs: closed, or another in its place.
+    ;; Nor whether Git was cut short making its worktree, which a listing alone says.
     (dolist (field '(diff dirty files size ahead behind worktreeMissing worktreeBranch worktreeHead worktreePr
                             prStatus unpushed lastMessage gitStamp agentWork merging landed conflicts sinceLooked
-                            branchTip))
+                            branchTip worktreeCutShort))
       (unless (or (assoc field task)
                   (and (eq field 'prStatus)
                        (not (equal (roost--field task 'pr) (roost--field old 'pr)))))
@@ -9362,7 +9363,9 @@ When its work is merged, or it has none, retire it.  When it holds work
 nothing else has, offer to discard it, saying what that loses: `m'
 merges its commits instead, and for work not yet committed, `r' opens
 Magit to commit it.  With its worktree on another branch, which its host
-won't retire, offer to discard it, which keeps that branch.  An agent
+won't retire, offer to discard it, which keeps that branch.  So too for
+one whose worktree Git was cut short making, as when its host restarts,
+as Roost can't tell that only Git wrote there.  An agent
 that reports work left in the background is stopped first, once you say
 so: its work runs in the worktree this removes."
   (interactive)
@@ -9398,6 +9401,11 @@ so: its work runs in the worktree this removes."
                                         "\\<roost-task-info-mode-map>\\[roost-review] commits it in Magit"
                                       "\\<roost-task-info-mode-map>\\[roost-merge-retire] merges it")))))
                     (roost-discard task))))
+         (cut-short (lambda ()
+                      (when (y-or-n-p (format "Git was cut short making %s's worktree, as when its host restarts, \
+so Roost can't tell that only Git wrote there.  Discard the task? "
+                                              name))
+                        (roost-discard task))))
          (retire (lambda (task)
                    (roost--act task "retire" (list (roost--offers-named named))
                                (lambda (retired)
@@ -9415,10 +9423,14 @@ so: its work runs in the worktree this removes."
                                       key listed
                                       (lambda ()
                                         (funcall offer (if (equal branch "a detached HEAD") "HEAD" branch))))))
+                                  ((string-prefix-p "Git was cut short making" err)
+                                   (roost--ask-after-reply key listed cut-short))
                                   (t (roost--finish-refused task err))))))))
     (cond
      ((member (roost--field task 'status) '("starting" "running" "permission"))
       (user-error "%s's agent is at work; stop it (K) first, or wait" name))
+     ((roost--worktree-cut-short-p task)
+      (funcall cut-short))
      ;; The discard these two offer says itself that it stops the agent,
      ;; and its host stops one however the agent reports itself.
      ((roost--other-branch task)
@@ -9563,8 +9575,12 @@ experiment you don't want; finished work is merged or retired instead."
                                    (format "whatever is in %d submodule repositor%s Git can't read"
                                            unread (if (= unread 1) "y" "ies")))
                                  (when (> changes 0)
-                                   (format "%d uncommitted file%s"
-                                           changes (if (= changes 1) "" "s"))))))
+                                   ;; Most of them Git's checkout, but Roost
+                                   ;; can't tell which.
+                                   (if (roost--worktree-cut-short-p task)
+                                       "what is in its worktree, which Git was cut short making"
+                                     (format "%d uncommitted file%s"
+                                             changes (if (= changes 1) "" "s")))))))
          (label (if (> worktrees 0)
                     (format "%s, with %d worktree%s its agent made,"
                             name worktrees (if (= worktrees 1) "" "s"))
@@ -11184,10 +11200,27 @@ Its host says so with a false `worktreeComplete', which a reply reads
 as nil; a record that has none was made before it ran."
   (and (assq 'worktreeComplete task) (not (roost--field task 'worktreeComplete))))
 
+(defun roost--worktree-cut-short-p (task)
+  "Whether Git was cut short making TASK's worktree, as when its host restarts.
+What is there may not be Git's alone, so only discarding the task takes
+it, and resuming it makes no worktree."
+  (and (roost--worktree-unmade-p task) (roost--field task 'worktreeCutShort) t))
+
 (defun roost--require-worktree (task)
-  "Refuse to open TASK's worktree before its runner has made it."
+  "Refuse to open TASK's worktree before its runner has made it.
+Saying why, and what to do: wait, resume it, or discard it."
   (when (roost--worktree-unmade-p task)
-    (user-error "Roost is still making %s's worktree, in its terminal" (roost--field task 'name))))
+    (let ((name (roost--field task 'name)))
+      (cond ((roost--worktree-cut-short-p task)
+             (user-error (substitute-command-keys
+                          "Git was cut short making %s's worktree, as when its host restarts; \
+\\<roost-task-info-mode-map>\\[roost-retire] discards the task")
+                         name))
+            ((roost--agent-running-p task)
+             (user-error "Roost is still making %s's worktree, in its terminal" name))
+            (t (user-error (substitute-command-keys
+                            "%s's worktree isn't made yet; \\<roost-task-info-mode-map>\\[roost-resume] makes it")
+                           name))))))
 
 (defun roost--action-applies-p (task command)
   "Whether COMMAND makes sense for TASK as last seen.
@@ -11206,7 +11239,8 @@ Unknown Git statistics count as making sense."
       ('roost-shell (and worktree (not (member (roost--field task 'status) '("stopped" "crashed")))))
       ((or 'roost-files 'roost-review 'roost-diff 'roost-mark-looked 'roost-update) worktree)
       ((or 'roost-send 'roost-stop) (roost--agent-running-p task))
-      ('roost-resume (and (not (roost--field task 'worktreeMissing)) (not (roost--agent-running-p task))))
+      ('roost-resume (and (not (roost--field task 'worktreeMissing)) (not (roost--worktree-cut-short-p task))
+                          (not (roost--agent-running-p task))))
       ;; A conversation's branch is Roost's own, with nothing to propose or merge.
       ('roost-pr (and worktree (not (roost--conversation-p task))
                       (or (roost--field task 'pr) (not (eql ahead 0)))))
@@ -11249,6 +11283,9 @@ where RET would pick the agent's default answer, so no key is named."
      ((roost--field task 'worktreeMissing)
       (concat "Its worktree is gone: " (funcall key "x") " retires it if its work is merged, "
               (funcall key "X") " forgets it"))
+     ((roost--worktree-cut-short-p task)
+      (concat "Git was cut short making its worktree, as when its host restarts: "
+              (funcall key "x") " discards the task"))
      ;; Whether its agent is still there or not.
      ((equal status "merged") (funcall retire))
      ((equal status "error")

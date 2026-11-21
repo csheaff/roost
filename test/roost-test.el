@@ -17626,6 +17626,53 @@ it of the same ID's, or nil for the first."
      (dolist (made '(((worktreeComplete . t)) ()))
        (should-not (roost--worktree-unmade-p `((id . "1") ,@made)))))))
 
+(ert-deftest roost-a-worktree-not-made-says-why-and-what-to-do ()
+  ;; Being made, stopped before it was, and cut short as when its host
+  ;; restarts: each says what to do, and only a discard takes the last.
+  (roost-test--isolated
+   (let* ((making '((id . "1") (name . "making") (status . "starting") (live . t) (worktreeComplete)))
+          (stopped '((id . "2") (name . "stopped") (status . "stopped") (live) (worktreeComplete)
+                     (worktreeCutShort)))
+          (cut '((id . "3") (name . "cut") (status . "crashed") (live) (worktreeComplete)
+                 (worktreeCutShort . t)))
+          (said (lambda (task)
+                  (condition-case err (progn (roost--require-worktree task) nil)
+                    (user-error (error-message-string err))))))
+     (should (string-match-p "\\`Roost is still making making.s worktree" (funcall said making)))
+     (should (string-match-p "\\`stopped.s worktree isn.t made yet; s makes it\\'" (funcall said stopped)))
+     (should (string-match-p "\\`Git was cut short making cut.s worktree.*; x discards the task\\'"
+                             (funcall said cut)))
+     (should-not (roost--worktree-cut-short-p stopped))
+     ;; A worktree made since says nothing of it.
+     (should-not (roost--worktree-cut-short-p '((worktreeComplete . t) (worktreeCutShort . t))))
+     (should (roost--action-applies-p stopped #'roost-resume))
+     (should-not (roost--action-applies-p cut #'roost-resume))
+     (should (roost--action-applies-p cut #'roost-retire))
+     (should (string-match-p "cut short making its worktree.*: x discards the task\\'" (roost--next-step cut)))
+     ;; x asks to discard it, saying why, rather than to retire it.
+     (let (asked discarded)
+       (cl-letf (((symbol-function 'roost--choose) (lambda (task) task))
+                 ((symbol-function 'y-or-n-p) (lambda (prompt) (push prompt asked) t))
+                 ((symbol-function 'roost-discard) (lambda (task) (push task discarded)))
+                 ((symbol-function 'roost--act) (lambda (&rest _) (error "Asked its host to retire it"))))
+         (roost-retire cut))
+       (should (string-match-p "\\`Git was cut short making cut's worktree.*Discard the task\\? \\'" (car asked)))
+       (should (equal discarded (list cut))))
+     ;; Discarding says what goes without counting Git's files as yours.
+     (let (asked)
+       (cl-letf (((symbol-function 'roost--choose) (lambda (task) task))
+                 ((symbol-function 'roost--request-wait)
+                  (lambda (&rest _) '((discard (commits . 0) (changes . 44225) (commit . "abc")))))
+                 ((symbol-function 'read-string) (lambda (prompt &rest _) (setq asked prompt) ""))
+                 ((symbol-function 'message) #'ignore))
+         (roost-discard cut))
+       (should (string-match-p "loses what is in its worktree, which Git was cut short making\\." asked))
+       (should-not (string-match-p "44225" asked)))
+     ;; A reply that doesn't say, as to a stop, keeps what a listing said.
+     (roost--cache-task nil cut)
+     (roost--cache-task nil (assq-delete-all 'worktreeCutShort (copy-alist cut)))
+     (should (roost--worktree-cut-short-p (gethash (roost--key cut) roost--tasks))))))
+
 (ert-deftest roost-shows-a-page-where-emacs-can-draw-one ()
   ;; A page an agent wrote is shown as an image is, in the same buffer,
   ;; where this Emacs has a web view; elsewhere Roost says it can't.
