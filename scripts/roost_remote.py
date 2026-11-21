@@ -2499,7 +2499,19 @@ def undo_creation(store, task):
     if not (isinstance(repo, str) and isinstance(worktree, str) and Path(repo).is_dir()):
         return
     worktree = Path(worktree)
-    if initializing(repo, worktree.resolve()):
+    if initializing(repo, worktree.resolve(), TAKING):
+        git(repo, "worktree", "unlock", str(worktree), check=False)
+        # Its branch not checked out yet, nothing but Git wrote there; once
+        # it is, the hook may have, which `abandon` keeps.
+        if not (worktree.is_dir() and on_task_branch(worktree, task.get("branch"))):
+            git(repo, "worktree", "remove", "--force", "--force", str(worktree), check=False)
+            if not os.path.lexists(worktree):
+                with contextlib.suppress(RoostError, OSError):
+                    unregister_gone(repo, worktree.resolve())
+                with contextlib.suppress(RoostError):
+                    delete_branch(repo, task["branch"], task["baseCommit"])
+                return
+    elif initializing(repo, worktree.resolve()):
         # Git locks a worktree as it makes it, and was stopped partway: it
         # holds Git's checkout and nothing else, as no agent ever ran there.
         if os.path.lexists(worktree):
@@ -2518,16 +2530,21 @@ def undo_creation(store, task):
         abandon(store, task)
 
 
-def initializing(repo, worktree):
+def initializing(repo, worktree, reason="initializing"):
     """Whether Git is making WORKTREE, one of REPO's, or was stopped partway:
     Git locks it as "initializing" until its checkout is done, and the lock
     file says so whatever Git's version lists. A lock its post-checkout
-    hook took, or yours, isn't that."""
+    hook took, or yours, isn't that. With REASON, whether it is locked
+    for that, as TAKING."""
     for gitdir, path in linked_worktrees(repo):
         if Path(path).resolve() == worktree:
             with contextlib.suppress(OSError, UnicodeDecodeError):
-                return (gitdir / "locked").read_text().strip() == "initializing"
+                return (gitdir / "locked").read_text().strip() == reason
     return False
+
+
+# The lock on a worktree made ahead as a task takes it.
+TAKING = "roost: taking a worktree made ahead"
 
 
 def creation_notes(store):
@@ -2964,9 +2981,10 @@ def take_ready_for(store, task, existed):
     repo, worktree, branch, commit = task["repo"], Path(task["worktree"]), task["branch"], task["baseCommit"]
     if not take_ready(store, repo, worktree):
         return False
-    # Locked as Git locks one it makes until its checkout is done: cut
-    # short meanwhile, it holds only Git's checkout (`undo_creation`).
-    locked = git(repo, "worktree", "lock", "--reason", "initializing", str(worktree), check=False).returncode == 0
+    # Locked until its checkout is done: cut short before its branch is
+    # checked out, it holds only Git's checkout, and no hook has run there
+    # (`undo_creation`).
+    locked = git(repo, "worktree", "lock", "--reason", TAKING, str(worktree), check=False).returncode == 0
     # Its HEAD's reflog begins at the task, as a new worktree's does: the
     # commits it was moved through ahead are none of the task's, which
     # retiring and discarding read there (`reflog_only`).
@@ -2981,10 +2999,10 @@ def take_ready_for(store, task, existed):
     if locked and cleared and not changed_in(worktree):
         made = git_with_hooks(worktree, "-c", "branch.autoSetupMerge=false", "checkout", "-q", "-b", branch,
                               commit, check=False)
-        on_branch = git(worktree, "symbolic-ref", "-q", "HEAD", check=False).stdout.strip() == "refs/heads/" + branch
-        if made.returncode and on_branch:
+        unlocked = git(repo, "worktree", "unlock", str(worktree), check=False).returncode == 0
+        if made.returncode and on_task_branch(worktree, branch):
             raise RoostError(made.stderr.strip() or made.stdout.strip() or "The post-checkout hook failed")
-        if made.returncode == 0 and git(repo, "worktree", "unlock", str(worktree), check=False).returncode == 0:
+        if made.returncode == 0 and unlocked:
             return True
     # Into the trash, rather than deleted file by file as you wait: no
     # record of the task is saved yet, so `empty_trash` deletes it.
@@ -2998,6 +3016,11 @@ def take_ready_for(store, task, existed):
         with contextlib.suppress(RoostError):
             delete_branch(repo, branch, commit)
     return False
+
+
+def on_task_branch(worktree, branch):
+    """Whether WORKTREE has BRANCH checked out."""
+    return git(worktree, "symbolic-ref", "-q", "HEAD", check=False).stdout.strip() == "refs/heads/" + branch
 
 
 def changed_in(worktree):
@@ -7104,10 +7127,9 @@ def want_ready(store, repo, commit, keep=True):
     """Note that REPO wants a worktree made ahead at COMMIT, or, without
     KEEP, none: the latest wish for each repository, which a run tending
     them carries out (`tend_wanted`)."""
-    folder = store.root / READY
-    folder.mkdir(mode=0o700, exist_ok=True)
-    atomic_json(folder / (hashlib.sha256(repo.encode()).hexdigest()[:10] + ".want"),
-                dict(repo=repo, commit=commit, keep=keep, at=uuid.uuid4().hex))
+    with ready_locked(store):
+        atomic_json(store.root / READY / (hashlib.sha256(repo.encode()).hexdigest()[:10] + ".want"),
+                    dict(repo=repo, commit=commit, keep=keep, at=uuid.uuid4().hex))
 
 
 def tend_wanted(store):
@@ -7134,7 +7156,7 @@ def tend_wanted(store):
                         wish = json.loads(said)
                         tend_one(store, wish["repo"], wish["commit"], wish["keep"] is True)
                     # Unless wished again meanwhile.
-                    with contextlib.suppress(OSError):
+                    with ready_locked(store), contextlib.suppress(OSError):
                         if path.read_text() == said:
                             path.unlink()
         # A wish made as this run let go, which no other run took up.
@@ -7204,7 +7226,8 @@ def tend_one(store, repo, commit, keep):
 def tend_ready_later(root, repo, commit, keep=True):
     """`tend_ready` in a process of its own, once this request has replied."""
     store = Store(root)
-    if not keep and not ready_marks(store, repo):
+    # Nothing to turn off where none was ever made or wished for.
+    if not keep and not (store.root / READY).is_dir():
         return
     want_ready(store, repo, commit, keep)
     def work():

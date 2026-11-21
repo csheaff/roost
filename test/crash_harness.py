@@ -205,12 +205,30 @@ class Box:
     def git(self, *args, cwd=None, check=True):
         return self.run(REAL["git"], *args, cwd=cwd, check=check)
 
-    def wait_for_ready(self):
-        """Wait for a run tending the worktrees made ahead, as one a reply started."""
-        tending = self.state / "ready" / ".tending"
-        if tending.exists():
-            with tending.open("a") as lock:
-                fcntl.flock(lock, fcntl.LOCK_EX)
+    def wait_for_ready(self, seconds=60):
+        """Wait for the runs tending the worktrees made ahead, as a reply
+        starts one, to carry out every wish: for at most SECONDS, as one a
+        crash killed leaves its wishes for the next run."""
+        folder = self.state / "ready"
+        deadline = time.monotonic() + seconds
+        while folder.is_dir() and time.monotonic() < deadline:
+            left = False
+            with (folder / ".tending").open("a") as lock:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    pass
+                else:
+                    if not any(folder.glob("*.want")):
+                        return
+                    left = True
+            if left:
+                # Left by a run a crash killed, or not yet begun: carried
+                # out here, unless a run takes them up first.
+                self.run(sys.executable, "-c", "import sys; sys.path.insert(0, %r); import roost_remote as r; "
+                         "r.tend_wanted(r.Store(%r))" % (str(HELPER.parent), str(self.state)))
+                continue
+            time.sleep(0.05)
 
     def tend_ready(self, keep=True):
         """Tend the worktrees made ahead for the repository, once no run is at it."""

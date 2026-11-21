@@ -402,7 +402,7 @@ Invariants:
 | Preparing | an attempt, saying its wording | another of its group was made from other words | Made, of that other | nothing made; that task returned, as one made before | `made_from_other_words`, `make_task` |
 | Preparing | a fork | its source is not Merging, Removing or Removal cut short | Preparing | the source's work read, its worktree lock shared meanwhile | `conversation_to_fork`, `snapshot` |
 | Preparing | | | Noted | note locked before it is in place | `noting_creation` |
-| Noted | asked with `ready` | a worktree made ahead for the repository is Ready | Noted | moved to the task's path, locked `initializing`, branched at the start, checked clean, unlocked; else removed, its branch deleted, and Git makes one | `take_ready_for`, `take_ready` |
+| Noted | asked with `ready` | a worktree made ahead for the repository is Ready | Noted | moved to the task's path, checked clean, locked as TAKING, branched at the start, unlocked; else removed, its branch deleted, and Git makes one | `take_ready_for`, `take_ready` |
 | Noted | Git and spawn done | | Made | note unlinked under its lock | `noting_creation` |
 | Noted | an attempt, as its record is saved | another of its group was recorded meanwhile from other words | Made, of that other | undone as a failed creation is; that task returned | `made_from_other_words`, `abandon` |
 | Noted | Git refused | nothing there | Failed | branch deleted | `make_task` |
@@ -443,11 +443,14 @@ Invariants:
   branch, tracking nothing, at its start, with the `post-checkout` hook run, and
   its HEAD's reflog begun anew, so that no commit it was moved through ahead counts
   as the task's when it is retired or discarded (`reflog_only`). A hook that fails
-  once the branch is checked out fails the creation as for `git worktree add`. Cut
-  short meanwhile, it is locked `initializing`, which `undo_creation` forces away
-  as it does a worktree Git was stopped making.
+  once the branch is checked out fails the creation as for `git worktree add`. While
+  it branches it is locked as TAKING, unlocked as soon as Git returns: cut short
+  before its branch is checked out, no hook has run and `undo_creation` forces it
+  away, as a worktree Git was stopped making; after, the hook may have written
+  there, and `abandon` keeps it if so.
 - I4. No wish is lost: one made while a run is busy is carried out by that run, or by
-  the one that wished, once the other lets go (`tend_wanted`).
+  the one that wished, once the other lets go (`tend_wanted`). A wish is written, and
+  removed once carried out only if unchanged, under `ready/.lock`.
 - I5. What a crash leaves goes on the next run, and all of it when turned off:
   holds by `make crash`'s `CreateFromReady`, which tends with nothing kept after
   each recovery and finds no worktree left.

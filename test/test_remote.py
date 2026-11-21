@@ -307,6 +307,54 @@ class Lifecycle(unittest.TestCase):
         for argv in statuses:
             self.assertIn("core.fsmonitor=false", argv)
 
+    def test_a_take_cut_short_keeps_what_the_hook_wrote_and_nothing_else(self):
+        store = roost.Store(str(self.state))
+        repo = str(self.repo.resolve())
+        head = self.git("rev-parse", "HEAD")
+        for checked_out in (False, True):
+            with self.subTest(checked_out=checked_out):
+                self.tend()
+                worktree = self.state / "worktrees" / "x" / ("cut-%d" % checked_out)
+                worktree.parent.mkdir(parents=True, exist_ok=True)
+                task = dict(id=uuid.uuid4().hex[:16], repo=repo, worktree=str(worktree),
+                            branch="roost/cut-%d" % checked_out, baseCommit=head)
+                self.assertTrue(roost.take_ready(store, repo, worktree))
+                self.git("worktree", "lock", "--reason", roost.TAKING, str(worktree))
+                if checked_out:
+                    # Killed as its hook ran, which had written a file.
+                    self.git("checkout", "-q", "-b", task["branch"], head, cwd=worktree)
+                    (worktree / "generated").write_text("the hook's\n")
+                roost.undo_creation(store, task)
+                if checked_out:
+                    self.assertEqual((worktree / "generated").read_text(), "the hook's\n")
+                    self.assertEqual(store.read(task["id"])["status"], "failed")
+                else:
+                    self.assertFalse(os.path.lexists(worktree))
+                    self.assertNotIn(str(worktree.resolve()), self.listed_worktrees())
+
+    def test_a_hook_that_fails_writing_nothing_leaves_nothing(self):
+        self.tend()
+        hook = self.repo / ".git" / "hooks" / "post-checkout"
+        hook.write_text("#!/bin/sh\nexit 3\n")
+        hook.chmod(0o755)
+        reply = self.request("create", directory=str(self.repo), name="failing", socket=self.socket,
+                             command=[sys.executable, str(FAKE)], ready=True)
+        self.assertFalse(reply["ok"], reply)
+        self.assertEqual(self.request("list")["result"], [])
+        self.assertEqual(self.listed_worktrees(), [str(self.repo.resolve())])
+
+    def test_turning_it_off_replaces_a_wish_to_keep_one_not_yet_made(self):
+        store = roost.Store(str(self.state))
+        repo = str(self.repo.resolve())
+        head = self.git("rev-parse", "HEAD")
+        with (self.state / "ready").mkdir(parents=True) or (self.state / "ready" / ".tending").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            roost.want_ready(store, repo, head, keep=True)
+            with patch.object(roost, "in_background", lambda work: None):
+                roost.tend_ready_later(str(self.state), repo, head, keep=False)
+            [wish] = (self.state / "ready").glob("*.want")
+            self.assertIs(json.loads(wish.read_text())["keep"], False)
+
     def test_a_wish_made_while_a_run_tends_is_carried_out(self):
         store = roost.Store(str(self.state))
         repo = str(self.repo.resolve())
