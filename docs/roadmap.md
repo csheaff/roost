@@ -346,6 +346,21 @@ Larger, or undecided.
   their merge, and review in Magit. As a backend it would serve Claude
   tasks only, so tmux would stay for the rest, and as a source of status
   it says less than the hooks.
+- **The setup command run ahead.** A task takes a worktree made ahead in
+  under half a second, then waits for `roost-setup-command` in its
+  terminal, as long as `npm ci` takes. Running it in the worktree made
+  ahead would have the agent start at once. Left unbuilt (#312), for what
+  it would change: the command would run with no task yet, so with no
+  `$ROOST_TASK_ID` and no branch; in a folder Git moves when a task takes
+  it, which breaks what records its own path, as a Python virtual
+  environment or a Bazel output base does; out of your sight, its output
+  in no terminal; and on a yes you gave for an earlier task, where Emacs
+  asks about a command set in `.dir-locals.el` each time. If someone with
+  a slow setup asks: an option a project turns on for itself, off by
+  default; only for a command trusted for good (your own configuration, or
+  `safe-local-variable-values`); the worktree made anew, and set up again,
+  when the commit it is made at moves; and a setup that fails ahead left
+  to the task's terminal, where you see it.
 
 ## Known gaps
 
