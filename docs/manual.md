@@ -161,8 +161,9 @@ Roost creates the branch, starts the task in tmux, and opens its terminal,
 where Git makes the worktree before the agent starts, unless one made ahead
 was ready (`roost-ready-worktrees`). What takes a while, as Git LFS's checkout
 of a large project, shows there; until it's done, Magit, the files and the
-diff say it isn't made yet. If it's cut short, as when its host restarts, `s` makes it
-again; a `post-checkout` hook that fails stops the task there, keeping what
+diff say it isn't made yet. Stopped partway, `s` makes it again. Cut short by its
+host restarting, it is kept as it is, as Roost can't tell that only Git wrote
+there: discarding the task counts what is there, then removes it. A `post-checkout` hook that fails stops the task there, keeping what
 it wrote, for you to look at.
 
 **Start from where the work is.** Your task list can stay where it already is:

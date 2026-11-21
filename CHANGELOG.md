@@ -10,8 +10,8 @@ What each release changes, and what to do when upgrading. Newest first.
   0.2 s rather than 2 s, and in one using Git LFS the 15 to 19 s
   checkout runs in the terminal instead. Until the worktree is made,
   Magit, the files and the diff say it is still being made, and retiring
-  or discarding is refused until it's done. If a host restarts partway, resuming the task (`s`)
-  makes it again. Nothing to do when upgrading.
+  or discarding is refused until it's done. Stopped partway, resuming the task (`s`) makes it again; cut short
+  by a host restarting, it is kept for you to discard. Nothing to do when upgrading.
 - Starting a task in a project whose `.dir-locals.el` sets a risky
   variable, such as `roost-teardown-command`, asks about it once again,
   rather than twice since the worktrees made ahead.

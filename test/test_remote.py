@@ -520,7 +520,7 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(self.git("status", "--porcelain", cwd=Path(task["worktree"])), "")
         self.assertIs(record["worktreeComplete"], True)
 
-    def test_a_worktree_whose_making_was_cut_short_is_made_anew_on_resume(self):
+    def test_a_worktree_whose_making_was_stopped_is_made_anew_on_resume(self):
         self.slow_checkout()
         for cut in ("stop", "kill"):
             with self.subTest(cut=cut):
@@ -544,6 +544,18 @@ class Lifecycle(unittest.TestCase):
                     self.wait_for_pane_exit(task)
                     self.assertTrue(roost.initializing(str(self.repo), worktree.resolve()))
                     self.request("stop", id=task["id"])
+                    # Nothing proves only Git wrote there since: kept, for you to discard.
+                    (worktree / "yours").write_text("written since\n")
+                    self.assertTrue(self.request("resume", id=task["id"])["ok"])
+                    record = self.wait(task, "failed")
+                    self.assertIn("stopped partway", record["error"])
+                    self.assertEqual((worktree / "yours").read_text(), "written since\n")
+                    told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
+                    self.assertEqual((worktree / "yours").read_text(), "written since\n")
+                    reply = self.request("discard", id=task["id"], expect=told["commit"], told=told)
+                    self.assertTrue(reply["ok"], reply)
+                    self.assertFalse(os.path.lexists(worktree))
+                    continue
                 self.git("config", "filter.slow.smudge", "cat")
                 resumed = self.request("resume", id=task["id"])
                 self.assertTrue(resumed["ok"], resumed)
@@ -553,7 +565,7 @@ class Lifecycle(unittest.TestCase):
                 self.assertTrue(self.request("retire", id=task["id"])["ok"])
         self.assertEqual(len(roost.worktree_branches(self.repo)), 1)
 
-    def test_a_task_whose_checkout_was_killed_partway_finishes_to_nothing(self):
+    def test_a_task_whose_checkout_was_killed_partway_goes_only_when_discarded(self):
         self.slow_checkout()
         for action in ("discard", "retire"):
             with self.subTest(action=action):
@@ -574,10 +586,15 @@ class Lifecycle(unittest.TestCase):
                     told = self.request("discard", id=task["id"], dryRun=True)
                     self.assertTrue(told["ok"], told)
                     told = told["result"]["discard"]
+                    # A preview takes nothing away.
+                    self.assertTrue((worktree / "file0.bin").exists())
                     reply = self.request("discard", id=task["id"], expect=told["commit"], told=told)
+                    self.assertTrue(reply["ok"], reply)
                 else:
-                    reply = self.request("retire", id=task["id"])
-                self.assertTrue(reply["ok"], reply)
+                    # Retiring keeps what may be yours, as for any worktree.
+                    self.assertFalse(self.request("retire", id=task["id"])["ok"])
+                    self.assertTrue((worktree / "file0.bin").exists())
+                    continue
                 self.assertFalse(os.path.lexists(worktree))
                 self.assertEqual(self.task_branches(), [])
                 self.assertEqual(len(roost.worktree_branches(self.repo)), 1)

@@ -7876,8 +7876,6 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
     repo = task["repo"]
     branch = task["branch"]
     put_back_removed(store, task)
-    # One a run was cut short making holds nothing of yours.
-    clear_unmade(task)
     worktree = check_worktree(store, task)
     worktree_exists = worktree.exists()
     branch_exists = ref_exists(repo, branch)
@@ -8360,9 +8358,9 @@ def discard(store, task, expect=None, dry_run=False, teardown=None, told=None, o
     repo = task["repo"]
     branch = task["branch"]
     put_back_removed(store, task, relink=False, dry_run=dry_run)
-    # On a dry run too, so that it tells of no loss there: Git's checkout,
-    # cut short, holds nothing of yours, and a resume makes it again.
-    clear_unmade(task)
+    # Counted as any worktree's, then removed as one, once you said so.
+    if not dry_run:
+        unlock_unmade(task)
     # Whatever branch its agent left the worktree on: that goes too.
     worktree = check_worktree(store, task, branch=False)
     worktree_exists = worktree.exists()
@@ -10411,20 +10409,14 @@ def check_out_submodules(worktree, env, every=None, decided=lambda every: None):
                          % (", ".join(failed[:-1]) + " and " + failed[-1] if failed[1:] else failed[0]))
 
 
-def clear_unmade(task):
-    """Take away what a run of TASK's, cut short, left of the worktree it
-    was making, if Git's lock says that holds nothing but Git's checkout:
-    as `undo_creation` takes it, so that its folder is free to make again,
-    or to finish the task without it."""
-    if not unmade(task):
-        return
+def unlock_unmade(task):
+    """Unlock what a run of TASK's, cut short, left of the worktree it was
+    making, which Git keeps locked as `initializing`, so that discarding
+    the task, which counted what is there, removes it. Nothing proves only
+    Git wrote there since, so nothing else takes it."""
     repo, worktree = task["repo"], Path(task["worktree"])
-    if initializing(repo, worktree.resolve()):
-        git(repo, "worktree", "remove", "--force", "--force", str(worktree), check=False)
-        if worktree.is_dir():
-            shutil.rmtree(worktree, ignore_errors=True)
-    if not os.path.lexists(worktree):
-        unregister_gone(repo, worktree.resolve())
+    if unmade(task) and initializing(repo, worktree.resolve()):
+        git(repo, "worktree", "unlock", str(worktree), check=False)
 
 
 def make_worktree(store, task_id, run_id):
@@ -10453,8 +10445,11 @@ def make_worktree(store, task_id, run_id):
         repo, worktree, branch = task["repo"], Path(task["worktree"]), task["branch"]
         if not ref_exists(repo, branch):
             raise RoostError("The task's branch %s is gone, so it has no worktree; discard the task" % branch)
-        clear_unmade(task)
+        if initializing(repo, worktree.resolve()):
+            raise RoostError("Making the task's worktree stopped partway, as when its host restarts, and what is "
+                             "there may not be Git's alone; look at %s, then discard the task" % shown(str(worktree)))
         if not os.path.lexists(worktree):
+            unregister_gone(repo, worktree.resolve())
             worktree.parent.mkdir(parents=True, exist_ok=True)
             made = subprocess.run(["git", "-C", repo, "-c", "branch.autoSetupMerge=false", "worktree", "add",
                                    str(worktree), branch])

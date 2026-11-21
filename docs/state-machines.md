@@ -1400,11 +1400,13 @@ Invariants:
   checks the record under that lock, so a task finished before it started is
   left alone. Until the worktree is made, nothing in Emacs opens it, and the
   helper refuses what needs it (`require_worktree`) and lists no Git stats.
-- I6. What a run cut short left of the worktree goes only if Git's `initializing`
-  lock says it holds nothing but Git's checkout; a hangup lets Git remove it
-  itself, and `retire` and `discard` take it away first too (`clear_unmade`).
-  One Git finished is taken as made only on the task's branch with nothing
-  else there, ignored files too; else the run stops and keeps it.
+- I6. Roost removes what a run cut short left of the worktree only when you
+  discard the task, as any worktree, its contents counted: Git's `initializing`
+  lock doesn't prove nobody wrote there since, so a resume refuses it and
+  `discard` unlocks it once you said so (`unlock_unmade`). A hangup, as from
+  `stop`, lets Git remove it itself, and a resume makes it again. One Git
+  finished is taken as made only on the task's branch with nothing else
+  there, ignored files too; else the run stops and keeps it.
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
