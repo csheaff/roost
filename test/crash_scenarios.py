@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import signal
 import subprocess
+import time
 import sys
 
 from crash_harness import FAKE, HELPER, LINES, Scenario
@@ -592,6 +593,54 @@ class CreateFromReady(Create):
                 problems.append("a worktree ready to take holds changes: %s" % path)
 
 
+class CreateInTerminal(Create):
+    """With the worktree left to the task's runner, which makes it in the
+    task's terminal: cut short anywhere, nothing is left but the task,
+    whose worktree its runner makes, on its branch, as for any other."""
+
+    def arrange(self, box):
+        super().arrange(box)
+        self.asked = dict(self.asked, worktreeInTerminal=True)
+
+    def holds(self, box, problems):
+        super().holds(box, problems)
+        branches = [line for line in box.git("branch", "--format=%(refname:short)").splitlines()
+                    if line.startswith("roost/")]
+        if not (self.final and self.final.get("ok")):
+            if branches:
+                problems.append("a task that was never made left its branch: %s" % branches)
+            return
+        record = state_record(box, self.task["id"])
+        if record and record.get("worktreeComplete") is False and record.get("status") in ("crashed", "failed"):
+            # Its window went with the helper: resumed, as you would.
+            resumed = box.helper("resume", id=record["id"])
+            if not (resumed and resumed.get("ok")):
+                problems.append("resuming it was refused: %s" % resumed)
+                return
+        deadline = time.monotonic() + 30
+        while record and record.get("worktreeComplete") is False and time.monotonic() < deadline:
+            time.sleep(0.1)
+            record = state_record(box, self.task["id"])
+        if not record or record.get("worktreeComplete") is False:
+            problems.append("its runner never made its worktree: %s" % record)
+            return
+        worktree = Path(record["worktree"])
+        if box.git("symbolic-ref", "--short", "HEAD", cwd=worktree) != record["branch"]:
+            problems.append("its worktree isn't on its branch")
+        elif box.git("status", "--porcelain", cwd=worktree):
+            problems.append("its worktree holds changes as made")
+        if branches != [record["branch"]]:
+            problems.append("branches left besides the task's: %s" % branches)
+
+
+def state_record(box, task_id):
+    """TASK_ID's record in BOX, or None."""
+    try:
+        return json.loads((box.state / "tasks" / (task_id + ".json")).read_text())
+    except (OSError, ValueError):
+        return None
+
+
 class CreateFromRemote(Create):
     """From a remote-tracking branch, which makes a local one to merge into."""
 
@@ -711,4 +760,4 @@ ALL = [Merge, MergeSquash, MergeAway, SquashAway, MergeTeardown, MergeSubmodule,
        Retarget,
        Stop, Resume, Seen, Turn, Send, Leave, Tell, Shell, Attach, Inspect, Look, PullRequest, PullRequestPush, Create, CreateFromRemote,
        Propose, Show, ShowSeveral, ShowPage, TakeOffer, CreateFromOffer, CreateFromOfferFailing, CreateFork, CreateConversation,
-       CreateFromReady]
+       CreateFromReady, CreateInTerminal]

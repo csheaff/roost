@@ -672,6 +672,24 @@ def close_panes(task, inventory, check=True):
                 tmux(task["socket"], "kill-pane", "-t", pane_id, check=check)
 
 
+def unmade(task):
+    """Whether TASK's runner has yet to make its worktree (`make_worktree`)."""
+    return task.get("worktreeComplete") is False
+
+
+UNMADE = "Roost is still making the task's worktree, in its terminal"
+
+
+def require_worktree(task, gone="Task worktree is gone"):
+    """Refuse what needs TASK's worktree when it isn't there, saying GONE,
+    or that its runner has yet to make it."""
+    # Git makes its folder first, then fills it.
+    if unmade(task):
+        raise RoostError(UNMADE)
+    if not Path(task["worktree"]).is_dir():
+        raise RoostError(gone)
+
+
 def check_worktree(store, task, branch=True):
     """TASK's worktree, refusing paths Roost does not own. With BRANCH, also
     refuse one no longer on the task's branch, as after an agent made a
@@ -2909,6 +2927,14 @@ def make_task(store, request, create_id):
             making = time.monotonic()
             if request.get("ready") is True and not conversation and take_ready_for(store, task, existed):
                 store.note_time(task, "ready", time.monotonic() - making)
+            elif (request.get("worktreeInTerminal") is True
+                  and not (existed or conversation or (source and carried != commit))):
+                # Its runner makes its worktree, in its terminal, where you
+                # see what takes a while, as LFS: Emacs hears of the task
+                # as soon as it is recorded (`make_worktree`).
+                git_with_hooks(repo, "-c", "branch.autoSetupMerge=false", "branch", branch, commit)
+                task["worktreeComplete"] = False
+                store.note_time(task, "branch", time.monotonic() - making)
             else:
                 git_with_hooks(repo, "-c", "branch.autoSetupMerge=false", "worktree", "add", "-b", branch,
                                str(worktree), commit)
@@ -2932,7 +2958,7 @@ def make_task(store, request, create_id):
         store.note_time(task, "prepare", prepared)
         # `git worktree add` leaves them out. Its runner checks them out, in
         # its terminal, as that fetches.
-        if (worktree / ".gitmodules").is_file():
+        if task.get("worktreeComplete") is not False and (worktree / ".gitmodules").is_file():
             task["submodulesComplete"] = False
         if source and carried != commit:
             try:
@@ -4706,10 +4732,12 @@ def add_git_stats(tasks):
             # Unknown without the branch, rather than what Emacs had.
             task["unpushed"] = unpushed(task, pr.get("head"), tip) if tip else None
         worktree = Path(task["worktree"])
-        task["worktreeMissing"] = not worktree.is_dir()
-        # Null on the task's branch, so Emacs forgets one it was on.
-        task["worktreeBranch"] = None if task["worktreeMissing"] else other_branch(task, worktree)
-        if task["worktreeMissing"]:
+        task["worktreeMissing"] = not worktree.is_dir() and not unmade(task)
+        # Null on the task's branch, so Emacs forgets one it was on. One
+        # being made, which Git fills file by file, has nothing to say yet.
+        there = worktree.is_dir() and not unmade(task)
+        task["worktreeBranch"] = other_branch(task, worktree) if there else None
+        if not there:
             # Nothing there to measure: left out, Emacs keeps the last of it.
             task.update(dirty=False, merging=None, conflicts=None, worktreeHead=None, sinceLooked=None,
                         diff="", files=[], size=None)
@@ -5067,7 +5095,8 @@ def resume(store, task, program_status=None, size=(), terminal_images=None):
         raise RoostError("The agent is running outside Roost in %s; exit it there, then resume" % elsewhere)
     # First, as it says where a worktree that was moved went.
     check_worktree(store, task, branch=False)
-    if not Path(task["worktree"]).is_dir():
+    # One its runner has yet to make, it makes as it begins.
+    if not (Path(task["worktree"]).is_dir() or unmade(task)):
         raise RoostError("Task worktree is gone; forget the task to remove it from Roost")
     close_panes(task, inventory)
     # A task begun in a shared session, as before each had its own, moves to
@@ -5111,8 +5140,7 @@ def prepare_look(store, task_id, tracked=False):
             raise RoostError("Task is retired")
         require_not_removing(store, task, "look")
         worktree = Path(task["worktree"])
-        if not worktree.is_dir():
-            raise RoostError("Task worktree is gone; forget the task to remove it from Roost")
+        require_worktree(task, "Task worktree is gone; forget the task to remove it from Roost")
         before = task.get("looked") if isinstance(task.get("looked"), dict) else {}
         with holding_worktree(store, task, fcntl.LOCK_SH,
                               "Roost is still removing this task's worktree; refresh in a moment"):
@@ -6305,8 +6333,7 @@ def shell(store, task):
     # One the agent's pane was moved away from stays as it is.
     if not pane or pane["dead"] or pane["window"] != owner["window"]:
         check_worktree(store, task, branch=False)
-        if not Path(task["worktree"]).is_dir():
-            raise RoostError("Task worktree is gone")
+        require_worktree(task)
         if pane and pane["dead"]:
             tmux(task["socket"], "kill-pane", "-t", task["shellPaneId"])
         # tmux reads the directory as a format, where # starts one.
@@ -7969,8 +7996,7 @@ def push_pull_request(store, task):
     many were new and where the branch is on the remote now, as (PUSHED,
     HEAD). Runs without the registry lock."""
     worktree = check_worktree(store, task)
-    if not worktree.is_dir():
-        raise RoostError("Task worktree is gone")
+    require_worktree(task)
     if git(worktree, "status", "--porcelain", "--untracked-files=no").stdout.strip():
         raise RoostError("Commit the task's changes before pushing")
     branch = task["branch"]
@@ -8024,8 +8050,7 @@ def pull_request(store, task, request):
     if not title:
         raise RoostError("Give the pull request a title")
     worktree = check_worktree(store, task)
-    if not worktree.is_dir():
-        raise RoostError("Task worktree is gone")
+    require_worktree(task)
     if git(worktree, "status", "--porcelain", "--untracked-files=no").stdout.strip():
         raise RoostError("Commit the task's changes before opening a pull request")
     if git(worktree, "rev-list", "--count", "--no-merges", fork_point(worktree, task) + "..HEAD").stdout.strip() == "0":
@@ -8155,8 +8180,7 @@ def update(store, task):
         raise RoostError("The task has no integration branch to update from")
     require_finished(task, owned_pane(task, inventory_for(task)))
     worktree = check_worktree(store, task)
-    if not worktree.is_dir():
-        raise RoostError("Task worktree is gone")
+    require_worktree(task)
     if git(worktree, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0:
         raise RoostError("A merge is already in progress in the task's worktree; resolve or abort it there")
     # Untracked files are fine; Git refuses the merge if it would overwrite one.
@@ -10376,6 +10400,56 @@ def check_out_submodules(worktree, env, every=None, decided=lambda every: None):
                          % (", ".join(failed[:-1]) + " and " + failed[-1] if failed[1:] else failed[0]))
 
 
+def make_worktree(store, task_id, run_id):
+    """Make the worktree of the task TASK_ID, on its branch, as its run
+    RUN_ID begins, in its terminal, where what Git says shows; and return
+    its record, or None once it is no longer this run's to start. Held as
+    work holds it, so that nothing removes or merges it meanwhile. What a
+    run cut short left goes as `undo_creation` takes it: Git's checkout,
+    stopped partway, with nothing else there; one Git finished stays if
+    nothing but Git wrote there, and else is refused, kept for you."""
+    with store.locked():
+        task = store.read(task_id)
+    with holding_worktree(store, task, fcntl.LOCK_SH, "Roost is still removing this task's worktree"):
+        with store.locked():
+            task = store.read(task_id)
+            if task.get("runId") != run_id or task["status"] in ("stopped", "retired"):
+                return None
+            if task.get("worktreeComplete") is not False:
+                return task
+        repo, worktree, branch = task["repo"], Path(task["worktree"]), task["branch"]
+        if not ref_exists(repo, branch):
+            raise RoostError("The task's branch %s is gone, so it has no worktree; discard the task" % branch)
+        if initializing(repo, worktree.resolve()):
+            git(repo, "worktree", "remove", "--force", "--force", str(worktree), check=False)
+            if worktree.is_dir():
+                shutil.rmtree(worktree, ignore_errors=True)
+        if not os.path.lexists(worktree):
+            unregister_gone(repo, worktree.resolve())
+            worktree.parent.mkdir(parents=True, exist_ok=True)
+            made = subprocess.run(["git", "-C", repo, "-c", "branch.autoSetupMerge=false", "worktree", "add",
+                                   str(worktree), branch])
+            if made.returncode:
+                if worktree.exists():
+                    raise RoostError("The repository's post-checkout hook failed in the task's new worktree; look "
+                                     "at what it left there, then resume or discard the task")
+                raise RoostError("Git couldn't make the task's worktree; resuming the task tries again")
+        elif not (worktree.is_dir() and on_task_branch(worktree, branch) and not changed_in(worktree)):
+            raise RoostError("Making the task's worktree stopped partway, leaving %s there; look at it, then "
+                             "discard the task" % shown(str(worktree)))
+        with store.locked():
+            task = store.read(task_id)
+            if task.get("runId") != run_id or task["status"] in ("stopped", "retired"):
+                return None
+            # From now, as Emacs counts how long an agent takes to start.
+            task.update(worktreeComplete=True, updatedAt=now())
+            # `git worktree add` leaves them out, for the runner to check out.
+            if (worktree / ".gitmodules").is_file():
+                task["submodulesComplete"] = False
+            store.save(task)
+    return task
+
+
 def runner(root, task_id, run_id, resume_conversation=False):
     store = Store(root)
     store.phase = "resume" if resume_conversation else "create"
@@ -10414,6 +10488,14 @@ def runner(root, task_id, run_id, resume_conversation=False):
             argv = agent.launch(store, task, resume_conversation)
             # What the agent alone needs in its environment, as to load an observer.
             agent_env = dict(env, **(agent.environment(store, task, env) if hasattr(agent, "environment") else {}))
+        if task.get("worktreeComplete") is False:
+            with store.timed(task, "worktree"):
+                task = make_worktree(store, task_id, run_id)
+            if task is None:
+                return 0
+            # tmux, given a folder that wasn't there yet, started this at
+            # home, and says the pane is where this is.
+            os.chdir(task["worktree"])
         # Before setup, which may use them, and until it has all of them.
         if task.get("submodulesComplete") is False:
             def decided(every):

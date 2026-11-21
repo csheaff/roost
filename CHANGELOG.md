@@ -4,6 +4,17 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A new task's worktree, when none was made ahead for it, is now made in
+  the task's terminal, where you see Git check out its files, rather than
+  before Emacs hears back. In a 37,000-file project Emacs hears back in
+  0.2 s rather than 2 s, and in one using Git LFS the 15 to 19 s
+  checkout runs in the terminal instead. Until the worktree is made,
+  Magit, the files and the diff say it is still being made, and retiring
+  or discarding is refused until it's done. If a host restarts partway, resuming the task (`s`)
+  makes it again. Nothing to do when upgrading.
+- Starting a task in a project whose `.dir-locals.el` sets a risky
+  variable, such as `roost-teardown-command`, asks about it once again,
+  rather than twice since the worktrees made ahead.
 - Starting a task in a project no longer checks out every file. Each
   project keeps a worktree made ahead in the background, which the next
   task takes, checking out only the files that changed: in a 37,000-file

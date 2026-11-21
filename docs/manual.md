@@ -157,8 +157,13 @@ Magit is optional (review falls back to Dired).
 **Start a task.** `c` opens a draft. The project comes from where you are, or from
 projects you've used. Click a field or use its key to change it, write the prompt
 (it can span lines), and press `C-c C-c` or click Create in the header line.
-Roost creates the branch and worktree,
-starts the agent in tmux, and opens its terminal.
+Roost creates the branch, starts the task in tmux, and opens its terminal,
+where Git makes the worktree before the agent starts, unless one made ahead
+was ready (`roost-ready-worktrees`). What takes a while, as Git LFS's checkout
+of a large project, shows there; until it's done, Magit, the files and the
+diff say it isn't made yet. If it's cut short, as when its host restarts, `s` makes it
+again; a `post-checkout` hook that fails stops the task there, keeping what
+it wrote, for you to look at.
 
 **Start from where the work is.** Your task list can stay where it already is:
 

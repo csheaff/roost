@@ -4202,8 +4202,9 @@ def include(qa, repo):
 
 @journey("A task slower to make than Emacs waits")
 def slow_create(qa, repo):
-    """Checking out a task's worktree takes longer than Emacs waits, as in
-    a repository with gigabytes of Git LFS files. The draft says no reply
+    """Making a task takes longer than Emacs waits, as a slow hook of the
+    repository's can. (A slow checkout, as of gigabytes of Git LFS files,
+    runs in the task's terminal, after the reply.) The draft says no reply
     came and keeps what you wrote. Stopped there, as Emacs stops it here
     and fake_ssh.py's far end, nothing half-made is left, and C-c C-c asks
     again, with one task made. (A host over SSH goes on and makes it,
@@ -4211,12 +4212,15 @@ def slow_create(qa, repo):
     that.)"""
     hooks = qa.work / "slow-hooks"
     hooks.mkdir(exist_ok=True)
-    hook = hooks / "post-checkout"
-    hook.write_text("#!/bin/sh\nsleep 8\n")
+    # Run as the helper makes the task's branch, however it makes the worktree.
+    hook = hooks / "reference-transaction"
+    hook.write_text("#!/bin/sh\n[ \"$1\" = committed ] && sleep 8\nexit 0\n")
     hook.chmod(0o755)
     before = {t["name"] for t in qa.screen()["tasks"]}
     branches = lambda: set(qa.git(repo, "for-each-ref", "--format=%(refname)", "refs/heads/").split())
-    worktrees = lambda: qa.git(repo, "worktree", "list", "--porcelain").count("\nworktree ")
+    # Not those made ahead, which a task cut short as it took one gives up.
+    worktrees = lambda: sum(1 for line in qa.git(repo, "worktree", "list", "--porcelain").splitlines()
+                            if line.startswith("worktree ") and "/ready/" not in line)
     known = branches(), worktrees()
     qa.git(repo, "config", "core.hooksPath", str(hooks))
     qa.emacs.eval("(progn (setq roost-request-timeout 3 roost--create-seconds 0) t)")

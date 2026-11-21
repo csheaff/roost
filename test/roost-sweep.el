@@ -86,6 +86,11 @@ KIND is `committed', `uncommitted', `untracked' or `binary'."
 (defvar roost-sweep--gallery
   `(("starting" (status . "starting") (updatedAt . ,roost-sweep--recent) (live . t))
     ("stuck starting" (status . "starting") (live . t))
+    ;; Its runner makes its worktree, in its terminal, before the agent starts.
+    ("making its worktree" (status . "starting") (updatedAt . ,roost-sweep--recent) (live . t)
+     (worktreeComplete))
+    ("stopped making its worktree" (status . "failed") (live) (worktreeComplete)
+     (error . "Git couldn't make the task's worktree; resuming the task tries again"))
     ("codex starting" (status . "starting") (agent . "codex") (live . t))
     ("codex relayed starting" (status . "starting") (agent . "codex") (programStatus . t) (live . t))
     ("opencode failed turn" (status . "failed") (agent . "opencode") (live . t) (lastEvent . "StopFailure")

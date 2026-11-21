@@ -17591,6 +17591,41 @@ it of the same ID's, or nil for the first."
          (roost--create-task "/tmp/repo/" "task" nil "Look" "claude" nil nil '((conversation . t)))
          (should (eq (alist-get 'ready asked) :false)))))))
 
+(ert-deftest roost-a-new-task-reads-the-project-s-settings-once ()
+  ;; Emacs asks about a project's risky local variables each time it reads
+  ;; them, so a new task reads them once, for its setup and the rest.
+  (roost-test--isolated
+   (let ((reads 0))
+     (cl-letf (((symbol-function 'roost--request) #'ignore)
+               ((symbol-function 'roost--directory-host) (lambda (_) nil))
+               ((symbol-function 'hack-dir-local-variables-non-file-buffer) (lambda () (cl-incf reads))))
+       (roost--create-task "/tmp/repo/" "task" nil "Look" "claude")
+       (should (= reads 1))))))
+
+(ert-deftest roost-a-new-task-has-its-worktree-made-in-its-terminal ()
+  ;; With none made ahead, its runner makes it, where you see Git at work,
+  ;; and nothing opens it in Emacs before then.
+  (roost-test--isolated
+   (let (asked)
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (_host _action parameters &rest _) (setq asked parameters)))
+               ((symbol-function 'roost--directory-host) (lambda (_) nil)))
+       (roost--create-task "/tmp/repo/" "task" nil "Look" "claude")
+       (should (eq (alist-get 'worktreeInTerminal asked) t)))
+     (let ((task '((id . "1") (name . "task") (status . "starting") (live . t) (worktreeComplete))))
+       (should (roost--worktree-unmade-p task))
+       (should-not (roost--action-applies-p task #'roost-files))
+       (should-not (roost--action-applies-p task #'roost-review))
+       (should-error (roost-files task) :type 'user-error)
+       (should-error (roost-diff task) :type 'user-error)
+       ;; However long Git takes, it isn't held at a startup prompt.
+       (should-not (roost--held-starting-p
+                    (cons '(updatedAt . "2026-01-01T00:00:00+00:00") task)))
+       (should (roost--held-starting-p
+                '((status . "starting") (updatedAt . "2026-01-01T00:00:00+00:00") (worktreeComplete . t)))))
+     (dolist (made '(((worktreeComplete . t)) ()))
+       (should-not (roost--worktree-unmade-p `((id . "1") ,@made)))))))
+
 (ert-deftest roost-shows-a-page-where-emacs-can-draw-one ()
   ;; A page an agent wrote is shown as an image is, in the same buffer,
   ;; where this Emacs has a web view; elsewhere Roost says it can't.
