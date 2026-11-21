@@ -437,7 +437,9 @@ Invariants:
 - I2. A task takes only one holding nothing but Git's checkout: it is checked clean
   after its branch is made, as no one may write in a folder Roost made ahead.
 - I3. A task taken from one starts as `git worktree add` would make it: on its new
-  branch, tracking nothing, at its start, with the `post-checkout` hook run. Cut
+  branch, tracking nothing, at its start, with the `post-checkout` hook run, and
+  its HEAD's reflog begun anew, so that no commit it was moved through ahead counts
+  as the task's when it is retired or discarded (`reflog_only`). Cut
   short meanwhile, it is locked `initializing`, which `undo_creation` forces away
   as it does a worktree Git was stopped making.
 - I4. What a crash leaves goes on the next run, and all of it when turned off:
@@ -455,7 +457,9 @@ Invariants:
 | Going | the same run | | gone | removed, Git's record of it too | `drop_ready` |
 | Making | helper dies | | Going, on the next run | | `tend_ready` |
 
-Open: not modelled yet; a model would follow "Adding a machine".
+Open: not modelled yet; a model would follow "Adding a machine". A repository whose
+`post-checkout` hook leaves files never gets one, and each creation makes and drops
+one in the background.
 
 ### Registry lock
 

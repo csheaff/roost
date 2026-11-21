@@ -242,6 +242,19 @@ class Lifecycle(unittest.TestCase):
         self.assertFalse(os.path.lexists(worktree))
         self.assertNotIn(str(worktree.resolve()), self.listed_worktrees())
 
+    def test_a_task_from_one_made_ahead_keeps_none_of_its_past_commits(self):
+        self.tend()
+        old = self.git("rev-parse", "HEAD")
+        # Main rewritten since: its old commit is on no branch now.
+        (self.repo / "hello").write_text("amended\n")
+        self.git("commit", "-qa", "--amend", "-m", "amended")
+        self.tend()
+        task = self.create(ready=True)
+        self.assertNotIn(old, self.git("log", "-g", "--format=%H", "HEAD", cwd=Path(task["worktree"])).split())
+        told = self.request("discard", id=task["id"], dryRun=True)
+        self.assertTrue(told["ok"], told)
+        self.assertNotIn(old, json.dumps(told["result"]))
+
     def test_a_task_not_asked_to_starts_as_before_and_leaves_the_one_made_ahead(self):
         self.tend()
         [ready] = self.ready_worktrees()
@@ -269,11 +282,13 @@ class Lifecycle(unittest.TestCase):
     def test_one_made_ahead_that_was_written_in_is_not_taken(self):
         self.tend()
         [ready] = self.ready_worktrees()
-        (ready / "hello").write_text("someone's\n")
+        # A file of someone's, which your config may hide from status.
+        (ready / "theirs").write_text("theirs\n")
+        self.git("config", "status.showUntrackedFiles", "no")
         task = self.create(ready=True)
         worktree = Path(task["worktree"])
         self.assertEqual((worktree / "hello").read_text(), "base\n")
-        self.assertEqual(self.git("status", "--porcelain", cwd=worktree), "")
+        self.assertFalse((worktree / "theirs").exists())
         self.assertEqual(self.listed_worktrees(), [str(self.repo.resolve()), str(worktree.resolve())])
         self.assertEqual(self.ready_worktrees(), [])
 
