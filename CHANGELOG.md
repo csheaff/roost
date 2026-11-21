@@ -4,6 +4,12 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Retiring or discarding a task no longer waits for its worktree to be
+  deleted. Once the checks pass, the worktree is moved into the state
+  folder's `trash/` in one rename and its files are deleted in the
+  background: on a 37,000-file worktree, retiring went from 2.2 s to
+  0.6 s. A worktree on another file system than the state folder is
+  removed by Git, as before. Nothing to do when upgrading.
 - The helper times each step of starting and finishing a task, from
   `git worktree add` and the setup command to the agent coming up, and
   from the checks before deleting to removing the worktree, in the state

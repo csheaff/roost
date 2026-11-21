@@ -333,7 +333,9 @@ class Crashes(unittest.TestCase):
         self.assertTrue(reply["ok"], reply)
 
     def cut_short_removing(self, box, task, action, **args):
-        """Stop ACTION at the removal of TASK's worktree."""
+        """Stop ACTION at Git's removal of TASK's worktree, as when it can't
+        be moved into the trash."""
+        box.no_trash()
         box.arm("before", match="worktree remove")
         self.assertIsNone(box.helper(action, id=task["id"], **args))
         box.disarm()

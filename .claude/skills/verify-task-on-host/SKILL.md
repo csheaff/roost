@@ -83,12 +83,12 @@ or `discard` calls them, needs the model checked against it.
 | Model | Code in scripts/roost_remote.py |
 | --- | --- |
 | `Ask` | what Emacs read before it asked, and the request carries: `expect`, `told`, and `offers`, the offers its question named (`roost--offers-named` in roost.el), which `TASK_ACTIONS` hands each action |
-| `Start` | `rpc` (lock, `read_to_act_on`), `require_not_removing`, `forget`, `retire` up to `merging_in`, `integration_branch`, `discard` up to `stop`, `discard_losses`, `put_back_removed`, `require_offers_named` in each |
+| `Start` | `rpc` (lock, `read_to_act_on`), `require_not_removing`, `forget` (with `untrash`), `retire` up to `merging_in`, `integration_branch`, `discard` up to `stop`, `discard_losses`, `put_back_removed`, `require_offers_named` in each |
 | `GitMerge`, `AfterMerge`, `MergeFailed` | `integrating`, `merge_task`, `retire` after the merge, `require_offers_named` again among its checks |
 | `Checkpoint` | `safe_to_delete`, `branches_going`, `retiringCommit` in `retire` |
 | `Stop` | `stop`, the list of agent worktrees `retire` passes to `remove_worktrees`, with `seen` |
 | none: `test/formal/git_work` | `keep_before_removing`, `reflog_only`, `ignored_to_keep`, `prune_kept`, `drop_kept` (also in `discard`), `gone_head_log`, `kept_target`, `submodules_in`, `kept_locked`, `keep_found`, and `safe_to_delete` passing over `refs/roost/`, called in `retire` after `stop` for a missing worktree, else by `remove_worktrees` after the teardown command, without the registry lock |
-| `RemoveBegin` … `RemoveEnd` | `remove_worktrees`, `holding_worktree`, `remove_agent_worktrees`, `agent_worktree_seen`, `run_teardown` |
+| `RemoveBegin` … `RemoveEnd` | `remove_worktrees`, `holding_worktree`, `remove_agent_worktrees`, `agent_worktree_seen`, `run_teardown`, `trash_worktree`, `finish_trashed` (in `put_back_removed`) |
 | `DeleteBranch`, `RemoveRecord` | `delete_branch`, `Store.remove` |
 | `AsMade`, `Ahead`, `Losses`, `Going` | `is_as_made`, `made_since`, `agent_work`, `discard_losses`, `branches_going` |
 | `Hook`, `AgentMakesX`, `AgentEntersX` | `update_hook`, `agent_worktree`, `ClaudeAgent.made_worktree`, `worktree.baseRef` in `claude_hook_settings` |
@@ -117,6 +117,16 @@ prompt, which is `YouPrompt`. They have no step here.
 A conversation is a task in a repository Roost keeps (`conversation_repository`),
 with a worktree and a branch there, and finishes as any task. `retarget`
 refuses one, so the model's runs with no retarget are its runs.
+
+Since then, the task's worktree goes into the state directory's trash by
+a rename (`trash_worktree`) where it can, rather than by Git file by file,
+and `empty_trash` deletes it later, once the record is gone.
+`RemoveWorktree` and `WorktreeGoing` still take it as Git's removal, with
+the worktree "partly" there between them; a rename is the same two steps
+with nothing between, a subset of the runs checked, and Git's removal
+stays as the fallback, so no step changed. What is in the trash holds
+nothing to keep: it went there only after the checks that `RemoveWorktree`
+stands for.
 
 Last confirmed against the code at commit `951ce59`, with the change that
 came after it: `stop` ends what its agent and shell left running

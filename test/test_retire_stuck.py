@@ -49,6 +49,8 @@ class CutShort(unittest.TestCase):
         box.git("commit", "-qm", "Many files")
         self.task = box.create()
         self.worktree = Path(self.task["worktree"])
+        # Removed by Git, as where it can't be moved into the trash.
+        box.no_trash()
         self.assertTrue(box.helper("stop", id=self.task["id"])["ok"])
 
     def assert_back(self):

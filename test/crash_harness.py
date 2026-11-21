@@ -278,6 +278,12 @@ class Box:
             while not (self.inject / "orphan-done").exists() and time.monotonic() < deadline:
                 time.sleep(0.01)
 
+    def no_trash(self):
+        """Have the helper remove worktrees with Git, as where it can't move
+        them into the trash: a file stands where its folder goes."""
+        self.state.mkdir(parents=True, exist_ok=True)
+        (self.state / "trash").write_text("")
+
     def record(self, task_id):
         try:
             return json.loads((self.state / "tasks" / (task_id + ".json")).read_text())
