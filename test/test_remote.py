@@ -117,8 +117,8 @@ class Lifecycle(unittest.TestCase):
             time.sleep(0.05)
         self.fail("the agent's pane is still running")
 
-    def wait(self, task, status, event=None):
-        deadline = time.monotonic() + 8
+    def wait(self, task, status, event=None, seconds=8):
+        deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
             record = roost.Store(str(self.state)).read(task["id"])
             if record["status"] == status and (event is None or record.get("lastEvent") == event):
@@ -491,11 +491,7 @@ class Lifecycle(unittest.TestCase):
         listed = {entry["id"]: entry for entry in self.request("list", full=True)["result"]}[task["id"]]
         self.assertFalse(listed["worktreeMissing"])
         self.assertEqual(self.request("shell", id=task["id"])["error"], roost.UNMADE)
-        deadline = time.monotonic() + 15
-        while (roost.Store(str(self.state)).read(task["id"])["status"] != "ready"
-               and time.monotonic() < deadline):
-            time.sleep(0.05)
-        record = self.wait(task, "ready")
+        record = self.wait(task, "ready", seconds=15)
         self.assertIs(record["worktreeComplete"], True)
         # Stamped once made, so that Emacs counts the agent's start from then.
         self.assertGreater(record["updatedAt"], task["updatedAt"])
@@ -520,18 +516,9 @@ class Lifecycle(unittest.TestCase):
         for action in ("retire", "discard"):
             refused = self.request(action, id=task["id"])
             self.assertEqual(refused["error"], "Roost is busy with this task's worktree; refresh in a moment")
-        record = self.wait_long(task, "ready")
+        record = self.wait(task, "ready", seconds=30)
         self.assertEqual(self.git("status", "--porcelain", cwd=Path(task["worktree"])), "")
         self.assertIs(record["worktreeComplete"], True)
-
-    def wait_long(self, task, status, seconds=30):
-        deadline = time.monotonic() + seconds
-        while time.monotonic() < deadline:
-            record = roost.Store(str(self.state)).read(task["id"])
-            if record["status"] == status:
-                return record
-            time.sleep(.05)
-        self.fail("Expected %s; got %s" % (status, record))
 
     def test_a_worktree_whose_making_was_cut_short_is_made_anew_on_resume(self):
         self.slow_checkout()
@@ -560,11 +547,40 @@ class Lifecycle(unittest.TestCase):
                 self.git("config", "filter.slow.smudge", "cat")
                 resumed = self.request("resume", id=task["id"])
                 self.assertTrue(resumed["ok"], resumed)
-                record = self.wait_long(task, "ready")
+                record = self.wait(task, "ready", seconds=30)
                 self.assertIs(record["worktreeComplete"], True)
                 self.assertEqual(self.git("status", "--porcelain", cwd=worktree), "")
                 self.assertTrue(self.request("retire", id=task["id"])["ok"])
         self.assertEqual(len(roost.worktree_branches(self.repo)), 1)
+
+    def test_a_task_whose_checkout_was_killed_partway_finishes_to_nothing(self):
+        self.slow_checkout()
+        for action in ("discard", "retire"):
+            with self.subTest(action=action):
+                task = self.request("create", directory=str(self.repo), name=action, socket=self.socket,
+                                    command=[sys.executable, str(FAKE)], worktreeInTerminal=True)["result"]
+                worktree = Path(task["worktree"])
+                deadline = time.monotonic() + 8
+                while not (worktree / "file0.bin").exists() and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                pid = int(roost.tmux(self.socket, "display-message", "-p", "-t", task["paneId"],
+                                     "#{pane_pid}").stdout)
+                os.killpg(pid, signal.SIGKILL)
+                self.wait_for_pane_exit(task)
+                self.assertTrue(roost.initializing(str(self.repo), worktree.resolve()))
+                # As Emacs's next refresh finds it: its runner gone.
+                self.request("list")
+                if action == "discard":
+                    told = self.request("discard", id=task["id"], dryRun=True)
+                    self.assertTrue(told["ok"], told)
+                    told = told["result"]["discard"]
+                    reply = self.request("discard", id=task["id"], expect=told["commit"], told=told)
+                else:
+                    reply = self.request("retire", id=task["id"])
+                self.assertTrue(reply["ok"], reply)
+                self.assertFalse(os.path.lexists(worktree))
+                self.assertEqual(self.task_branches(), [])
+                self.assertEqual(len(roost.worktree_branches(self.repo)), 1)
 
     def test_a_task_stopped_before_its_worktree_was_made_finishes_to_nothing(self):
         self.slow_checkout(smudge="sleep 30; cat")

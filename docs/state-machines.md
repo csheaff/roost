@@ -1402,15 +1402,17 @@ Invariants:
   helper refuses what needs it (`require_worktree`) and lists no Git stats.
 - I6. What a run cut short left of the worktree goes only if Git's `initializing`
   lock says it holds nothing but Git's checkout; a hangup lets Git remove it
-  itself. One Git finished is taken as made only on the task's branch with
-  nothing else there, ignored files too; else the run stops and keeps it.
+  itself, and `retire` and `discard` take it away first too (`clear_unmade`).
+  One Git finished is taken as made only on the task's branch with nothing
+  else there, ignored files too; else the run stops and keeps it.
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
 | Waiting | lock had | other `runId` | exit 0 | window closes | `runner` |
 | Waiting | lock had | `stopped`, `retired` | exit 0 | | `runner` |
 | Waiting | launch made | | Worktree, or next | argv fixed now, hook settings written | `agent.launch` |
-| Worktree | lock had | other `runId`, `stopped`, `retired`, or the lock held for a removal | exit, or Ended | nothing made | `make_worktree` |
+| Worktree | lock had | other `runId`, `stopped`, `retired` | exit 0 | nothing made | `make_worktree` |
+| Worktree | lock refused | a removal or merge holds it | exit 0 | says so in the pane; the status is left to that | `make_worktree` |
 | Worktree | made | | Submodules, or next | `worktreeComplete` saved, and `submodulesComplete` False with a `.gitmodules`; the runner moves into it | `make_worktree` |
 | Worktree | Git or `post-checkout` fails | | Ended, `failed` | what the hook wrote kept; resumed, that stops it again | `make_worktree` |
 | Submodules | `decided` | this run | same | `allSubmodules` saved before Git initializes any | `check_out_submodules` |

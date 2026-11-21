@@ -3680,8 +3680,9 @@ a word, within 40 characters."
 
 (defvar roost--project-values nil
   "What `roost--project-value' has read, while a command binds this to (t).
-Then a list of t and each (DIRECTORY . LOCALS), LOCALS being what the
-project there sets, as `file-local-variables-alist' has it.  A command
+Then a list of t and each (DIRECTORY . LOCALS), LOCALS being the
+variables the project there sets, as `buffer-local-variables' has them,
+an `eval' form's too.  A command
 that asks a host for several things of one project, as a new task, or a
 draft that makes several attempts, reads the project once, so that Emacs
 asks about its local variables once.")
@@ -3692,8 +3693,9 @@ asks about its local variables once.")
                     (cdr read)
                   (let ((locals (with-temp-buffer
                                   (setq default-directory directory)
-                                  (hack-dir-local-variables-non-file-buffer)
-                                  (copy-alist file-local-variables-alist))))
+                                  (let ((before (buffer-local-variables)))
+                                    (hack-dir-local-variables-non-file-buffer)
+                                    (seq-difference (buffer-local-variables) before)))))
                     (when roost--project-values
                       (push (cons directory locals) (cdr roost--project-values)))
                     locals))))

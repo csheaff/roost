@@ -610,7 +610,7 @@ class CreateInTerminal(Create):
             if branches:
                 problems.append("a task that was never made left its branch: %s" % branches)
             return
-        record = state_record(box, self.task["id"])
+        record = box.record(self.task["id"])
         if record and record.get("worktreeComplete") is False and record.get("status") in ("crashed", "failed"):
             # Its window went with the helper: resumed, as you would.
             resumed = box.helper("resume", id=record["id"])
@@ -620,7 +620,7 @@ class CreateInTerminal(Create):
         deadline = time.monotonic() + 30
         while record and record.get("worktreeComplete") is False and time.monotonic() < deadline:
             time.sleep(0.1)
-            record = state_record(box, self.task["id"])
+            record = box.record(self.task["id"])
         if not record or record.get("worktreeComplete") is False:
             problems.append("its runner never made its worktree: %s" % record)
             return
@@ -631,14 +631,6 @@ class CreateInTerminal(Create):
             problems.append("its worktree holds changes as made")
         if branches != [record["branch"]]:
             problems.append("branches left besides the task's: %s" % branches)
-
-
-def state_record(box, task_id):
-    """TASK_ID's record in BOX, or None."""
-    try:
-        return json.loads((box.state / "tasks" / (task_id + ".json")).read_text())
-    except (OSError, ValueError):
-        return None
 
 
 class CreateFromRemote(Create):

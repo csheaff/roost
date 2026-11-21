@@ -7876,6 +7876,8 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
     repo = task["repo"]
     branch = task["branch"]
     put_back_removed(store, task)
+    # One a run was cut short making holds nothing of yours.
+    clear_unmade(task)
     worktree = check_worktree(store, task)
     worktree_exists = worktree.exists()
     branch_exists = ref_exists(repo, branch)
@@ -7995,6 +7997,8 @@ def push_pull_request(store, task):
     """Push new commits to the task's existing pull request branch, and say how
     many were new and where the branch is on the remote now, as (PUSHED,
     HEAD). Runs without the registry lock."""
+    if unmade(task):
+        raise RoostError(UNMADE)
     worktree = check_worktree(store, task)
     require_worktree(task)
     if git(worktree, "status", "--porcelain", "--untracked-files=no").stdout.strip():
@@ -8049,6 +8053,8 @@ def pull_request(store, task, request):
     title = text(request.get("title"))
     if not title:
         raise RoostError("Give the pull request a title")
+    if unmade(task):
+        raise RoostError(UNMADE)
     worktree = check_worktree(store, task)
     require_worktree(task)
     if git(worktree, "status", "--porcelain", "--untracked-files=no").stdout.strip():
@@ -8179,6 +8185,8 @@ def update(store, task):
     if not integration:
         raise RoostError("The task has no integration branch to update from")
     require_finished(task, owned_pane(task, inventory_for(task)))
+    if unmade(task):
+        raise RoostError(UNMADE)
     worktree = check_worktree(store, task)
     require_worktree(task)
     if git(worktree, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0:
@@ -8352,6 +8360,9 @@ def discard(store, task, expect=None, dry_run=False, teardown=None, told=None, o
     repo = task["repo"]
     branch = task["branch"]
     put_back_removed(store, task, relink=False, dry_run=dry_run)
+    # On a dry run too, so that it tells of no loss there: Git's checkout,
+    # cut short, holds nothing of yours, and a resume makes it again.
+    clear_unmade(task)
     # Whatever branch its agent left the worktree on: that goes too.
     worktree = check_worktree(store, task, branch=False)
     worktree_exists = worktree.exists()
@@ -10400,6 +10411,22 @@ def check_out_submodules(worktree, env, every=None, decided=lambda every: None):
                          % (", ".join(failed[:-1]) + " and " + failed[-1] if failed[1:] else failed[0]))
 
 
+def clear_unmade(task):
+    """Take away what a run of TASK's, cut short, left of the worktree it
+    was making, if Git's lock says that holds nothing but Git's checkout:
+    as `undo_creation` takes it, so that its folder is free to make again,
+    or to finish the task without it."""
+    if not unmade(task):
+        return
+    repo, worktree = task["repo"], Path(task["worktree"])
+    if initializing(repo, worktree.resolve()):
+        git(repo, "worktree", "remove", "--force", "--force", str(worktree), check=False)
+        if worktree.is_dir():
+            shutil.rmtree(worktree, ignore_errors=True)
+    if not os.path.lexists(worktree):
+        unregister_gone(repo, worktree.resolve())
+
+
 def make_worktree(store, task_id, run_id):
     """Make the worktree of the task TASK_ID, on its branch, as its run
     RUN_ID begins, in its terminal, where what Git says shows; and return
@@ -10410,7 +10437,13 @@ def make_worktree(store, task_id, run_id):
     nothing but Git wrote there, and else is refused, kept for you."""
     with store.locked():
         task = store.read(task_id)
-    with holding_worktree(store, task, fcntl.LOCK_SH, "Roost is still removing this task's worktree"):
+    with contextlib.ExitStack() as stack:
+        try:
+            stack.enter_context(holding_worktree(store, task, fcntl.LOCK_SH, ""))
+        except RoostError:
+            # A removal or merge has it: the task goes, or is left as it is.
+            print("Roost is busy with this task's worktree; resume the task once that is done", file=sys.stderr)
+            return None
         with store.locked():
             task = store.read(task_id)
             if task.get("runId") != run_id or task["status"] in ("stopped", "retired"):
@@ -10420,12 +10453,8 @@ def make_worktree(store, task_id, run_id):
         repo, worktree, branch = task["repo"], Path(task["worktree"]), task["branch"]
         if not ref_exists(repo, branch):
             raise RoostError("The task's branch %s is gone, so it has no worktree; discard the task" % branch)
-        if initializing(repo, worktree.resolve()):
-            git(repo, "worktree", "remove", "--force", "--force", str(worktree), check=False)
-            if worktree.is_dir():
-                shutil.rmtree(worktree, ignore_errors=True)
+        clear_unmade(task)
         if not os.path.lexists(worktree):
-            unregister_gone(repo, worktree.resolve())
             worktree.parent.mkdir(parents=True, exist_ok=True)
             made = subprocess.run(["git", "-C", repo, "-c", "branch.autoSetupMerge=false", "worktree", "add",
                                    str(worktree), branch])
