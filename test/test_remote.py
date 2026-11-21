@@ -635,6 +635,15 @@ class Lifecycle(unittest.TestCase):
         self.assertIn("stopped partway", record["error"])
         self.assertTrue((Path(task["worktree"]) / "made-by-hook").exists())
 
+    def test_the_checkout_in_the_terminal_runs_as_the_tasks(self):
+        # So that what its hooks leave running is known as the task's.
+        log = self.root / "hook-env"
+        hook = self.repo / ".git" / "hooks" / "post-checkout"
+        hook.write_text("#!/bin/sh\necho \"$ROOST_TASK_ID\" > %s\n" % shlex.quote(str(log)))
+        hook.chmod(0o755)
+        task = self.create()
+        self.assertEqual(log.read_text().strip(), task["id"])
+
     def test_a_new_task_has_its_submodules_checked_out_once_its_worktree_is_made_in_the_terminal(self):
         (self.repo / ".gitmodules").write_text("")
         self.git("add", ".gitmodules")

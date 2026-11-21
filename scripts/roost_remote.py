@@ -10419,9 +10419,11 @@ def unlock_unmade(task):
         git(repo, "worktree", "unlock", str(worktree), check=False)
 
 
-def make_worktree(store, task_id, run_id):
+def make_worktree(store, task_id, run_id, env):
     """Make the worktree of the task TASK_ID, on its branch, as its run
-    RUN_ID begins, in its terminal, where what Git says shows; and return
+    RUN_ID begins, in its terminal, where what Git says shows, with ENV,
+    the run's, so that what its hooks leave running is known as the
+    task's (`left_running`); and return
     its record, or None once it is no longer this run's to start. Held as
     work holds it, so that nothing removes or merges it meanwhile. What a
     run cut short left goes as `undo_creation` takes it: Git's checkout,
@@ -10452,7 +10454,7 @@ def make_worktree(store, task_id, run_id):
             unregister_gone(repo, worktree.resolve())
             worktree.parent.mkdir(parents=True, exist_ok=True)
             made = subprocess.run(["git", "-C", repo, "-c", "branch.autoSetupMerge=false", "worktree", "add",
-                                   str(worktree), branch])
+                                   str(worktree), branch], env=env)
             if made.returncode:
                 if worktree.exists():
                     raise RoostError("The repository's post-checkout hook failed in the task's new worktree; look "
@@ -10514,7 +10516,7 @@ def runner(root, task_id, run_id, resume_conversation=False):
             agent_env = dict(env, **(agent.environment(store, task, env) if hasattr(agent, "environment") else {}))
         if task.get("worktreeComplete") is False:
             with store.timed(task, "worktree"):
-                task = make_worktree(store, task_id, run_id)
+                task = make_worktree(store, task_id, run_id, env)
             if task is None:
                 return 0
             # tmux, given a folder that wasn't there yet, started this at
