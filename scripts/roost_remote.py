@@ -8462,9 +8462,6 @@ def discard(store, task, expect=None, dry_run=False, teardown=None, told=None, o
     repo = task["repo"]
     branch = task["branch"]
     put_back_removed(store, task, relink=False, dry_run=dry_run)
-    # Counted as any worktree's, then removed as one, once you said so.
-    if not dry_run:
-        unlock_unmade(task)
     # Whatever branch its agent left the worktree on: that goes too.
     worktree = check_worktree(store, task, branch=False)
     worktree_exists = worktree.exists()
@@ -8502,6 +8499,9 @@ def discard(store, task, expect=None, dry_run=False, teardown=None, told=None, o
     # wrote as you were asked, or since the count above, is counted too.
     with store.timed(task, "recount"):
         more_than_told(True)
+    # Counted as any worktree's, then removed as one, now that nothing
+    # refuses: a discard refused leaves it cut short, which only a discard takes.
+    unlock_unmade(task)
     remove_worktrees(store, task, worktree if worktree_exists else None, work, force=True, teardown=teardown)
     shutil.rmtree(copy_staging(task["worktree"]), ignore_errors=True)
     if branch_exists:

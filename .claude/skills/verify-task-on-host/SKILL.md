@@ -133,7 +133,8 @@ A task whose worktree its runner makes in its terminal (`make_worktree`)
 starts with none, and one Git was cut short making, as when its host
 restarts, has Git's `initializing` lock on it. `retire` and `merge` refuse
 that one first, saying so (`cut_short`), and only `discard` removes it, as
-any worktree, its contents counted (`unlock_unmade`). Both belong to
+any worktree, its contents counted, unlocking it just before the removal,
+after every refusal (`unlock_unmade`). Both belong to
 creation, which this model leaves out, so it has no step for them yet.
 
 Last confirmed against the code at commit `951ce59`, with the change that

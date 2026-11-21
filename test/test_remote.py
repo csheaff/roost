@@ -654,6 +654,16 @@ class Lifecycle(unittest.TestCase):
                     told = told["result"]["discard"]
                     # A preview takes nothing away.
                     self.assertTrue((worktree / "file0.bin").exists())
+                    # Nor does a discard refused, as when the branch moved or
+                    # there is more than you were told: it is still cut short.
+                    for refused in (dict(expect="0" * 40, told=told), dict(expect=told["commit"], told=dict(told, changes=0))):
+                        reply = self.request("discard", id=task["id"], **refused)
+                        self.assertFalse(reply["ok"], reply)
+                        self.assertTrue(roost.initializing(str(self.repo), worktree.resolve()))
+                        listed = {entry["id"]: entry for entry in self.request("list")["result"]}[task["id"]]
+                        self.assertIs(listed["worktreeCutShort"], True)
+                        reply = self.request("retire", id=task["id"])
+                        self.assertTrue(reply["error"].startswith("Git was cut short making the task's worktree"), reply)
                     reply = self.request("discard", id=task["id"], expect=told["commit"], told=told)
                     self.assertTrue(reply["ok"], reply)
                 else:

@@ -647,7 +647,9 @@ What each step leaves if it stops there, and what asking again does.
 there. Then `expect` against the branch, `told` against `discard_losses` counted
 again, `offers` against the offers the record holds (`require_offers_named`),
 `stop`, `told` counted once more, now that nothing the agent left running writes
-there (refused then with the agent stopped), removal with force, branch, record. No checkpoint: `expect`, `told` and
+there (refused then with the agent stopped), a worktree Git was cut short
+making unlocked (`unlock_unmade`), so that one refused stays cut short,
+removal with force, branch, record. No checkpoint: `expect`, `told` and
 `offers` are the guards, and a retry asks Emacs for a new dry run.
 
 `forget`: step 2, then no live pane, `require_offers_named`, the window closed,
@@ -1404,7 +1406,8 @@ Invariants:
 - I6. Roost removes what a run cut short left of the worktree only when you
   discard the task, as any worktree, its contents counted: Git's `initializing`
   lock doesn't prove nobody wrote there since, so a resume refuses it and
-  `discard` unlocks it once you said so (`unlock_unmade`). A hangup, as from
+  `discard` unlocks it once you said so and nothing refuses, just before
+  removing it (`unlock_unmade`). A hangup, as from
   `stop`, lets Git remove it itself, and a resume makes it again. One Git
   finished is taken as made only on the task's branch with nothing else
   there, ignored files too; else the run stops and keeps it. A listing says
