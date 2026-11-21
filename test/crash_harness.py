@@ -23,6 +23,7 @@ Modes, what becomes of the command at which the helper dies:
 `test_crash.py` runs these; `make crash` runs them all.
 """
 import concurrent.futures
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -203,6 +204,39 @@ class Box:
 
     def git(self, *args, cwd=None, check=True):
         return self.run(REAL["git"], *args, cwd=cwd, check=check)
+
+    def wait_for_ready(self, seconds=60):
+        """Wait for the runs tending the worktrees made ahead, as a reply
+        starts one, to carry out every wish: for at most SECONDS, as one a
+        crash killed leaves its wishes for the next run."""
+        folder = self.state / "ready"
+        deadline = time.monotonic() + seconds
+        while folder.is_dir() and time.monotonic() < deadline:
+            left = False
+            with (folder / ".tending").open("a") as lock:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    pass
+                else:
+                    if not any(folder.glob("*.want")):
+                        return
+                    left = True
+            if left:
+                # Left by a run a crash killed, or not yet begun: carried
+                # out here, unless a run takes them up first.
+                self.run(sys.executable, "-c", "import sys; sys.path.insert(0, %r); import roost_remote as r; "
+                         "r.tend_wanted(r.Store(%r))" % (str(HELPER.parent), str(self.state)))
+                continue
+            time.sleep(0.05)
+
+    def tend_ready(self, keep=True):
+        """Tend the worktrees made ahead for the repository, once no run is at it."""
+        self.wait_for_ready()
+        self.run(sys.executable, "-c", "import sys; sys.path.insert(0, %r); import roost_remote as r; "
+                 "r.tend_ready(r.Store(%r), %r, %r, %r)"
+                 % (str(HELPER.parent), str(self.state), str(self.repo.resolve()),
+                    self.git("rev-parse", "HEAD"), keep))
 
     def tmux(self, *args, check=False, u=False):
         return self.run(REAL["tmux"], *(["-u"] if u else []), "-L", self.socket, *args, check=check)
@@ -523,6 +557,9 @@ def way_out(box, scenario, outcome):
     left = box.helper("list", socket=box.socket)
     if not left or not left.get("ok") or left["result"]:
         problems.append("still listed once discarded: %s" % (left,))
+    if (box.state / "ready").is_dir():
+        # Worktrees made ahead go when you turn them off, whatever a crash left.
+        box.tend_ready(keep=False)
     if not scenario.leaves:
         # What can't be removed of its agent's own stays where Git put it.
         worktrees = [path for path in box.worktrees() if path != str(box.repo) and "/.claude/worktrees/" not in path]

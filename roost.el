@@ -172,6 +172,18 @@ project's .worktreeinclude lists are copied there, with the project's
 primary checkout in $ROOST_REPO."
   :type '(choice (const nil) string))
 
+(defcustom roost-ready-worktrees t
+  "Whether each project keeps a worktree made ahead for its next task.
+Making a worktree checks out every file of the project, which takes
+seconds in a large one.  With this on, after each task starts, its host
+makes another worktree, detached, in the background; the next task in
+that project takes it and checks out only the files that differ.  It
+costs one checkout of the project on disk, and shows in git worktree
+list.  May be set directory-locally; turned off, the next task's start
+removes it."
+  :type 'boolean
+  :safe #'booleanp)
+
 (defcustom roost-teardown-command nil
   "Optional shell command run in a task's worktree just before Roost removes it.
 Merging, retiring and discarding a task run it, as for cleaning up what
@@ -3703,6 +3715,9 @@ EXTRA is an alist of further request fields, such as the issue."
            ,(cons 'prompt (unless (string-empty-p (string-trim (or prompt ""))) prompt))
            ,(cons 'command (vconcat (roost--agent-command agent)))
            ,(cons 'setup setup)
+           ,(cons 'ready (if (and (not (alist-get 'conversation extra))
+                                  (roost--project-value directory 'roost-ready-worktrees))
+                             t :false))
            ,(cons 'branchPrefix roost-branch-prefix)
            ,(cons 'programStatus (if roost-program-status t :false))
            ,(cons 'terminalImages (roost--terminal-images))

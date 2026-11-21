@@ -564,6 +564,34 @@ class Create(Scenario):
                 problems.append("asked again, and the list has %s rather than %s" % (ids, self.task["id"]))
 
 
+class CreateFromReady(Create):
+    """From a worktree made ahead, which it moves into place and branches:
+    cut short anywhere, nothing of it is left but the task, or a worktree
+    still made ahead and ready."""
+
+    def arrange(self, box):
+        super().arrange(box)
+        box.tend_ready()
+        self.asked = dict(self.asked, ready=True)
+
+    def holds(self, box, problems):
+        super().holds(box, problems)
+        box.wait_for_ready()
+        listed = box.helper("list", socket=box.socket)
+        tasks = [task["worktree"] for task in listed["result"]] if listed and listed.get("ok") else []
+        ready = []
+        for mark in sorted((box.state / "ready").glob("*.json")):
+            if json.loads(mark.read_text()).get("ready") is True:
+                ready.append(mark.with_suffix(""))
+        known = {str(Path(path).resolve()) for path in [box.repo, *tasks, *ready]}
+        for line in box.git("worktree", "list", "--porcelain").splitlines():
+            if line.startswith("worktree ") and str(Path(line[len("worktree "):]).resolve()) not in known:
+                problems.append("left a worktree no task has, nor ready to take: %s" % line[len("worktree "):])
+        for path in ready:
+            if box.git("status", "--porcelain", cwd=path):
+                problems.append("a worktree ready to take holds changes: %s" % path)
+
+
 class CreateFromRemote(Create):
     """From a remote-tracking branch, which makes a local one to merge into."""
 
@@ -682,4 +710,5 @@ ALL = [Merge, MergeSquash, MergeAway, SquashAway, MergeTeardown, MergeSubmodule,
        Forget, Rename,
        Retarget,
        Stop, Resume, Seen, Turn, Send, Leave, Tell, Shell, Attach, Inspect, Look, PullRequest, PullRequestPush, Create, CreateFromRemote,
-       Propose, Show, ShowSeveral, ShowPage, TakeOffer, CreateFromOffer, CreateFromOfferFailing, CreateFork, CreateConversation]
+       Propose, Show, ShowSeveral, ShowPage, TakeOffer, CreateFromOffer, CreateFromOfferFailing, CreateFork, CreateConversation,
+       CreateFromReady]
