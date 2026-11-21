@@ -6771,6 +6771,9 @@ def put_back_removed(store, task, relink=True, dry_run=False):
 TRASH = "trash"
 TRASH_ENTRY = re.compile(r"([a-f0-9]{16})-[a-f0-9]{12}")
 DELETING = ".deleting-"
+# What the trash couldn't delete, as files a container made as root: left
+# there, and tried again by no run.
+LEFT = ".left-"
 
 
 def trash_worktree(store, task, worktree):
@@ -6828,13 +6831,21 @@ def finish_trashed(store, task):
         return
 
 
+def unrecorded_entry(store, path):
+    """Whether PATH is a trash entry of a task whose record is gone."""
+    found = TRASH_ENTRY.fullmatch(path.name)
+    return bool(found) and store.recorded(found.group(1)) is None
+
+
 def empty_trash(store):
     """Delete what the trash holds of tasks whose records are gone, until
     none is left: under a lock of its own, so one run at a time does it.
     What a run cut short was deleting, it finishes. An entry of a task
     still recorded stays, as a retire that failed after moving its worktree
     there. A folder made read-only, as Go's module cache makes them, is
-    made writable to delete what is in it."""
+    made writable to delete what is in it. What still can't be deleted, as
+    files a container made as root, is set aside as LEFT, and the rest
+    deleted."""
     folder = store.root / TRASH
     if not folder.is_dir():
         return
@@ -6853,10 +6864,9 @@ def empty_trash(store):
             going = []
             with contextlib.suppress(OSError):
                 for path in folder.iterdir():
-                    found = TRASH_ENTRY.fullmatch(path.name)
                     if path.name.startswith(DELETING):
                         going.append(path)
-                    elif found and store.recorded(found.group(1)) is None:
+                    elif unrecorded_entry(store, path):
                         # Renamed first, so that nothing finds it half deleted.
                         deleting = folder / (DELETING + path.name)
                         with contextlib.suppress(OSError):
@@ -6867,8 +6877,12 @@ def empty_trash(store):
             for path in going:
                 shutil.rmtree(path, onerror=writable)
                 if os.path.lexists(path):
-                    # It can't be deleted, as by another user's files: leave it.
-                    return
+                    left = folder / (LEFT + path.name[len(DELETING):])
+                    try:
+                        os.rename(path, left)
+                    except OSError:
+                        # Not even that: no run can do more with the trash.
+                        return
 
 
 def empty_trash_later(root):
@@ -6879,7 +6893,10 @@ def empty_trash_later(root):
     something to delete and no other run is at it."""
     store = Store(root)
     try:
-        if not any((store.root / TRASH).iterdir()):
+        # Only what a run would delete: no entry of a task still recorded,
+        # nor one it set aside.
+        if not any(path.name.startswith(DELETING) or unrecorded_entry(store, path)
+                   for path in (store.root / TRASH).iterdir()):
             return
         with (store.root / (TRASH + ".lock")).open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

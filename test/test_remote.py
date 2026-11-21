@@ -228,6 +228,33 @@ class Lifecycle(unittest.TestCase):
         roost.empty_trash(roost.Store(str(self.state)))
         self.assertEqual(self.trash(), [mine])
 
+    def test_what_the_trash_cant_delete_is_set_aside_and_tried_no_more(self):
+        kept = self.state / "trash"
+        stuck, other = (kept / ("%016x-%s" % (n, "0" * 12)) for n in (1, 2))
+        for entry in (stuck, other):
+            (entry / "tree").mkdir(parents=True)
+        real = shutil.rmtree
+        # As files a container made as root, which no chmod makes deletable.
+        def rmtree(path, *args, **kwargs):
+            if Path(path).name.endswith(stuck.name):
+                return
+            real(path, *args, **kwargs)
+        with patch.object(roost.shutil, "rmtree", rmtree):
+            roost.empty_trash(roost.Store(str(self.state)))
+        self.assertEqual(self.trash(), [kept / (roost.LEFT + stuck.name)])
+        # Nothing left to delete: no process starts to try.
+        with patch.object(roost.os, "fork", side_effect=AssertionError("forked")):
+            roost.empty_trash_later(str(self.state))
+
+    def test_a_worktree_you_locked_is_refused_before_the_trash(self):
+        task = self.create()
+        self.git("worktree", "lock", task["worktree"])
+        reply = self.request("retire", id=task["id"])
+        self.assertFalse(reply["ok"], reply)
+        self.assertIn("locked", reply["error"])
+        self.assertTrue(Path(task["worktree"], "hello").is_file())
+        self.assertEqual(self.trash(), [])
+
     def test_a_move_into_the_trash_cut_short_is_finished_on_the_next_retire(self):
         task = self.create()
         self.assertTrue(self.request("stop", id=task["id"])["ok"])

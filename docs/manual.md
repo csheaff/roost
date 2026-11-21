@@ -683,7 +683,9 @@ state folder's `trash/` in one rename, however many files it holds, and
 says it's done. The files are deleted afterwards, in the background, on the
 task's host. A worktree outside the state folder's file system is removed
 by Git as before, which takes longer. A deletion cut short, as by a
-reboot, finishes on the next retire, discard or refresh.
+reboot, finishes on the next retire, discard or refresh. What can't be
+deleted, as files a container made as root, stays in `trash/` under a
+name starting `.left-`, for you to delete.
 
 ### A worktree on another branch
 
