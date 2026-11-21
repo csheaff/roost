@@ -2406,8 +2406,11 @@ says: it waits at its prompt, as one you resumed does."
             (equal (roost--field task 'seen) updated)))))
 
 (defun roost--held-starting-p (task)
-  "Whether TASK, starting, has been so too long, as at a startup prompt."
-  (> (or (roost--seconds-since (roost--field task 'updatedAt)) 0) roost-startup-grace))
+  "Whether TASK, starting, has been so too long, as at a startup prompt.
+Not while Git makes its worktree, in its terminal, which can take a
+while; its host stamps the time again once it is made."
+  (and (not (roost--worktree-unmade-p task))
+       (> (or (roost--seconds-since (roost--field task 'updatedAt)) 0) roost-startup-grace)))
 
 (defun roost--attention-status (task)
   "TASK's status for attention.
@@ -3677,22 +3680,28 @@ a word, within 40 characters."
 
 (defvar roost--project-values nil
   "What `roost--project-value' has read, while a command binds this to (t).
-Then a list of t and each ((DIRECTORY . VARIABLE) . VALUE).  A command
-that asks a host for several things of one project, as a draft that
-makes several attempts, reads each value once, so that Emacs asks about
-the project's local variables once.")
+Then a list of t and each (DIRECTORY . LOCALS), LOCALS being the
+variables the project there sets, as `buffer-local-variables' has them,
+an `eval' form's too.  A command
+that asks a host for several things of one project, as a new task, or a
+draft that makes several attempts, reads the project once, so that Emacs
+asks about its local variables once.")
 
 (defun roost--project-value (directory variable)
   "VARIABLE's value for the project in DIRECTORY, which may set it locally."
-  (if-let* ((read (assoc (cons directory variable) (cdr roost--project-values))))
-      (cdr read)
-    (let ((value (with-temp-buffer
-                   (setq default-directory directory)
-                   (hack-dir-local-variables-non-file-buffer)
-                   (symbol-value variable))))
-      (when roost--project-values
-        (push (cons (cons directory variable) value) (cdr roost--project-values)))
-      value)))
+  (let ((locals (if-let* ((read (assoc directory (cdr roost--project-values))))
+                    (cdr read)
+                  (let ((locals (with-temp-buffer
+                                  (setq default-directory directory)
+                                  (let ((before (buffer-local-variables)))
+                                    (hack-dir-local-variables-non-file-buffer)
+                                    (seq-difference (buffer-local-variables) before)))))
+                    (when roost--project-values
+                      (push (cons directory locals) (cdr roost--project-values)))
+                    locals))))
+    (if-let* ((set (assq variable locals)))
+        (cdr set)
+      (default-value variable))))
 
 (defun roost--create-task (directory name base prompt agent &optional on-success on-failure extra)
   "Create an AGENT task NAME in DIRECTORY from BASE with PROMPT.
@@ -3701,11 +3710,14 @@ EXTRA is an alist of further request fields, such as the issue."
   (setq agent (or agent roost-default-agent))
   (unless (member agent roost--agents)
     (user-error "Unsupported Roost agent: %s" agent))
-  (let ((host (roost--directory-host directory))
-        ;; A conversation is in no project of yours, so none's setup runs.
-        (setup (unless (alist-get 'conversation extra)
-                 (roost--project-value directory 'roost-setup-command)))
-        (stayed (roost--you-stay)))
+  (let* ((host (roost--directory-host directory))
+         ;; Read once for this task, so Emacs asks about its risky
+         ;; variables once, however many of them it reads.
+         (roost--project-values (or roost--project-values (list t)))
+         ;; A conversation is in no project of yours, so none's setup runs.
+         (setup (unless (alist-get 'conversation extra)
+                  (roost--project-value directory 'roost-setup-command)))
+         (stayed (roost--you-stay)))
     (roost--request
      host "create"
      `(,(cons 'directory (file-local-name directory))
@@ -3718,6 +3730,8 @@ EXTRA is an alist of further request fields, such as the issue."
            ,(cons 'ready (if (and (not (alist-get 'conversation extra))
                                   (roost--project-value directory 'roost-ready-worktrees))
                              t :false))
+           ;; With none ready, its runner makes it, in its terminal.
+           ,(cons 'worktreeInTerminal t)
            ,(cons 'branchPrefix roost-branch-prefix)
            ,(cons 'programStatus (if roost-program-status t :false))
            ,(cons 'terminalImages (roost--terminal-images))
@@ -7700,6 +7714,7 @@ The note shows in Magit, under its line, with point on the line:
 \\<roost-magit-mode-map>\\[roost-note] there edits it."
   (interactive)
   (setq task (or task (roost--task-in-directory default-directory) (roost--choose)))
+  (roost--require-worktree task)
   (let* ((notes (or (roost--task-notes task)
                     (user-error "%s has no review notes" (roost--field task 'name))))
          (choices (seq-map-indexed
@@ -7782,6 +7797,7 @@ minibuffer, as `roost-open-task' does."
       (roost--quit-questions-left-open
        (lambda () (roost-review (or task (roost--read-task "Task: ")))))))
   (setq task (roost--choose task))
+  (roost--require-worktree task)
   (if (not (require 'magit nil t))
       (roost--magit-status task)
     (roost--look-then task "Magit" #'roost--magit-status)))
@@ -7843,6 +7859,7 @@ from there: for a task you judged by its panel, or whose diff you read
 in its agent's terminal."
   (interactive)
   (setq task (roost--choose task))
+  (roost--require-worktree task)
   (roost--look task nil
                (lambda (updated)
                  (when updated
@@ -7926,6 +7943,7 @@ command, first quit the questions you left open in the minibuffer."
       (roost--quit-questions-left-open
        (lambda () (roost-files (or task (roost--read-task "Task: ")))))))
   (setq task (roost--choose task))
+  (roost--require-worktree task)
   (roost--in-task-frame task (lambda () (dired (roost--remote-directory task)))))
 
 ;;;###autoload
@@ -7999,6 +8017,7 @@ left open in the minibuffer."
       (roost--quit-questions-left-open
        (lambda () (roost-diff (or task (roost--read-task "Task: ")))))))
   (setq task (roost--choose task))
+  (roost--require-worktree task)
   (unless (require 'magit nil t)
     (user-error (substitute-command-keys
                  "The diff needs Magit; \\[roost-review] opens the worktree in Dired instead")))
@@ -10841,6 +10860,7 @@ moved file's old path goes with it, or Git would show it all as new.  An
 untracked file, with nothing to compare, is opened instead."
   (when (roost--field task 'worktreeMissing)
     (user-error "%s's worktree is gone" (roost--field task 'name)))
+  (roost--require-worktree task)
   (roost--in-task-frame
    task (lambda ()
           (let ((default-directory (roost--remote-directory task))
@@ -11158,11 +11178,22 @@ With no task at all, none of the task commands do."
       (roost--field task 'live)
     (not (member (roost--field task 'status) '("stopped" "crashed" "exited")))))
 
+(defun roost--worktree-unmade-p (task)
+  "Whether TASK's runner has yet to make its worktree, in its terminal.
+Its host says so with a false `worktreeComplete', which a reply reads
+as nil; a record that has none was made before it ran."
+  (and (assq 'worktreeComplete task) (not (roost--field task 'worktreeComplete))))
+
+(defun roost--require-worktree (task)
+  "Refuse to open TASK's worktree before its runner has made it."
+  (when (roost--worktree-unmade-p task)
+    (user-error "Roost is still making %s's worktree, in its terminal" (roost--field task 'name))))
+
 (defun roost--action-applies-p (task command)
   "Whether COMMAND makes sense for TASK as last seen.
 Its host would refuse the rest, or there is nothing for them to do.
 Unknown Git statistics count as making sense."
-  (let ((worktree (not (roost--field task 'worktreeMissing)))
+  (let ((worktree (not (or (roost--field task 'worktreeMissing) (roost--worktree-unmade-p task))))
         (ahead (roost--field task 'ahead))
         ;; All its work, not a pull request merged before its latest commits.
         (merged (roost--landed task))
@@ -11175,7 +11206,7 @@ Unknown Git statistics count as making sense."
       ('roost-shell (and worktree (not (member (roost--field task 'status) '("stopped" "crashed")))))
       ((or 'roost-files 'roost-review 'roost-diff 'roost-mark-looked 'roost-update) worktree)
       ((or 'roost-send 'roost-stop) (roost--agent-running-p task))
-      ('roost-resume (and worktree (not (roost--agent-running-p task))))
+      ('roost-resume (and (not (roost--field task 'worktreeMissing)) (not (roost--agent-running-p task))))
       ;; A conversation's branch is Roost's own, with nothing to propose or merge.
       ('roost-pr (and worktree (not (roost--conversation-p task))
                       (or (roost--field task 'pr) (not (eql ahead 0)))))

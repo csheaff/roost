@@ -84,6 +84,8 @@ class Lifecycle(unittest.TestCase):
         return roost.rpc(dict(root=str(self.state), action=action, **args))
 
     def create(self, **args):
+        # As Emacs asks: with none made ahead, the runner makes the worktree.
+        args.setdefault("worktreeInTerminal", True)
         reply = self.request("create", directory=args.pop("directory", str(self.repo)), name=args.pop("name", "task"),
                              socket=self.socket, command=args.pop("command", [sys.executable, str(FAKE)]), **args)
         self.assertTrue(reply["ok"], reply)
@@ -115,8 +117,8 @@ class Lifecycle(unittest.TestCase):
             time.sleep(0.05)
         self.fail("the agent's pane is still running")
 
-    def wait(self, task, status, event=None):
-        deadline = time.monotonic() + 8
+    def wait(self, task, status, event=None, seconds=8):
+        deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
             record = roost.Store(str(self.state)).read(task["id"])
             if record["status"] == status and (event is None or record.get("lastEvent") == event):
@@ -464,6 +466,193 @@ class Lifecycle(unittest.TestCase):
             time.sleep(0.05)
         [ready] = self.ready_worktrees()
         self.assertEqual(self.git("rev-parse", "HEAD", cwd=ready), self.git("rev-parse", "HEAD"))
+
+    def slow_checkout(self, files=6, smudge="sleep 1; cat"):
+        """Make each of FILES files take a while to check out, as Git LFS's do."""
+        for number in range(files):
+            (self.repo / ("file%d.bin" % number)).write_text("%d\n" % number)
+        (self.repo / ".gitattributes").write_text("*.bin filter=slow\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "Slow to check out")
+        self.git("config", "filter.slow.smudge", smudge)
+        self.git("config", "filter.slow.clean", "cat")
+
+    def test_a_worktree_made_in_the_terminal_is_made_after_the_reply(self):
+        self.slow_checkout(files=2)
+        began = time.monotonic()
+        reply = self.request("create", directory=str(self.repo), name="task", socket=self.socket,
+                             command=[sys.executable, str(FAKE)], worktreeInTerminal=True)
+        self.assertTrue(reply["ok"], reply)
+        task = reply["result"]
+        # Before Git checks out a file, which takes a second each.
+        self.assertLess(time.monotonic() - began, 1.5)
+        self.assertIs(task["worktreeComplete"], False)
+        self.assertEqual(self.git("rev-parse", task["branch"]), self.git("rev-parse", "HEAD"))
+        listed = {entry["id"]: entry for entry in self.request("list", full=True)["result"]}[task["id"]]
+        self.assertFalse(listed["worktreeMissing"])
+        self.assertEqual(self.request("shell", id=task["id"])["error"], roost.UNMADE)
+        record = self.wait(task, "ready", seconds=15)
+        self.assertIs(record["worktreeComplete"], True)
+        # Stamped once made, so that Emacs counts the agent's start from then.
+        self.assertGreater(record["updatedAt"], task["updatedAt"])
+        worktree = Path(task["worktree"])
+        self.assertEqual(self.git("rev-parse", "--abbrev-ref", "HEAD", cwd=worktree), task["branch"])
+        self.assertEqual(self.git("status", "--porcelain", cwd=worktree), "")
+        self.assertEqual(self.pane_directory(record["paneId"], worktree), worktree.resolve())
+        steps = [entry["step"] for entry in roost.History(self.state / "timings").read(0) if entry["id"] == task["id"]]
+        self.assertIn("create.branch", steps)
+        self.assertIn("create.worktree", steps)
+        self.assertTrue(self.request("retire", id=task["id"])["ok"])
+        self.assertEqual(self.task_branches(), [])
+
+    def test_a_worktree_being_made_in_the_terminal_is_finished_by_no_one_else(self):
+        self.slow_checkout()
+        reply = self.request("create", directory=str(self.repo), name="task", socket=self.socket,
+                             command=[sys.executable, str(FAKE)], worktreeInTerminal=True)
+        task = reply["result"]
+        deadline = time.monotonic() + 8
+        while not (Path(task["worktree"]) / "file0.bin").exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        for action in ("retire", "discard"):
+            refused = self.request(action, id=task["id"])
+            self.assertEqual(refused["error"], "Roost is busy with this task's worktree; refresh in a moment")
+        record = self.wait(task, "ready", seconds=30)
+        self.assertEqual(self.git("status", "--porcelain", cwd=Path(task["worktree"])), "")
+        self.assertIs(record["worktreeComplete"], True)
+
+    def test_a_worktree_whose_making_was_stopped_is_made_anew_on_resume(self):
+        self.slow_checkout()
+        for cut in ("stop", "kill"):
+            with self.subTest(cut=cut):
+                self.git("config", "filter.slow.smudge", "sleep 1; cat")
+                task = self.request("create", directory=str(self.repo), name=cut, socket=self.socket,
+                                    command=[sys.executable, str(FAKE)], worktreeInTerminal=True)["result"]
+                worktree = Path(task["worktree"])
+                deadline = time.monotonic() + 8
+                while not (worktree / "file0.bin").exists() and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                if cut == "stop":
+                    # Git takes back what it made of a worktree as it hangs up.
+                    self.assertTrue(self.request("stop", id=task["id"])["ok"])
+                    self.wait_for_pane_exit(task)
+                    self.assertFalse(worktree.exists())
+                else:
+                    # As when its host goes down: Git's checkout, stopped partway.
+                    pid = int(roost.tmux(self.socket, "display-message", "-p", "-t", task["paneId"],
+                                         "#{pane_pid}").stdout)
+                    os.killpg(pid, signal.SIGKILL)
+                    self.wait_for_pane_exit(task)
+                    self.assertTrue(roost.initializing(str(self.repo), worktree.resolve()))
+                    self.request("stop", id=task["id"])
+                    # Nothing proves only Git wrote there since: kept, for you to discard.
+                    (worktree / "yours").write_text("written since\n")
+                    self.assertTrue(self.request("resume", id=task["id"])["ok"])
+                    record = self.wait(task, "failed")
+                    self.assertIn("stopped partway", record["error"])
+                    self.assertEqual((worktree / "yours").read_text(), "written since\n")
+                    told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
+                    self.assertEqual((worktree / "yours").read_text(), "written since\n")
+                    reply = self.request("discard", id=task["id"], expect=told["commit"], told=told)
+                    self.assertTrue(reply["ok"], reply)
+                    self.assertFalse(os.path.lexists(worktree))
+                    continue
+                self.git("config", "filter.slow.smudge", "cat")
+                resumed = self.request("resume", id=task["id"])
+                self.assertTrue(resumed["ok"], resumed)
+                record = self.wait(task, "ready", seconds=30)
+                self.assertIs(record["worktreeComplete"], True)
+                self.assertEqual(self.git("status", "--porcelain", cwd=worktree), "")
+                self.assertTrue(self.request("retire", id=task["id"])["ok"])
+        self.assertEqual(len(roost.worktree_branches(self.repo)), 1)
+
+    def test_a_task_whose_checkout_was_killed_partway_goes_only_when_discarded(self):
+        self.slow_checkout()
+        for action in ("discard", "retire"):
+            with self.subTest(action=action):
+                task = self.request("create", directory=str(self.repo), name=action, socket=self.socket,
+                                    command=[sys.executable, str(FAKE)], worktreeInTerminal=True)["result"]
+                worktree = Path(task["worktree"])
+                deadline = time.monotonic() + 8
+                while not (worktree / "file0.bin").exists() and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                pid = int(roost.tmux(self.socket, "display-message", "-p", "-t", task["paneId"],
+                                     "#{pane_pid}").stdout)
+                os.killpg(pid, signal.SIGKILL)
+                self.wait_for_pane_exit(task)
+                self.assertTrue(roost.initializing(str(self.repo), worktree.resolve()))
+                # As Emacs's next refresh finds it: its runner gone.
+                self.request("list")
+                if action == "discard":
+                    told = self.request("discard", id=task["id"], dryRun=True)
+                    self.assertTrue(told["ok"], told)
+                    told = told["result"]["discard"]
+                    # A preview takes nothing away.
+                    self.assertTrue((worktree / "file0.bin").exists())
+                    reply = self.request("discard", id=task["id"], expect=told["commit"], told=told)
+                    self.assertTrue(reply["ok"], reply)
+                else:
+                    # Retiring keeps what may be yours, as for any worktree.
+                    self.assertFalse(self.request("retire", id=task["id"])["ok"])
+                    self.assertTrue((worktree / "file0.bin").exists())
+                    continue
+                self.assertFalse(os.path.lexists(worktree))
+                self.assertEqual(self.task_branches(), [])
+                self.assertEqual(len(roost.worktree_branches(self.repo)), 1)
+
+    def test_a_task_stopped_before_its_worktree_was_made_finishes_to_nothing(self):
+        self.slow_checkout(smudge="sleep 30; cat")
+        for action in ("discard", "retire"):
+            with self.subTest(action=action):
+                task = self.request("create", directory=str(self.repo), name=action, socket=self.socket,
+                                    command=[sys.executable, str(FAKE)], worktreeInTerminal=True)["result"]
+                self.assertTrue(self.request("stop", id=task["id"])["ok"])
+                self.wait_for_pane_exit(task)
+                if action == "discard":
+                    told = self.request("discard", id=task["id"], dryRun=True)
+                    self.assertTrue(told["ok"], told)
+                    told = told["result"]["discard"]
+                    reply = self.request("discard", id=task["id"], expect=told["commit"], told=told)
+                else:
+                    reply = self.request("retire", id=task["id"])
+                self.assertTrue(reply["ok"], reply)
+                self.assertEqual(self.task_branches(), [])
+                self.assertEqual(len(roost.worktree_branches(self.repo)), 1)
+                self.assertEqual(roost.Store(str(self.state)).all(), [])
+
+    def test_a_post_checkout_hook_failing_in_the_terminal_keeps_what_it_wrote(self):
+        hook = self.repo / ".git" / "hooks" / "post-checkout"
+        hook.write_text("#!/bin/sh\necho made > made-by-hook\necho 'post-checkout says no' >&2\nexit 1\n")
+        hook.chmod(0o755)
+        task = self.request("create", directory=str(self.repo), name="task", socket=self.socket,
+                            command=[sys.executable, str(FAKE)], worktreeInTerminal=True)["result"]
+        record = self.wait(task, "failed")
+        self.assertIn("post-checkout hook failed", record["error"])
+        self.assertTrue((Path(task["worktree"]) / "made-by-hook").exists())
+        # Resumed, it is kept as it is, for you to look at.
+        self.wait_for_pane_exit(task)
+        self.assertTrue(self.request("resume", id=task["id"])["ok"])
+        record = self.wait(task, "failed")
+        self.assertIn("stopped partway", record["error"])
+        self.assertTrue((Path(task["worktree"]) / "made-by-hook").exists())
+
+    def test_the_checkout_in_the_terminal_runs_as_the_tasks(self):
+        # So that what its hooks leave running is known as the task's.
+        log = self.root / "hook-env"
+        hook = self.repo / ".git" / "hooks" / "post-checkout"
+        hook.write_text("#!/bin/sh\necho \"$ROOST_TASK_ID\" > %s\n" % shlex.quote(str(log)))
+        hook.chmod(0o755)
+        task = self.create()
+        self.assertEqual(log.read_text().strip(), task["id"])
+
+    def test_a_new_task_has_its_submodules_checked_out_once_its_worktree_is_made_in_the_terminal(self):
+        (self.repo / ".gitmodules").write_text("")
+        self.git("add", ".gitmodules")
+        self.git("commit", "-qm", "No submodules yet")
+        task = self.request("create", directory=str(self.repo), name="task", socket=self.socket,
+                            command=[sys.executable, str(FAKE)], worktreeInTerminal=True)["result"]
+        self.assertNotIn("submodulesComplete", task)
+        record = self.wait(task, "ready")
+        self.assertIs(record["submodulesComplete"], True)
 
     def test_finishing_moves_the_worktree_into_the_trash_to_be_emptied_later(self):
         for action in ("retire", "discard"):

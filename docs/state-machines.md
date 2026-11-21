@@ -403,6 +403,7 @@ Invariants:
 | Preparing | a fork | its source is not Merging, Removing or Removal cut short | Preparing | the source's work read, its worktree lock shared meanwhile | `conversation_to_fork`, `snapshot` |
 | Preparing | | | Noted | note locked before it is in place | `noting_creation` |
 | Noted | asked with `ready` | Git 2.36 or later, and a worktree made ahead for the repository is Ready | Noted | the branch made in the primary checkout, then the worktree moved to the task's path, locked as TAKING, checked clean, its branch checked out with no hook, its HEAD's reflog begun anew, unlocked, and `post-checkout` run with no old commit; else removed, its branch deleted, and Git makes one | `take_ready_for`, `take_ready` |
+| Noted | asked with `worktreeInTerminal`, none taken | a new branch, no conversation, no changes carried from a fork | Noted | the branch made in the primary checkout, `worktreeComplete` False; the runner makes the worktree ([The runner's stages](#the-runners-stages)) | `make_task` |
 | Noted | Git and spawn done | | Made | note unlinked under its lock | `noting_creation` |
 | Noted | an attempt, as its record is saved | another of its group was recorded meanwhile from other words | Made, of that other | undone as a failed creation is; that task returned | `made_from_other_words`, `abandon` |
 | Noted | Git refused | nothing there | Failed | branch deleted | `make_task` |
@@ -1364,8 +1365,9 @@ Open: none.
 
 ### The runner's stages
 
-Kind: implicit. Lives in: `submodulesComplete`, `allSubmodules`, `copyComplete`,
-`setupComplete` in the record; the runner's process.
+Kind: implicit. Lives in: `worktreeComplete`, `submodulesComplete`, `allSubmodules`,
+`copyComplete`, `setupComplete` in the record; the task's worktree lock while
+it makes the worktree; the runner's process.
 What a new worktree needs before its agent starts, each resumed if cut off.
 A flag is False until done, missing on older records and when there's nothing
 to do, and `is False` is what's tested.
@@ -1373,6 +1375,7 @@ to do, and `is False` is what's tested.
 | State | Meaning | How you can tell |
 | --- | --- | --- |
 | Waiting | Runner started, lock not yet had | `starting` |
+| Worktree | `make_worktree`: `git worktree add` in the pane | `worktreeComplete` False |
 | Submodules | `check_out_submodules` | `submodulesComplete` False |
 | Copy | `copy_included` | `copyComplete` False |
 | Setup | the project's setup command | `setupComplete` False |
@@ -1392,12 +1395,28 @@ Invariants:
   write (`has_conversation`). A session it never said that of is left to `--resume`.
   Codex and OpenCode name a session only at the first turn, and Pi starts on a
   session file that isn't there.
+- I5. While a run makes the worktree, it holds the task's worktree lock, shared,
+  so that `retire`, `discard`, `merge` and `forget` are refused as busy, and it
+  checks the record under that lock, so a task finished before it started is
+  left alone. Until the worktree is made, nothing in Emacs opens it, and the
+  helper refuses what needs it (`require_worktree`) and lists no Git stats.
+- I6. Roost removes what a run cut short left of the worktree only when you
+  discard the task, as any worktree, its contents counted: Git's `initializing`
+  lock doesn't prove nobody wrote there since, so a resume refuses it and
+  `discard` unlocks it once you said so (`unlock_unmade`). A hangup, as from
+  `stop`, lets Git remove it itself, and a resume makes it again. One Git
+  finished is taken as made only on the task's branch with nothing else
+  there, ignored files too; else the run stops and keeps it.
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
 | Waiting | lock had | other `runId` | exit 0 | window closes | `runner` |
 | Waiting | lock had | `stopped`, `retired` | exit 0 | | `runner` |
-| Waiting | launch made | | Submodules, or next | argv fixed now, hook settings written | `agent.launch` |
+| Waiting | launch made | | Worktree, or next | argv fixed now, hook settings written | `agent.launch` |
+| Worktree | lock had | other `runId`, `stopped`, `retired` | exit 0 | nothing made | `make_worktree` |
+| Worktree | lock refused | a removal or merge holds it | exit 0 | says so in the pane; the status is left to that | `make_worktree` |
+| Worktree | made | | Submodules, or next | `worktreeComplete` saved, and `submodulesComplete` False with a `.gitmodules`; the runner moves into it | `make_worktree` |
+| Worktree | Git or `post-checkout` fails | | Ended, `failed` | what the hook wrote kept; resumed, that stops it again | `make_worktree` |
 | Submodules | `decided` | this run | same | `allSubmodules` saved before Git initializes any | `check_out_submodules` |
 | Submodules | done | | Copy | flag saved | `runner` |
 | Copy | done | | Setup | flag saved | `runner` |
@@ -3821,7 +3840,7 @@ registry lock.
 | `session`, `windowIndex`, `windowId` | `spawn`, `resume`, `stop`, `list_tasks`, `inspect`, `shell` | yes |
 | `shellPaneId` | `shell`, `spawn`, `stop` | yes |
 | `name`, `task`, `renamedAt` | `rename` | yes |
-| `setupComplete`, `copyComplete`, `submodulesComplete`, `allSubmodules` | `runner` | yes, fresh read each |
+| `setupComplete`, `copyComplete`, `submodulesComplete`, `allSubmodules`, `worktreeComplete` | `runner`, `make_worktree` | yes, fresh read each |
 | `offers`, `offersAt` | `propose_task`, `take_offer`, `make_task` and `list_tasks` (the parent's, through `take_offer`) | yes |
 | `mayOffer`, `parent`, `offer` | `make_task` | yes; never changed |
 | `conversation`, `remoteControl`, `forkSession`, `forkedFrom`, `attempt` | `make_task` | yes; never changed |
