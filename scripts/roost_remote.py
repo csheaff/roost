@@ -2986,7 +2986,11 @@ def take_ready_for(store, task, existed):
     if git_with_hooks(repo, "-c", "branch.autoSetupMerge=false", "branch", branch, commit,
                       check=False).returncode:
         return False
-    taken = take_ready(store, repo, worktree)
+    try:
+        taken = take_ready(store, repo, worktree)
+    except OSError:
+        # Its mark unwritten, as on a full disk: nothing moved.
+        taken = False
     if taken:
         # Locked until its checkout is done: cut short before its branch is
         # checked out, it holds only Git's checkout (`undo_creation`).
@@ -7129,7 +7133,9 @@ def take_ready(store, repo, worktree):
             # Not ready from now on, whatever happens: never taken twice.
             atomic_json(mark, dict(said, ready=False))
             if git(repo, "worktree", "move", str(mark.with_suffix("")), str(worktree), check=False).returncode == 0:
-                mark.unlink(missing_ok=True)
+                # Left, it says not ready, and the next run clears it.
+                with contextlib.suppress(OSError):
+                    mark.unlink(missing_ok=True)
                 return True
     return False
 

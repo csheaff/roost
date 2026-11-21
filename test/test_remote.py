@@ -257,6 +257,21 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(told["ok"], told)
         self.assertNotIn(old, json.dumps(told["result"]))
 
+    def test_a_mark_that_cant_be_written_leaves_the_task_to_git(self):
+        self.tend()
+        [ready] = self.ready_worktrees()
+        real = roost.atomic_json
+        def full(path, data):
+            if Path(path).parent.name == "ready":
+                raise OSError(28, "No space left on device")
+            real(path, data)
+        with patch.object(roost, "atomic_json", full):
+            task = self.create(ready=True)
+        self.assertEqual(self.git("rev-parse", "--abbrev-ref", "HEAD", cwd=Path(task["worktree"])), task["branch"])
+        self.assertEqual(self.ready_worktrees(), [ready])
+        self.assertEqual([branch for branch in self.git("branch", "--format=%(refname:short)").split()
+                          if branch.startswith("roost/")], [task["branch"]])
+
     def test_a_task_not_asked_to_starts_as_before_and_leaves_the_one_made_ahead(self):
         self.tend()
         [ready] = self.ready_worktrees()
