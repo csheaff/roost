@@ -466,6 +466,24 @@ class Lifecycle(unittest.TestCase):
         self.assertFalse(mark.exists())
         self.assertEqual(self.listed_worktrees(), [repo])
 
+    def test_a_wish_left_while_a_listing_clears_the_old_is_carried_out(self):
+        # A task's run that found the listing's at work left its wish.
+        self.tend()
+        [old] = self.ready_worktrees()
+        mark = old.with_suffix(".json")
+        roost.atomic_json(mark, dict(json.loads(mark.read_text()), madeAt=time.time() - 8 * 86400))
+        roost.want_ready(roost.Store(str(self.state)), str(self.repo.resolve()), self.git("rev-parse", "HEAD"))
+        done = subprocess.run([sys.executable, roost.__file__, "rpc"],
+                              input=json.dumps(dict(root=str(self.state), action="list")),
+                              capture_output=True, text=True, timeout=30)
+        self.assertTrue(json.loads(done.stdout)["ok"], done)
+        deadline = time.monotonic() + 15
+        while not (self.ready_worktrees() and old not in self.ready_worktrees()) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        [ready] = self.ready_worktrees()
+        self.assertNotEqual(ready, old)
+        self.assertEqual(list((self.state / "ready").glob("*.want")), [])
+
     def test_a_post_checkout_hook_runs_in_the_task_taken_from_one_made_ahead(self):
         self.tend()
         log = self.root / "hook.log"
@@ -501,7 +519,8 @@ class Lifecycle(unittest.TestCase):
                               text=True, timeout=30)
         task = json.loads(done.stdout)["result"]
         store = roost.Store(str(self.state))
-        while store.read(task["id"]).get("worktreeComplete") is False:
+        deadline = time.monotonic() + 15
+        while store.read(task["id"]).get("worktreeComplete") is False and time.monotonic() < deadline:
             self.assertEqual(list((self.state / "ready").glob("*.json")), [])
             time.sleep(0.05)
         self.wait(task, "ready", seconds=15)
@@ -533,6 +552,8 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(self.git("rev-parse", task["branch"]), self.git("rev-parse", "HEAD"))
         listed = {entry["id"]: entry for entry in self.request("list", full=True)["result"]}[task["id"]]
         self.assertFalse(listed["worktreeMissing"])
+        # Being made, it is said not to be cut short, whatever was said before.
+        self.assertIs(listed["worktreeCutShort"], False)
         self.assertEqual(self.request("shell", id=task["id"])["error"], roost.UNMADE)
         record = self.wait(task, "ready", seconds=15)
         self.assertIs(record["worktreeComplete"], True)

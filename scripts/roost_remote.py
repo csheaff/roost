@@ -3500,8 +3500,8 @@ def list_tasks(store, request):
             store.note(task)
         # Said of each task yet to have its worktree, whether so or not,
         # as Emacs keeps the last that was said.
-        if unmade(task) and not task["live"]:
-            task["worktreeCutShort"] = cut_short(task)
+        if unmade(task):
+            task["worktreeCutShort"] = not task["live"] and cut_short(task)
     return tasks
 
 
@@ -7269,6 +7269,15 @@ def unwanted_ready(said, old):
             or not isinstance(said.get("repo"), str) or not Path(said["repo"]).is_dir())
 
 
+def unmarked_ready(folder):
+    """The folders in FOLDER, `ready/`, with no mark: what a run cut short
+    left as it began."""
+    with contextlib.suppress(OSError):
+        return [entry for entry in folder.iterdir()
+                if READY_ENTRY.fullmatch(entry.name) and not entry.with_suffix(".json").exists()]
+    return []
+
+
 def sweep_ready(store, repo=None, keep=False):
     """Remove each worktree made ahead that `unwanted_ready` says goes,
     and REPO's, if given, but one to KEEP, which is returned, as (mark,
@@ -7287,11 +7296,8 @@ def sweep_ready(store, repo=None, keep=False):
             elif mine or unwanted_ready(said, old):
                 atomic_json(mark, dict(said, ready=False))
                 going.append((mark, said))
-        # What a run cut short left as it began.
-        with contextlib.suppress(OSError):
-            for entry in folder.iterdir():
-                if READY_ENTRY.fullmatch(entry.name) and not entry.with_suffix(".json").exists():
-                    shutil.rmtree(entry, ignore_errors=True)
+        for entry in unmarked_ready(folder):
+            shutil.rmtree(entry, ignore_errors=True)
     for mark, said in going:
         drop_ready(store, mark, said)
     return kept
@@ -7306,9 +7312,7 @@ def prune_ready_later(root):
     folder = store.root / READY
     old = time.time() - READY_DAYS * 86400
     try:
-        if not (any(unwanted_ready(said, old) for _, said in ready_marks(store))
-                or any(READY_ENTRY.fullmatch(entry.name) and not entry.with_suffix(".json").exists()
-                       for entry in folder.iterdir())):
+        if not (any(unwanted_ready(said, old) for _, said in ready_marks(store)) or unmarked_ready(folder)):
             return
         with (folder / ".tending").open("a") as tending:
             fcntl.flock(tending, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -7324,6 +7328,9 @@ def prune_ready_later(root):
             except BlockingIOError:
                 return
             sweep_ready(store)
+        # A wish made meanwhile, whose run found this one at work and left it.
+        if any(folder.glob("*.want")):
+            tend_wanted(store)
     in_background(work)
 
 
