@@ -6738,7 +6738,10 @@ def put_back_removed(store, task, relink=True, dry_run=False):
     Git says what is there since, as for any task, and nothing is forced.
     One Git forgot partway is made a worktree again, with RELINK; else,
     for a discard, which deletes it all, only what a relink left goes, and
-    with DRY_RUN, which deletes nothing, nothing at all."""
+    with DRY_RUN, which deletes nothing, nothing at all. Any of them first
+    finishes a move into the trash cut short, which began with nothing
+    there to keep (`finish_trashed`)."""
+    finish_trashed(store, task)
     if not task.get("removing"):
         return
     # Its own folder, and no other checkout a link in its place leads to.
@@ -6763,6 +6766,143 @@ def put_back_removed(store, task, relink=True, dry_run=False):
             return
         atomic_text(worktree / ".git", "gitdir: %s\n" % gitdir)
     restore_deleted(worktree)
+
+
+TRASH = "trash"
+TRASH_ENTRY = re.compile(r"([a-f0-9]{16})-[a-f0-9]{12}")
+DELETING = ".deleting-"
+
+
+def trash_worktree(store, task, worktree):
+    """Move TASK's WORKTREE, which holds nothing to keep, as removing it
+    checked, into the state directory's trash, and what Git keeps of it
+    after it: two renames, however many files it has, which
+    `empty_trash` deletes later, once the task's record is gone. False,
+    with nothing moved, where it can't be renamed there, as from another
+    file system: Git removes it then, as before. A crash between the two
+    leaves the folder in the trash, and Git still listing it, which
+    `finish_trashed` completes on the next retire or discard."""
+    entry = store.root / TRASH / (task["id"] + "-" + uuid.uuid4().hex[:12])
+    try:
+        entry.parent.mkdir(mode=0o700, exist_ok=True)
+        entry.mkdir(mode=0o700)
+    except OSError:
+        return False
+    try:
+        os.rename(worktree, entry / "tree")
+    except OSError:
+        with contextlib.suppress(OSError):
+            entry.rmdir()
+        return False
+    finish_trashed(store, task)
+    return True
+
+
+def trash_entries(store, task_id):
+    """The trash's entries of TASK_ID's worktrees, as `trash_worktree` made them."""
+    with contextlib.suppress(OSError):
+        return sorted(path for path in (store.root / TRASH).iterdir()
+                      if (TRASH_ENTRY.fullmatch(path.name) or [None, None])[1] == task_id)
+    return []
+
+
+def finish_trashed(store, task):
+    """Have Git forget TASK's worktree, which `trash_worktree` moved into
+    the trash, as Git's own removal would: what Git keeps of it goes into
+    the trash beside it, or, on another file system, is deleted, as
+    `unregister_gone` deletes it. Nothing for a worktree back at its path,
+    or never moved."""
+    worktree = Path(task["worktree"])
+    if os.path.lexists(worktree) or not Path(task["repo"]).is_dir():
+        return
+    for entry in trash_entries(store, task["id"]):
+        if not (entry / "tree").is_dir():
+            continue
+        gitdir = kept_of_gone(task["repo"], worktree.resolve())
+        if gitdir is None:
+            return
+        try:
+            os.rename(gitdir, entry / "git")
+        except OSError:
+            shutil.rmtree(gitdir)
+        return
+
+
+def empty_trash(store):
+    """Delete what the trash holds of tasks whose records are gone, until
+    none is left: under a lock of its own, so one run at a time does it.
+    What a run cut short was deleting, it finishes. An entry of a task
+    still recorded stays, as a retire that failed after moving its worktree
+    there. A folder made read-only, as Go's module cache makes them, is
+    made writable to delete what is in it."""
+    folder = store.root / TRASH
+    if not folder.is_dir():
+        return
+    with (store.root / (TRASH + ".lock")).open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
+        def writable(function, path, _):
+            with contextlib.suppress(OSError):
+                os.chmod(os.path.dirname(path), 0o700)
+                if os.path.isdir(path) and not os.path.islink(path):
+                    os.chmod(path, 0o700)
+                function(path)
+        while True:
+            going = []
+            with contextlib.suppress(OSError):
+                for path in folder.iterdir():
+                    found = TRASH_ENTRY.fullmatch(path.name)
+                    if path.name.startswith(DELETING):
+                        going.append(path)
+                    elif found and store.recorded(found.group(1)) is None:
+                        # Renamed first, so that nothing finds it half deleted.
+                        deleting = folder / (DELETING + path.name)
+                        with contextlib.suppress(OSError):
+                            os.rename(path, deleting)
+                            going.append(deleting)
+            if not going:
+                return
+            for path in going:
+                shutil.rmtree(path, onerror=writable)
+                if os.path.lexists(path):
+                    # It can't be deleted, as by another user's files: leave it.
+                    return
+
+
+def empty_trash_later(root):
+    """Empty the trash of the state directory ROOT in a process of its own,
+    in a session of its own, with nothing of this one's open, so that
+    neither Emacs nor ssh waits for it: once this request has replied, as
+    the trash may hold hundreds of thousands of files. Only when there is
+    something to delete and no other run is at it."""
+    store = Store(root)
+    try:
+        if not any((store.root / TRASH).iterdir()):
+            return
+        with (store.root / (TRASH + ".lock")).open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        # No trash, or a run already at it.
+        return
+    sys.stdout.flush()
+    sys.stderr.flush()
+    child = os.fork()
+    if child:
+        # It forks again and ends at once, leaving no process to wait for.
+        os.waitpid(child, 0)
+        return
+    try:
+        os.setsid()
+        if os.fork():
+            os._exit(0)
+        null = os.open(os.devnull, os.O_RDWR)
+        for fd in (0, 1, 2):
+            os.dup2(null, fd)
+        empty_trash(store)
+    finally:
+        os._exit(0)
 
 
 def unregister_gone(repo, worktree):
@@ -8831,11 +8971,13 @@ def remove_worktrees(store, task, worktree, agents, force=False, teardown=None, 
                 elif worktree and force and not linked(worktree):
                     # Git removes no worktree that has lost its link to the
                     # repository, however forced.
-                    shutil.rmtree(worktree)
+                    if not trash_worktree(store, task, worktree):
+                        shutil.rmtree(worktree)
                     unregister_gone(task["repo"], worktree)
                 elif worktree and force:
                     # Twice: also a worktree its agent locked.
-                    git(task["repo"], "worktree", "remove", "--force", "--force", str(worktree))
+                    if not trash_worktree(store, task, worktree):
+                        git(task["repo"], "worktree", "remove", "--force", "--force", str(worktree))
                 elif worktree:
                     def clean():
                         try:
@@ -8866,7 +9008,9 @@ def remove_worktrees(store, task, worktree, agents, force=False, teardown=None, 
                         clean()
                         require_submodules_kept(worktree)
                     try:
-                        git(task["repo"], "worktree", "remove", *force, str(worktree))
+                        # Nothing there is to keep now, as Git would check.
+                        if not trash_worktree(store, task, worktree):
+                            git(task["repo"], "worktree", "remove", *force, str(worktree))
                     except RoostError as exc:
                         # Git stopped partway, as at a file written as it
                         # deleted, and forgot the worktree all the same.
@@ -10292,13 +10436,19 @@ def main():
         request = json.load(sys.stdin)
         if isinstance(request, dict) and request.get("action") in DETACHED:
             detach()
-        reply = json.dumps(rpc(request), ensure_ascii=False)
+        answered = rpc(request)
+        reply = json.dumps(answered, ensure_ascii=False)
         # Emacs may have stopped waiting, or its connection gone: nothing is
         # left to tell, nor to say so to.
         try:
             print(reply, flush=True)
         except OSError:
             os._exit(0)
+        # What finishing a task moved into the trash, once it has replied;
+        # and on a listing, what a run a reboot cut short left there.
+        if isinstance(request, dict) and request.get("action") in FINISHING + ("list",):
+            with contextlib.suppress(OSError, RoostError, KeyError, TypeError):
+                empty_trash_later(request["root"])
     elif mode in ("hook", "hook-env"):
         # Observational hooks never emit decision-control JSON or fail
         # the coding session just because its status dashboard is unavailable.

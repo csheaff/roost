@@ -678,6 +678,13 @@ The message after `x` or `m` says what was kept and where. Discarding a task
 keeps nothing, and drops what a retire that was then refused had kept: you
 chose to lose it.
 
+Once those checks pass, retiring or discarding moves the worktree into the
+state folder's `trash/` in one rename, however many files it holds, and
+says it's done. The files are deleted afterwards, in the background, on the
+task's host. A worktree outside the state folder's file system is removed
+by Git as before, which takes longer. A deletion cut short, as by a
+reboot, finishes on the next retire, discard or refresh.
+
 ### A worktree on another branch
 
 You or a task's agent may make a branch in its worktree and work there, as

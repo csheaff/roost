@@ -197,6 +197,72 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(steps.count("create.total"), 1)
         self.assertNotIn("resume.total", steps)
 
+    def trash(self):
+        return sorted((self.state / "trash").iterdir()) if (self.state / "trash").is_dir() else []
+
+    def test_finishing_moves_the_worktree_into_the_trash_to_be_emptied_later(self):
+        for action in ("retire", "discard"):
+            with self.subTest(action=action):
+                task = self.create(name=action)
+                worktree = Path(task["worktree"])
+                kept = self.state / "trash"
+                before = self.trash()
+                if action == "discard":
+                    told = self.request("discard", id=task["id"], dryRun=True)["result"]["discard"]
+                    reply = self.request("discard", id=task["id"], expect=told["commit"], told=told)
+                else:
+                    reply = self.request("retire", id=task["id"])
+                self.assertTrue(reply["ok"], reply)
+                self.assertFalse(os.path.lexists(worktree))
+                self.assertNotIn(str(worktree), self.git("worktree", "list", "--porcelain"))
+                self.assertFalse((self.repo / ".git" / "worktrees" / worktree.name).exists())
+                [entry] = [path for path in self.trash() if path not in before]
+                self.assertTrue(entry.name.startswith(task["id"] + "-"))
+                self.assertEqual(sorted(path.name for path in entry.iterdir()), ["git", "tree"])
+                self.assertTrue((entry / "tree" / "hello").is_file())
+        # What a task still recorded has there stays, as a retire that failed
+        # after its move; the rest goes.
+        other = self.create(name="other")
+        mine = kept / (other["id"] + "-" + "0" * 12)
+        mine.mkdir()
+        roost.empty_trash(roost.Store(str(self.state)))
+        self.assertEqual(self.trash(), [mine])
+
+    def test_a_move_into_the_trash_cut_short_is_finished_on_the_next_retire(self):
+        task = self.create()
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        worktree = Path(task["worktree"])
+        gitdir = self.repo / ".git" / "worktrees" / worktree.name
+        # As the repositories of its submodules would be, which Git keeps there.
+        (gitdir / "modules" / "lib").mkdir(parents=True)
+        # Killed between the two renames.
+        entry = self.state / "trash" / (task["id"] + "-" + "a" * 12)
+        entry.mkdir(parents=True)
+        os.rename(worktree, entry / "tree")
+        reply = self.request("retire", id=task["id"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertFalse(gitdir.exists())
+        self.assertTrue((entry / "git" / "modules" / "lib").is_dir())
+        self.assertNotIn("roost/", self.git("branch", "--list", "roost/*"))
+
+    def test_the_trash_empties_after_the_reply_even_what_was_made_read_only(self):
+        task = self.create()
+        locked = Path(task["worktree"]) / "cache"
+        (locked / "pkg").mkdir(parents=True)
+        (locked / "pkg" / "file").write_text("x\n")
+        (self.repo / ".git" / "info" / "exclude").write_text("cache/\n")
+        (locked / "pkg").chmod(0o555)
+        locked.chmod(0o555)
+        request = json.dumps(dict(root=str(self.state), action="retire", id=task["id"]))
+        began = time.monotonic()
+        done = subprocess.run([sys.executable, roost.__file__, "rpc"], input=request, capture_output=True,
+                              text=True, timeout=30)
+        self.assertTrue(json.loads(done.stdout)["ok"], done)
+        deadline = time.monotonic() + 10
+        while self.trash() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertEqual(self.trash(), [], time.monotonic() - began)
+
     def test_a_conversation_needs_no_project_and_retires_as_a_task(self):
         # Wherever Emacs says it is, it goes in the helper's own repository.
         first = self.create(name="Conversation 09:15", directory="/nowhere", conversation=True)
@@ -3909,6 +3975,8 @@ class Lifecycle(unittest.TestCase):
         git = roost.git
         task = self.create()
         during = []
+        # By Git, as where it can't be moved into the trash.
+        (self.state / "trash").write_text("")
 
         def removing(repo, *args, **kwargs):
             if args[:2] == ("worktree", "remove"):
