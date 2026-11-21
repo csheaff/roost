@@ -9936,7 +9936,8 @@ def runner(root, task_id, run_id, resume_conversation=False):
             current = store.read(task_id)
             if current.get("runId") == run_id and current.get("status") == "starting":
                 current["launched"] = dict(at=time.time(), phase=store.phase)
-                store.save(current)
+                # Only for timing: a full disk mustn't keep the agent from starting.
+                store.note(current)
         if task.get("programStatus") and os.isatty(0):
             report, finish = program_status_recorder(store, task_id, run_id)
             try:
