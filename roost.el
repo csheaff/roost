@@ -9405,7 +9405,8 @@ so: its work runs in the worktree this removes."
                       (when (y-or-n-p (format "Git was cut short making %s's worktree, as when its host restarts, \
 so Roost can't tell that only Git wrote there.  Discard the task? "
                                               name))
-                        (roost-discard task))))
+                        ;; Its host's refusal says so before a listing has.
+                        (roost-discard (append '((worktreeCutShort . t) (worktreeComplete)) task)))))
          (retire (lambda (task)
                    (roost--act task "retire" (list (roost--offers-named named))
                                (lambda (retired)
