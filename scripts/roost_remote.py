@@ -29,6 +29,7 @@ import shutil
 import signal
 import socket
 import stat
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -336,12 +337,16 @@ class History:
         """Note that a task's record changed from BEFORE to AFTER, either None
         when there was none. A failure to note it fails nothing else."""
         was, state = history_state(before), history_state(after)
-        if was == state:
-            return
+        if was != state:
+            self.append(dict(id=task_id, **(state or dict(status=None)), was=was))
+
+    def append(self, entry):
+        """Add ENTRY, a dict, with the time it is noted as `at`. A failure
+        to note it fails nothing else."""
         # To the millisecond below, so never after a time read later.
         at = int(time.time() * 1000) / 1000
         day = time.strftime("%Y-%m-%d", time.gmtime(at))
-        entry = dict(at=at, id=task_id, **(state or dict(status=None)), was=was)
+        entry = dict(at=at, **entry)
         with contextlib.suppress(OSError):
             self.folder.mkdir(mode=0o700, exist_ok=True)
             path = self.folder / (day + ".jsonl")
@@ -427,6 +432,39 @@ class Store:
         self.tasks_dir = self.root / "tasks"
         self.tasks_dir.mkdir(mode=0o700, exist_ok=True)
         self.history = History(self.root / "history")
+        # How long each step of starting and finishing a task took, kept as
+        # the history is: `timings` prints the slowest.
+        self.timings = History(self.root / "timings")
+        # What the request or runner is doing, which names its steps.
+        self.phase = None
+
+    @contextlib.contextmanager
+    def timed(self, task, step):
+        """Note how long what runs inside took, as STEP of TASK in this
+        phase, unless it fails."""
+        start = time.monotonic()
+        yield
+        self.note_time(task, step, time.monotonic() - start)
+
+    def note_time(self, task, step, seconds, phase=None):
+        phase = phase or self.phase
+        if phase:
+            self.timings.append(dict(id=task["id"], repo=task.get("repo"), step=phase + "." + step,
+                                     seconds=round(seconds, 3)))
+
+    def note_agent_up(self, record, launched):
+        """Once RECORD's agent, launched as LAUNCHED says, is up, as its
+        first status but starting says, note how long that took, and for a
+        new task how long since it was asked for. One that ended first
+        came up at no time to note."""
+        if not isinstance(launched, dict) or record.get("status") in ENDED + ("retired",):
+            return
+        at, phase = launched.get("at"), text(launched.get("phase"))
+        if isinstance(at, (int, float)) and phase:
+            self.note_time(record, "agent", time.time() - at, phase)
+            asked = record.get("askedAt")
+            if phase == "create" and isinstance(asked, (int, float)) and not isinstance(asked, bool):
+                self.note_time(record, "total", time.time() - asked, phase)
 
     @contextlib.contextmanager
     def locked(self):
@@ -514,9 +552,14 @@ class Store:
 
     def save(self, task):
         before = self.recorded(task["id"])
+        # Noted once saved without it: a record left with it is noted next time.
+        up = "launched" in task and task.get("status") != "starting"
+        launched = task.pop("launched") if up else None
         record = {key: value for key, value in task.items() if key not in TRANSIENT}
         atomic_json(self.path(task["id"]), record)
         self.history.note(task["id"], before, record)
+        if up:
+            self.note_agent_up(record, launched)
 
     def note(self, task):
         """Save what looking at TASK found, if there is room: looking will
@@ -2678,6 +2721,7 @@ def make_task(store, request, create_id):
     attempt asked for beside one of its group made from other words is not
     made: the reply is that other task, marked `alreadyMade`, as `create`
     answers for a creation ID asked with before."""
+    began, asked = time.monotonic(), time.time()
     conversation = request.get("conversation") is True
     # Before anything is made.
     attempt = attempt_of(request)
@@ -2785,7 +2829,10 @@ def make_task(store, request, create_id):
                 integrationRef="refs/heads/" + integration if integration else None,
                 session=session_name(repo, task_id),
                 agent=agent_name, command=command, setup=setup, prompt=prompt,
-                status="starting", startedAt=now(), updatedAt=now(), claudeSession=None, agentMade=[])
+                status="starting", startedAt=now(), updatedAt=now(), claudeSession=None, agentMade=[],
+                # When it was asked for, before the reading `startedAt` follows,
+                # for the time until its agent is up (`note_agent_up`).
+                askedAt=asked)
     if create_id:
         task["createId"] = create_id
     if conversation:
@@ -2839,10 +2886,12 @@ def make_task(store, request, create_id):
         task["forkSession"] = source.get("agentSession") or source.get("claudeSession")
         task["forkedFrom"] = dict(id=source["id"], name=source["name"])
     existed, there = ref_exists(repo, branch), worktree.exists()
+    prepared = time.monotonic() - began
     with noting_creation(store, task):
         try:
-            git_with_hooks(repo, "-c", "branch.autoSetupMerge=false", "worktree", "add", "-b", branch,
-                           str(worktree), commit)
+            with store.timed(task, "worktree"):
+                git_with_hooks(repo, "-c", "branch.autoSetupMerge=false", "worktree", "add", "-b", branch,
+                               str(worktree), commit)
         except RoostError as exc:
             said = "\n".join(line for line in str(exc).splitlines() if not line.startswith("Preparing worktree"))
             if there or not worktree.exists():
@@ -2858,13 +2907,16 @@ def make_task(store, request, create_id):
             raise RoostError("The repository's post-checkout hook failed in the task's new worktree, so the task "
                              "didn't start%s: %s" % ("; its worktree is kept, as the hook left files there"
                                                      if worktree.exists() else "", said))
+        # Once there is a worktree: a creation refused before has no steps.
+        store.note_time(task, "prepare", prepared)
         # `git worktree add` leaves them out. Its runner checks them out, in
         # its terminal, as that fetches.
         if (worktree / ".gitmodules").is_file():
             task["submodulesComplete"] = False
         if source and carried != commit:
             try:
-                carry_uncommitted(worktree, carried)
+                with store.timed(task, "carry"):
+                    carry_uncommitted(worktree, carried)
             except RoostError as exc:
                 with store.locked():
                     store.save(task)
@@ -2884,8 +2936,9 @@ def make_task(store, request, create_id):
                 abandon(store, task)
                 return dict(other, alreadyMade=True)
             try:
-                store.save(task)
-                spawn(store, task, size=size_options(request))
+                with store.timed(task, "spawn"):
+                    store.save(task)
+                    spawn(store, task, size=size_options(request))
             except Exception:
                 abandon(store, task)
                 raise
@@ -4918,7 +4971,8 @@ def resume(store, task, program_status=None, size=(), terminal_images=None):
         task["terminalImages"] = terminal_images
     elif terminal_images is False:
         task.pop("terminalImages", None)
-    spawn(store, task, resume=True, size=size)
+    with store.timed(task, "spawn"):
+        spawn(store, task, resume=True, size=size)
     return task
 
 
@@ -7280,6 +7334,7 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
     a task whose agent has offered another since is left as it is
     (`require_offers_named`). TEARDOWN, the project's teardown command,
     runs in the worktree before it is removed."""
+    began = time.monotonic()
     inventory = inventory_for(task)
     pane = owned_pane(task, inventory)
     require_finished(task, pane)
@@ -7331,7 +7386,7 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
             tip = git(repo, "rev-parse", "refs/heads/" + branch + "^{commit}").stdout.strip()
             if expect and tip != expect:
                 raise RoostError("The task's branch has moved since you were asked; look at it again before merging")
-            with integrating(store, task, "merge", integration, repo if here else None):
+            with integrating(store, task, "merge", integration, repo if here else None), store.timed(task, "merge"):
                 squashed = merge_task(task, integration, here, squash, tip)
         # Hooks came in meanwhile, and the agent may be at work again, or
         # have offered a task: Git merged without the registry lock.
@@ -7357,7 +7412,10 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
         # A durable checkpoint permits retry after a disconnect or partial cleanup.
         task["retiringCommit"] = commit
         store.save(task)
-    stop(store, task, inventory)
+    # With a merge's own time in it: `merge` says how much that was.
+    store.note_time(task, "checks", time.monotonic() - began)
+    with store.timed(task, "stop"):
+        stop(store, task, inventory)
     # With the agent stopped, so nothing it writes goes uncounted, and,
     # for a worktree, once its teardown command has run, without the
     # registry lock, as copying files may take a while.
@@ -7379,9 +7437,10 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
     # What a copy stopped partway left, which may hold a secret.
     shutil.rmtree(copy_staging(task["worktree"]), ignore_errors=True)
     if branch_exists:
-        if not worktree_exists:
-            unregister_gone(repo, worktree)
-        delete_branch(repo, branch, commit)
+        with store.timed(task, "branch"):
+            if not worktree_exists:
+                unregister_gone(repo, worktree)
+            delete_branch(repo, branch, commit)
     left = agent_left(task)
     store.remove(task["id"])
     task.update(status="retired", updatedAt=now(), leftBehind=left)
@@ -7760,6 +7819,7 @@ def discard(store, task, expect=None, dry_run=False, teardown=None, told=None, o
     offers the question named, lacks (`require_offers_named`).
     TEARDOWN, the project's teardown command, runs in the worktree before it
     is removed."""
+    began = time.monotonic()
     repo = task["repo"]
     branch = task["branch"]
     put_back_removed(store, task, relink=False, dry_run=dry_run)
@@ -7791,16 +7851,20 @@ def discard(store, task, expect=None, dry_run=False, teardown=None, told=None, o
                                 "its agent is at work, so stop it (K), then " if task["status"] in ACTIVE else ""))
     more_than_told(False)
     require_offers_named(task, offers, "discarding")
-    stop(store, task)
+    store.note_time(task, "checks", time.monotonic() - began)
+    with store.timed(task, "stop"):
+        stop(store, task)
     # Again, now that nothing the agent left running writes there: what it
     # wrote as you were asked, or since the count above, is counted too.
-    more_than_told(True)
+    with store.timed(task, "recount"):
+        more_than_told(True)
     remove_worktrees(store, task, worktree if worktree_exists else None, work, force=True, teardown=teardown)
     shutil.rmtree(copy_staging(task["worktree"]), ignore_errors=True)
     if branch_exists:
-        if not worktree_exists:
-            unregister_gone(repo, worktree)
-        delete_branch(repo, branch, commit)
+        with store.timed(task, "branch"):
+            if not worktree_exists:
+                unregister_gone(repo, worktree)
+            delete_branch(repo, branch, commit)
     left = agent_left(task)
     # What a retire refused after it kept them had kept: you chose to lose it.
     with kept_locked(store):
@@ -8745,11 +8809,18 @@ def remove_worktrees(store, task, worktree, agents, force=False, teardown=None, 
         cut_short = False
         try:
             with store.released():
-                failure = run_teardown(task, worktree, teardown) if worktree and teardown else None
+                failure = None
+                if worktree and teardown:
+                    tearing = time.monotonic()
+                    failure = run_teardown(task, worktree, teardown)
+                    if not failure:
+                        store.note_time(task, "teardown", time.monotonic() - tearing)
                 if failure:
                     task["teardownFailure"], task["teardownOutput"] = failure
                 if keep:
-                    task["kept"] = keep(worktree, agents=[entry["path"] for entry in agents])
+                    with store.timed(task, "keep"):
+                        task["kept"] = keep(worktree, agents=[entry["path"] for entry in agents])
+                removing = time.monotonic()
                 remove_agent_worktrees(task, agents)
                 if worktree and not os.path.lexists(worktree):
                     # The teardown command took it, as it may: Git may yet
@@ -8814,6 +8885,7 @@ def remove_worktrees(store, task, worktree, agents, force=False, teardown=None, 
                                             "need git submodule update" if left is None else
                                             ", with what was written there meanwhile: %s; look at it in "
                                             "Magit" % named(left)))
+                store.note_time(task, "remove", time.monotonic() - removing)
         finally:
             # The record may have changed meanwhile: clear only this mark,
             # unless Git forgot the worktree, which isn't one again yet.
@@ -9790,6 +9862,7 @@ def check_out_submodules(worktree, env, every=None, decided=lambda every: None):
 
 def runner(root, task_id, run_id, resume_conversation=False):
     store = Store(root)
+    store.phase = "resume" if resume_conversation else "create"
     with store.locked():
         task = store.read(task_id)
         if task.get("runId") != run_id:
@@ -9833,14 +9906,16 @@ def runner(root, task_id, run_id, resume_conversation=False):
                     if current.get("runId") == run_id:
                         current["allSubmodules"] = every
                         store.save(current)
-            check_out_submodules(task["worktree"], env, task.get("allSubmodules"), decided)
+            with store.timed(task, "submodules"):
+                check_out_submodules(task["worktree"], env, task.get("allSubmodules"), decided)
             with store.locked():
                 current = store.read(task_id)
                 if current.get("runId") == run_id:
                     current["submodulesComplete"] = True
                     store.save(current)
         if task.get("copyComplete") is False:
-            copy_included(task["repo"], task["worktree"])
+            with store.timed(task, "copy"):
+                copy_included(task["repo"], task["worktree"])
             with store.locked():
                 current = store.read(task_id)
                 if current.get("runId") == run_id:
@@ -9849,12 +9924,20 @@ def runner(root, task_id, run_id, resume_conversation=False):
         setup = text(task.get("setup"))
         # Resume reruns setup only when the first run never finished it.
         if setup and (not resume_conversation or task.get("setupComplete") is False):
-            subprocess.run(["/bin/sh", "-lc", setup], cwd=task["worktree"], env=env, check=True)
+            with store.timed(task, "setup"):
+                subprocess.run(["/bin/sh", "-lc", setup], cwd=task["worktree"], env=env, check=True)
             with store.locked():
                 current = store.read(task_id)
                 if current.get("runId") == run_id:
                     current["setupComplete"] = True
                     store.save(current)
+        # For the time it takes the agent to come up (`note_agent_up`).
+        with store.locked():
+            current = store.read(task_id)
+            if current.get("runId") == run_id and current.get("status") == "starting":
+                current["launched"] = dict(at=time.time(), phase=store.phase)
+                # Only for timing: a full disk mustn't keep the agent from starting.
+                store.note(current)
         if task.get("programStatus") and os.isatty(0):
             report, finish = program_status_recorder(store, task_id, run_id)
             try:
@@ -9984,8 +10067,26 @@ TASK_ACTIONS = {
 
 PYTHON_FLOOR = (3, 9)
 
+# The requests whose steps are timed, each a phase of its own.
+TIMED = ("create", "resume", "retire", "merge", "discard")
+
 
 def rpc(request):
+    """Answer REQUEST, and for one of a phase that is timed, note how long
+    the whole of it took, the wait Emacs has, as its `reply`."""
+    began = time.monotonic()
+    reply = answer(request)
+    action = request.get("action") if isinstance(request, dict) else None
+    result = reply.get("result")
+    # Not a discard's dry run, which only counts what it would lose.
+    if (action in TIMED and reply.get("ok") and isinstance(result, dict) and isinstance(result.get("id"), str)
+            and not result.get("alreadyMade") and not request.get("dryRun")):
+        with contextlib.suppress(OSError, RoostError, KeyError, TypeError):
+            Store(request["root"]).note_time(result, "reply", time.monotonic() - began, action)
+    return reply
+
+
+def answer(request):
     # What Git's config said is for one request, each a process of its own but in tests.
     gits_own_fsmonitor.cache_clear()
     forge_for.cache_clear()
@@ -9998,6 +10099,8 @@ def rpc(request):
     try:
         store = Store(request["root"])
         action = request["action"]
+        if action in TIMED:
+            store.phase = action
         if action == "create":
             return {"ok": True, "result": outgoing(create(store, request))}
         if action == "doctor":
@@ -10059,7 +10162,8 @@ def rpc(request):
             # Ask GitHub without the lock; retire then trusts only this answer.
             with store.locked():
                 task = store.read_to_act_on(request["id"])
-            merged_head, still_open, remote_head = merged_pull_request_head(task)
+            with store.timed(task, "forge"):
+                merged_head, still_open, remote_head = merged_pull_request_head(task)
             request = dict(request, mergedHead=merged_head, stillOpen=still_open)
         with store.locked():
             if action == "list":
@@ -10141,6 +10245,37 @@ def detach():
     os._exit(os.WEXITSTATUS(status))
 
 
+def timings_report(root, tasks=20):
+    """How long each step took for the last TASKS tasks whose steps were
+    timed in the state directory ROOT, as a table, slowest first in each
+    phase: how many of them took it, the median and the slowest."""
+    entries = [entry for entry in History(Path(root).expanduser() / "timings").read(0)
+               if isinstance(entry.get("id"), str) and isinstance(entry.get("step"), str)
+               and isinstance(entry.get("seconds"), (int, float)) and not isinstance(entry["seconds"], bool)]
+    last = {}
+    for entry in entries:
+        last[entry["id"]] = entry["at"]
+    chosen = set(sorted(last, key=last.get)[-tasks:])
+    steps = {}
+    for entry in entries:
+        if entry["id"] in chosen:
+            steps.setdefault(entry["step"], []).append(entry["seconds"])
+    if not steps:
+        return "No task has been timed in %s yet." % root
+    phases = list(TIMED)
+    def order(step):
+        phase = step.split(".", 1)[0]
+        return (phases.index(phase) if phase in phases else len(phases), -statistics.median(steps[step]))
+    width = max(len(step) for step in steps)
+    lines = ["How long each step took, in seconds, for the last %d task%s timed, slowest first"
+             % (len(chosen), "" if len(chosen) == 1 else "s"),
+             "%-*s  %5s  %7s  %7s" % (width, "step", "times", "median", "slowest")]
+    for step in sorted(steps, key=order):
+        lines.append("%-*s  %5d  %7.2f  %7.2f" % (width, step, len(steps[step]), statistics.median(steps[step]),
+                                                 max(steps[step])))
+    return "\n".join(lines)
+
+
 def main():
     # Emacs, agents and the records speak UTF-8, whatever this host's locale
     # says: Python would take what they say for it, and fail on a name in
@@ -10180,6 +10315,12 @@ def main():
     elif mode == "mcp":
         # The agent's own server, which it starts and ends with itself.
         McpServer(Store(sys.argv[2]), sys.argv[3]).serve()
+    elif mode == "timings":
+        tasks = sys.argv[3] if len(sys.argv) > 3 else "20"
+        if not tasks.isdigit() or int(tasks) < 1:
+            print("Name how many tasks to show the timings of, 1 or more, not %r" % tasks, file=sys.stderr)
+            return 2
+        print(timings_report(sys.argv[2], int(tasks)))
     else:
         raise RoostError("Unknown mode")
     return 0

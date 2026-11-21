@@ -1641,6 +1641,38 @@ load path, as `make test TEST_LOAD_PATH="-L …/magit/lisp -L …"`, Evil
 and evil-collection for its Evil keys there, and perspective.el for the tests
 of task perspectives in it; without them they are skipped.
 
+The helper times each step of starting and finishing a task, and keeps the
+times for 30 days in the state directory's `timings/`, a file a day.
+`make timings` shows how long each step took for the last 20 tasks on
+this machine, slowest first, with `TASKS=N` for another number and
+`ROOST_STATE=DIR` for another state directory. On an SSH host, run the
+newest helper Roost installed there:
+
+```sh
+ssh HOST 'python3 "$(ls -t ~/.local/share/roost/remote-*.py | head -1)" timings ~/.local/share/roost'
+```
+
+A step is named for the
+request, `create`, `resume`, `retire`, `merge` or `discard`, then what it
+timed:
+
+- `reply`: the whole request, which is how long Emacs waits.
+- `prepare`, `worktree`, `carry` and `spawn`: reading the repository, `git
+  worktree add` with its checkout and hooks, bringing a fork's uncommitted
+  changes, and opening the terminal.
+- `submodules`, `copy` and `setup`, in the task's terminal: checking out
+  submodules, copying `.worktreeinclude` files, and the setup command.
+- `agent`: from launching the agent to its first status other than
+  starting; `total`, from asking for a task until then.
+- `forge`, `checks`, `merge`, `stop`, `recount`, `teardown`, `keep`,
+  `remove` and `branch`: asking the forge whether a pull request merged,
+  the checks before anything is deleted (and a merge's own time), merging,
+  stopping the agent, a discard's count again once it has stopped, the
+  teardown command, keeping what removing would delete, removing the
+  worktrees and deleting the branch.
+
+A step that fails, or doesn't run, isn't noted.
+
 Most ERT tests check one thing someone thought to check. `test/roost-sweep.el`
 checks rules instead. It draws the task panel, dashboard, sidebar and search
 results for a gallery of task states, presses every button and key in them,
