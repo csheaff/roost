@@ -421,7 +421,8 @@ Open: none.
 
 Kind: explicit. Lives in: `ready/<repo-hash>-<id>/` (the worktree, detached),
 `ready/<repo-hash>-<id>.json` (its mark: repository, commit, `madeAt`, `ready`),
-`ready/.lock` (taking or marking one), `ready/.tending` (one run tending).
+`ready/.lock` (taking or marking one), `ready/.tending` (one run tending),
+`ready/<repo-hash>.want` (each repository's latest wish, which a run carries out).
 Lets a new task skip checking out every file.
 
 | State | Meaning | How you can tell |
@@ -434,28 +435,34 @@ Lets a new task skip checking out every file.
 Invariants:
 - I1. None is taken twice: a take marks it not ready, under `ready/.lock`, before
   Git moves it.
-- I2. A task takes only one holding nothing but Git's checkout: it is checked clean
-  after its branch is made, as no one may write in a folder Roost made ahead.
+- I2. A task takes only one holding nothing but Git's checkout: it is checked clean,
+  ignored files too, before its branch is made and its hook runs, as no one may write
+  in a folder Roost made ahead. The check runs no program the repository's config
+  names (`read_git`). What the task's hook then writes is the task's.
 - I3. A task taken from one starts as `git worktree add` would make it: on its new
   branch, tracking nothing, at its start, with the `post-checkout` hook run, and
   its HEAD's reflog begun anew, so that no commit it was moved through ahead counts
-  as the task's when it is retired or discarded (`reflog_only`). Cut
+  as the task's when it is retired or discarded (`reflog_only`). A hook that fails
+  once the branch is checked out fails the creation as for `git worktree add`. Cut
   short meanwhile, it is locked `initializing`, which `undo_creation` forces away
   as it does a worktree Git was stopped making.
-- I4. What a crash leaves goes on the next run, and all of it when turned off:
+- I4. No wish is lost: one made while a run is busy is carried out by that run, or by
+  the one that wished, once the other lets go (`tend_wanted`).
+- I5. What a crash leaves goes on the next run, and all of it when turned off:
   holds by `make crash`'s `CreateFromReady`, which tends with nothing kept after
   each recovery and finds no worktree left.
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
-| | a creation asked with `ready` replies | none for the repository | Making | a run in the background makes one at the task's start | `tend_ready_later`, `tend_ready` |
-| Making | Git done | clean | Ready | mark says `ready` | `tend_ready` |
+| | a creation replies | | | its repository's wish noted, then a run in the background carries out each wish | `tend_ready_later`, `want_ready`, `tend_wanted` |
+| | a wish to keep one | none for the repository | Making | Git makes one at the task's start | `tend_one` |
+| Making | Git done | clean | Ready | mark says `ready` | `tend_one` |
 | Making | Git fails, or leaves files | | gone | removed | `drop_ready` |
-| Ready | a creation asked with `ready` replies | at another commit | Making | Git checks out what differs | `tend_ready` |
+| Ready | a wish to keep one | at another commit | Making | Git checks out what differs | `tend_one` |
 | Ready | a creation asked with `ready` | | Taken | moved to the task's path (Creation's table) | `take_ready` |
-| Ready | a creation replies | not asked with `ready`, or a second for the repository, or made over READY_DAYS ago, or its repository gone | Going | | `tend_ready` |
+| Ready | a wish | to keep none, or a second for the repository, or made over READY_DAYS ago, or its repository gone | Going | | `tend_one` |
 | Going | the same run | | gone | removed, Git's record of it too | `drop_ready` |
-| Making | helper dies | | Going, on the next run | | `tend_ready` |
+| Making | helper dies | | Going, on the next run | | `tend_one` |
 
 Open: not modelled yet; a model would follow "Adding a machine". A repository whose
 `post-checkout` hook leaves files never gets one, and each creation makes and drops

@@ -263,6 +263,66 @@ class Lifecycle(unittest.TestCase):
         steps = [entry["step"] for entry in roost.History(self.state / "timings").read(0) if entry["id"] == task["id"]]
         self.assertIn("create.worktree", steps)
 
+    def test_an_ignored_file_in_one_made_ahead_keeps_it_from_being_taken(self):
+        self.tend()
+        [ready] = self.ready_worktrees()
+        (self.repo / ".git" / "info" / "exclude").write_text(".env\n")
+        (ready / ".env").write_text("SECRET=someone's\n")
+        task = self.create(ready=True)
+        self.assertFalse((Path(task["worktree"]) / ".env").exists())
+
+    def test_what_the_tasks_own_hook_writes_is_kept_and_its_failure_said(self):
+        self.tend()
+        hook = self.repo / ".git" / "hooks" / "post-checkout"
+        hook.write_text("#!/bin/sh\necho made > generated\n")
+        hook.chmod(0o755)
+        task = self.create(ready=True)
+        self.assertEqual((Path(task["worktree"]) / "generated").read_text(), "made\n")
+        steps = [entry["step"] for entry in roost.History(self.state / "timings").read(0) if entry["id"] == task["id"]]
+        self.assertIn("create.ready", steps)
+        # Failing, it fails the task as for a new worktree, its files kept.
+        hook.unlink()
+        self.tend()
+        log = self.root / "hook.log"
+        hook.write_text("#!/bin/sh\necho ran >> %s\necho made > generated\nexit 3\n" % shlex.quote(str(log)))
+        hook.chmod(0o755)
+        reply = self.request("create", directory=str(self.repo), name="failing", socket=self.socket,
+                             command=[sys.executable, str(FAKE)], ready=True)
+        self.assertFalse(reply["ok"], reply)
+        self.assertIn("post-checkout hook failed", reply["error"])
+        [failed] = [task for task in self.request("list")["result"] if task["name"] == "failing"]
+        self.assertEqual(failed["status"], "failed")
+        self.assertTrue((Path(failed["worktree"]) / "generated").is_file())
+        # Once: not again in a worktree Git makes after.
+        self.assertEqual(log.read_text(), "ran\n")
+
+    def test_reading_one_made_ahead_runs_no_program_its_config_names(self):
+        calls = []
+        real = roost.execute
+        with patch.object(roost, "execute", lambda argv, **kw: calls.append(argv) or real(argv, **kw)):
+            self.tend()
+            self.create(ready=True)
+        statuses = [argv for argv in calls if argv[0] == "git" and "status" in argv]
+        self.assertTrue(statuses)
+        for argv in statuses:
+            self.assertIn("core.fsmonitor=false", argv)
+
+    def test_a_wish_made_while_a_run_tends_is_carried_out(self):
+        store = roost.Store(str(self.state))
+        repo = str(self.repo.resolve())
+        self.tend()
+        [ready] = self.ready_worktrees()
+        tending = self.state / "ready" / ".tending"
+        with tending.open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            # Turned off as another run is busy: it returns at once.
+            roost.tend_ready(store, repo, self.git("rev-parse", "HEAD"), keep=False)
+            self.assertEqual(self.ready_worktrees(), [ready])
+        # And the next run carries it out.
+        roost.tend_wanted(store)
+        self.assertEqual(self.ready_worktrees(), [])
+        self.assertEqual(list((self.state / "ready").glob("*.want")), [])
+
     def test_tending_moves_the_one_made_ahead_to_the_new_commit_and_keeps_one(self):
         self.tend()
         [ready] = self.ready_worktrees()
