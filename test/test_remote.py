@@ -250,7 +250,9 @@ class Lifecycle(unittest.TestCase):
         self.git("commit", "-qa", "--amend", "-m", "amended")
         self.tend()
         task = self.create(ready=True)
-        self.assertNotIn(old, self.git("log", "-g", "--format=%H", "HEAD", cwd=Path(task["worktree"])).split())
+        gitdir = Path(self.git("rev-parse", "--absolute-git-dir", cwd=Path(task["worktree"])))
+        # Neither as an entry nor as the one before it, which `gone_head_log` reads.
+        self.assertNotIn(old, (gitdir / "logs" / "HEAD").read_text())
         told = self.request("discard", id=task["id"], dryRun=True)
         self.assertTrue(told["ok"], told)
         self.assertNotIn(old, json.dumps(told["result"]))
@@ -397,6 +399,9 @@ class Lifecycle(unittest.TestCase):
         worktree = Path(task["worktree"])
         self.assertEqual((worktree / "hello").read_text(), "base\n")
         self.assertFalse((worktree / "theirs").exists())
+        # What it set aside goes from the trash, though the task stays.
+        roost.empty_trash(roost.Store(str(self.state)))
+        self.assertEqual(self.trash(), [])
         self.assertEqual(self.listed_worktrees(), [str(self.repo.resolve()), str(worktree.resolve())])
         self.assertEqual(self.ready_worktrees(), [])
 
@@ -424,12 +429,14 @@ class Lifecycle(unittest.TestCase):
         self.tend()
         log = self.root / "hook.log"
         hook = self.repo / ".git" / "hooks" / "post-checkout"
-        hook.write_text("#!/bin/sh\necho \"$1 $2 $3 $(git rev-parse --abbrev-ref HEAD)\" >> %s\n"
+        hook.write_text("#!/bin/sh\necho \"$1 $2 $3 $(git rev-parse --abbrev-ref HEAD) $(pwd -P)\" >> %s\n"
                         % shlex.quote(str(log)))
         hook.chmod(0o755)
         task = self.create(ready=True)
+        # As `git worktree add` runs it: from no commit, in the new worktree.
         [line] = log.read_text().splitlines()
-        self.assertTrue(line.endswith(" 1 " + task["branch"]), line)
+        self.assertEqual(line, "%s %s 1 %s %s" % ("0" * 40, self.git("rev-parse", "HEAD"), task["branch"],
+                                                  os.path.realpath(task["worktree"])))
 
     def test_the_reply_comes_before_the_next_worktree_is_made_ahead(self):
         request = json.dumps(dict(root=str(self.state), action="create", directory=str(self.repo), name="task",

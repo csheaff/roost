@@ -995,7 +995,8 @@ header line. A failed creation keeps the draft.
   checking out only the files that changed since, rather than every file: in a
   37,000-file project, the reply comes in under half a second rather than 2.8 s. The
   repository's `post-checkout` hook runs as it would for a new worktree; one
-  that leaves files there means no worktree is kept ready. It
+  that leaves files there means no worktree is kept ready. It needs Git 2.36 on
+  the task's host, for `git hook run`. It
   costs one more checkout of each project you start tasks in, which `git
   worktree list` shows; one not taken in a week goes. Set it to `nil` in
   `.dir-locals.el` for a project too large to keep twice, and the next task

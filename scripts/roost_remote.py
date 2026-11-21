@@ -2973,49 +2973,75 @@ def make_task(store, request, create_id):
 
 def take_ready_for(store, task, existed):
     """Start TASK's worktree from one made ahead for its repository, as
-    `git worktree add` would make it: on its new branch at its start, with
-    the repository's post-checkout hook run, and what that writes kept.
-    Whether it did; else nothing is left of what it took, nor the branch,
-    unless that EXISTED. A hook that failed once the branch is checked out
-    raises, as for `git worktree add`, with the worktree left as it is."""
+    `git worktree add` would make it: its new branch made at its start in
+    the primary checkout, checked out there, its HEAD's reflog begun as a
+    new worktree's is, and the post-checkout hook run as for a new one,
+    what that writes kept. Whether it did; else nothing is left of what it
+    took, nor the branch, unless that EXISTED. A hook that failed raises,
+    as for `git worktree add`, with the worktree left as it is."""
     repo, worktree, branch, commit = task["repo"], Path(task["worktree"]), task["branch"], task["baseCommit"]
-    if not take_ready(store, repo, worktree):
+    if existed or not runs_hooks_alone() or not ready_marks(store, repo):
         return False
-    # Locked until its checkout is done: cut short before its branch is
-    # checked out, it holds only Git's checkout, and no hook has run there
-    # (`undo_creation`).
-    locked = git(repo, "worktree", "lock", "--reason", TAKING, str(worktree), check=False).returncode == 0
-    # Its HEAD's reflog begins at the task, as a new worktree's does: the
-    # commits it was moved through ahead are none of the task's, which
-    # retiring and discarding read there (`reflog_only`).
-    gitdir = git(worktree, "rev-parse", "--absolute-git-dir", check=False).stdout.strip()
-    cleared = False
-    if gitdir:
-        with contextlib.suppress(OSError):
-            (Path(gitdir) / "logs" / "HEAD").unlink(missing_ok=True)
-            cleared = True
-    # Nothing there but Git's checkout, as written by nobody since, ignored
-    # files too: before the task's own hook writes there.
-    if locked and cleared and not changed_in(worktree):
-        made = git_with_hooks(worktree, "-c", "branch.autoSetupMerge=false", "checkout", "-q", "-b", branch,
-                              commit, check=False)
-        unlocked = git(repo, "worktree", "unlock", str(worktree), check=False).returncode == 0
-        if made.returncode and on_task_branch(worktree, branch):
-            raise RoostError(made.stderr.strip() or made.stdout.strip() or "The post-checkout hook failed")
-        if made.returncode == 0 and unlocked:
-            return True
-    # Into the trash, rather than deleted file by file as you wait: no
-    # record of the task is saved yet, so `empty_trash` deletes it.
-    if not trash_worktree(store, task, worktree):
-        git(repo, "worktree", "remove", "--force", "--force", str(worktree), check=False)
-    if os.path.lexists(worktree):
-        shutil.rmtree(worktree, ignore_errors=True)
-    with contextlib.suppress(RoostError, OSError):
-        unregister_gone(repo, worktree.resolve())
-    if not existed:
-        with contextlib.suppress(RoostError):
-            delete_branch(repo, branch, commit)
+    # Its reference-transaction hooks run where `git worktree add` runs them.
+    if git_with_hooks(repo, "-c", "branch.autoSetupMerge=false", "branch", branch, commit,
+                      check=False).returncode:
+        return False
+    taken = take_ready(store, repo, worktree)
+    if taken:
+        # Locked until its checkout is done: cut short before its branch is
+        # checked out, it holds only Git's checkout (`undo_creation`).
+        locked = git(repo, "worktree", "lock", "--reason", TAKING, str(worktree), check=False).returncode == 0
+        gitdir = git(worktree, "rev-parse", "--absolute-git-dir", check=False).stdout.strip()
+        # Nothing there but Git's checkout, as written by nobody since,
+        # ignored files too. Checked out with no hook, so that none writes
+        # there before HEAD is the task's.
+        if (locked and gitdir and not changed_in(worktree)
+                and git(worktree, "-c", "core.hooksPath=" + os.devnull, "checkout", "-q", branch,
+                        check=False).returncode == 0
+                and begin_head_log(Path(gitdir), worktree, commit)):
+            if git(repo, "worktree", "unlock", str(worktree), check=False).returncode == 0:
+                hook = git_with_hooks(worktree, "hook", "run", "--ignore-missing", "post-checkout", "--",
+                                      "0" * len(commit), commit, "1", check=False)
+                if hook.returncode:
+                    raise RoostError(hook.stderr.strip() or hook.stdout.strip() or "The post-checkout hook failed")
+                return True
+        git(repo, "worktree", "unlock", str(worktree), check=False)
+        # Into the trash, rather than deleted file by file as you wait, as
+        # nobody's: `empty_trash` deletes it, whatever comes of the task.
+        if not trash_worktree(store, dict(task, id=uuid.uuid4().hex[:16]), worktree):
+            git(repo, "worktree", "remove", "--force", "--force", str(worktree), check=False)
+        if os.path.lexists(worktree):
+            shutil.rmtree(worktree, ignore_errors=True)
+        with contextlib.suppress(RoostError, OSError):
+            unregister_gone(repo, worktree.resolve())
+    with contextlib.suppress(RoostError):
+        delete_branch(repo, branch, commit)
     return False
+
+
+def begin_head_log(gitdir, worktree, commit):
+    """Begin WORKTREE's HEAD's reflog, in GITDIR, as `git worktree add`
+    begins a new worktree's, at COMMIT: the commits a worktree made ahead
+    was moved through are none of its task's, which retiring and
+    discarding read there (`reflog_only`, `gone_head_log`)."""
+    ident = git(worktree, "var", "GIT_COMMITTER_IDENT", check=False).stdout.strip()
+    if not ident:
+        return False
+    try:
+        (gitdir / "logs").mkdir(exist_ok=True)
+        atomic_text(gitdir / "logs" / "HEAD", "%s %s %s\n%s %s %s\treset: moving to HEAD\n"
+                    % ("0" * len(commit), commit, ident, commit, commit, ident))
+    except OSError:
+        return False
+    return True
+
+
+@functools.lru_cache(maxsize=None)
+def runs_hooks_alone():
+    """Whether this host's Git runs a hook by itself (`git hook run`), as
+    Git 2.36 and later do."""
+    return (version_of(execute(["git", "--no-optional-locks", "--version"], check=False).stdout)
+            or (0, 0)) >= (2, 36)
 
 
 def on_task_branch(worktree, branch):
@@ -7201,7 +7227,7 @@ def tend_one(store, repo, commit, keep):
                     shutil.rmtree(entry, ignore_errors=True)
     for mark, said in going:
         drop_ready(store, mark, said)
-    if not keep:
+    if not keep or not runs_hooks_alone():
         return
     if kept:
         mark, said = kept

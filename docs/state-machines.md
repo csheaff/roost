@@ -402,7 +402,7 @@ Invariants:
 | Preparing | an attempt, saying its wording | another of its group was made from other words | Made, of that other | nothing made; that task returned, as one made before | `made_from_other_words`, `make_task` |
 | Preparing | a fork | its source is not Merging, Removing or Removal cut short | Preparing | the source's work read, its worktree lock shared meanwhile | `conversation_to_fork`, `snapshot` |
 | Preparing | | | Noted | note locked before it is in place | `noting_creation` |
-| Noted | asked with `ready` | a worktree made ahead for the repository is Ready | Noted | moved to the task's path, checked clean, locked as TAKING, branched at the start, unlocked; else removed, its branch deleted, and Git makes one | `take_ready_for`, `take_ready` |
+| Noted | asked with `ready` | Git 2.36 or later, and a worktree made ahead for the repository is Ready | Noted | the branch made in the primary checkout, then the worktree moved to the task's path, locked as TAKING, checked clean, its branch checked out with no hook, its HEAD's reflog begun anew, unlocked, and `post-checkout` run with no old commit; else removed, its branch deleted, and Git makes one | `take_ready_for`, `take_ready` |
 | Noted | Git and spawn done | | Made | note unlinked under its lock | `noting_creation` |
 | Noted | an attempt, as its record is saved | another of its group was recorded meanwhile from other words | Made, of that other | undone as a failed creation is; that task returned | `made_from_other_words`, `abandon` |
 | Noted | Git refused | nothing there | Failed | branch deleted | `make_task` |
@@ -439,15 +439,19 @@ Invariants:
   ignored files too, before its branch is made and its hook runs, as no one may write
   in a folder Roost made ahead. The check runs no program the repository's config
   names (`read_git`). What the task's hook then writes is the task's.
-- I3. A task taken from one starts as `git worktree add` would make it: on its new
-  branch, tracking nothing, at its start, with the `post-checkout` hook run, and
-  its HEAD's reflog begun anew, so that no commit it was moved through ahead counts
-  as the task's when it is retired or discarded (`reflog_only`). A hook that fails
-  once the branch is checked out fails the creation as for `git worktree add`. While
-  it branches it is locked as TAKING, unlocked as soon as Git returns: cut short
-  before its branch is checked out, no hook has run and `undo_creation` forces it
-  away, as a worktree Git was stopped making; after, the hook may have written
-  there, and `abandon` keeps it if so.
+- I3. A task taken from one starts as `git worktree add` would make it: its branch made
+  in the primary checkout, where `git worktree add` makes it, with its
+  `reference-transaction` hooks; on that branch, tracking nothing, at its start; its
+  HEAD's reflog begun as a new worktree's is, from no commit, so that no commit it was
+  moved through ahead counts as the task's when it is retired or discarded
+  (`reflog_only`, `gone_head_log`); and `post-checkout` run in it by `git hook run`
+  with no old commit, as for a new worktree, which a failure fails the creation as
+  for `git worktree add`. Unlike `git worktree add`, no `reference-transaction` hook
+  runs for its HEAD in the worktree. The checkout runs no hook, locked as TAKING, so
+  nothing but Git writes there until it is unlocked: cut short while locked,
+  `undo_creation` forces it away if its branch isn't checked out yet; after, the
+  hook may have written there, and `abandon` keeps it if so. One set aside goes to
+  the trash as nobody's, which `empty_trash` deletes whatever comes of the task.
 - I4. No wish is lost: one made while a run is busy is carried out by that run, or by
   the one that wished, once the other lets go (`tend_wanted`). A wish is written, and
   removed once carried out only if unchanged, under `ready/.lock`.
