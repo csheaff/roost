@@ -6738,10 +6738,11 @@ def put_back_removed(store, task, relink=True, dry_run=False):
     Git says what is there since, as for any task, and nothing is forced.
     One Git forgot partway is made a worktree again, with RELINK; else,
     for a discard, which deletes it all, only what a relink left goes, and
-    with DRY_RUN, which deletes nothing, nothing at all. Any of them first
-    finishes a move into the trash cut short, which began with nothing
-    there to keep (`finish_trashed`)."""
-    finish_trashed(store, task)
+    with DRY_RUN, which deletes nothing, nothing at all. Any of them but
+    DRY_RUN first finishes a move into the trash cut short, which began
+    with nothing there to keep (`finish_trashed`)."""
+    if not dry_run:
+        finish_trashed(store, task)
     if not task.get("removing"):
         return
     # Its own folder, and no other checkout a link in its place leads to.
@@ -6832,9 +6833,10 @@ def finish_trashed(store, task):
 
 
 def unrecorded_entry(store, path):
-    """Whether PATH is a trash entry of a task whose record is gone."""
+    """Whether PATH is a trash entry of a task whose record is gone: not
+    one damaged or unreadable."""
     found = TRASH_ENTRY.fullmatch(path.name)
-    return bool(found) and store.recorded(found.group(1)) is None
+    return bool(found) and not os.path.lexists(store.path(found.group(1)))
 
 
 def empty_trash(store):
@@ -9025,8 +9027,10 @@ def remove_worktrees(store, task, worktree, agents, force=False, teardown=None, 
                         clean()
                         require_submodules_kept(worktree)
                     try:
-                        # Nothing there is to keep now, as Git would check.
-                        if not trash_worktree(store, task, worktree):
+                        # Nothing there is to keep now, as Git would check;
+                        # but Git refuses a lock, as one the teardown took.
+                        if (worktree_lock(task["repo"], Path(worktree).resolve()) is not None
+                                or not trash_worktree(store, task, worktree)):
                             git(task["repo"], "worktree", "remove", *force, str(worktree))
                     except RoostError as exc:
                         # Git stopped partway, as at a file written as it

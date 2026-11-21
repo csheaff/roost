@@ -272,6 +272,34 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue((entry / "git" / "modules" / "lib").is_dir())
         self.assertNotIn("roost/", self.git("branch", "--list", "roost/*"))
 
+    def test_a_dry_run_leaves_a_move_into_the_trash_cut_short_as_it_is(self):
+        task = self.create()
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        worktree = Path(task["worktree"])
+        gitdir = self.repo / ".git" / "worktrees" / worktree.name
+        entry = self.state / "trash" / (task["id"] + "-" + "a" * 12)
+        entry.mkdir(parents=True)
+        os.rename(worktree, entry / "tree")
+        self.request("discard", id=task["id"], dryRun=True)
+        self.assertTrue(gitdir.is_dir())
+        self.assertEqual([path.name for path in entry.iterdir()], ["tree"])
+
+    def test_the_trash_keeps_an_entry_whose_record_is_damaged(self):
+        task = self.create()
+        entry = self.state / "trash" / (task["id"] + "-" + "0" * 12)
+        entry.mkdir(parents=True)
+        roost.Store(str(self.state)).path(task["id"]).write_text("{not json")
+        roost.empty_trash(roost.Store(str(self.state)))
+        self.assertEqual(self.trash(), [entry])
+
+    def test_a_lock_the_teardown_took_is_left_to_git_which_refuses_it(self):
+        task = self.create()
+        reply = self.request("retire", id=task["id"], teardown="git worktree lock .")
+        self.assertFalse(reply["ok"], reply)
+        self.assertIn("locked", reply["error"])
+        self.assertTrue(Path(task["worktree"], "hello").is_file())
+        self.assertEqual(self.trash(), [])
+
     def test_the_trash_empties_after_the_reply_even_what_was_made_read_only(self):
         task = self.create()
         locked = Path(task["worktree"]) / "cache"
