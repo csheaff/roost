@@ -311,6 +311,40 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(self.git("status", "--porcelain", cwd=worktree), "")
         self.assertEqual(self.trash(), [])
 
+    def test_forgetting_puts_back_a_worktree_linked_by_a_relative_path(self):
+        task = self.create()
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        worktree = Path(task["worktree"])
+        gitdir = self.repo / ".git" / "worktrees" / worktree.name
+        # As worktree.useRelativePaths writes it.
+        (worktree / ".git").write_text("gitdir: %s\n" % os.path.relpath(gitdir, worktree))
+        entry = self.state / "trash" / (task["id"] + "-" + "a" * 12)
+        entry.mkdir(parents=True)
+        os.rename(worktree, entry / "tree")
+        os.rename(gitdir, entry / "git")
+        self.assertTrue(self.request("forget", id=task["id"])["ok"])
+        self.assertTrue(gitdir.is_dir())
+        self.assertEqual(self.git("status", "--porcelain", cwd=worktree), "")
+        self.assertEqual(self.trash(), [])
+
+    def test_forgetting_what_the_trash_can_neither_put_back_nor_keep_is_refused(self):
+        task = self.create()
+        self.assertTrue(self.request("stop", id=task["id"])["ok"])
+        worktree = Path(task["worktree"])
+        entry = self.state / "trash" / (task["id"] + "-" + "a" * 12)
+        entry.mkdir(parents=True)
+        os.rename(worktree, entry / "tree")
+        worktree.mkdir()
+        (self.state / "trash").chmod(0o500)
+        try:
+            reply = self.request("forget", id=task["id"])
+        finally:
+            (self.state / "trash").chmod(0o700)
+        self.assertFalse(reply["ok"], reply)
+        self.assertIsNotNone(roost.Store(str(self.state)).recorded(task["id"]))
+        roost.empty_trash(roost.Store(str(self.state)))
+        self.assertEqual(self.trash(), [entry])
+
     def test_forgetting_keeps_what_the_trash_cant_put_back(self):
         task = self.create()
         self.assertTrue(self.request("stop", id=task["id"])["ok"])

@@ -6851,7 +6851,9 @@ def untrash(store, task):
                 said = (tree / ".git").read_bytes()
                 if not said.startswith(b"gitdir:"):
                     raise ValueError
-                gitdir = worktree / os.fsdecode(said[len(b"gitdir:"):].strip())
+                # Relative to the worktree, with worktree.useRelativePaths,
+                # which isn't there yet to go up from.
+                gitdir = Path(os.path.normpath(worktree / os.fsdecode(said[len(b"gitdir:"):].strip())))
                 if os.path.lexists(kept):
                     if os.path.lexists(gitdir):
                         raise ValueError
@@ -6863,9 +6865,11 @@ def untrash(store, task):
         left = entry.with_name(LEFT + entry.name)
         try:
             os.rename(entry, left)
-            at.append(left / "tree" if (left / "tree").is_dir() else left)
-        except OSError:
-            at.append(entry)
+        except OSError as exc:
+            # The record stays, so that no run deletes it.
+            raise RoostError("Couldn't put back or keep the task's worktree in the trash at %s (%s); "
+                             "nothing was forgotten" % (entry, exc.strerror or exc))
+        at.append(left / "tree" if (left / "tree").is_dir() else left)
     return at
 
 
@@ -8082,10 +8086,11 @@ def forget(store, task, offers=None):
     if pane and not pane["dead"]:
         raise RoostError("The agent is running; stop the task before forgetting it")
     require_offers_named(task, offers, "forgetting")
+    # First, as it may refuse.
+    trashed = untrash(store, task)
     if inventory:
         close_panes(task, inventory, check=False)
     left = []
-    trashed = untrash(store, task)
     if Path(task["worktree"]).exists():
         left.append("worktree " + task["worktree"])
     left += ["worktree " + str(path) for path in trashed if str(path) != task["worktree"]]
