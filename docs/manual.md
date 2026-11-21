@@ -163,7 +163,8 @@ was ready (`roost-ready-worktrees`). What takes a while, as Git LFS's checkout
 of a large project, shows there; until it's done, Magit, the files and the
 diff say it isn't made yet. Stopped partway, `s` makes it again. Cut short by its
 host restarting, it is kept as it is, as Roost can't tell that only Git wrote
-there: discarding the task counts what is there, then removes it. A `post-checkout` hook that fails stops the task there, keeping what
+there: the panel says so, `x` offers to discard the task, and discarding it
+removes what is there. A `post-checkout` hook that fails stops the task there, keeping what
 it wrote, for you to look at.
 
 **Start from where the work is.** Your task list can stay where it already is:
@@ -689,7 +690,8 @@ state folder's `trash/` in one rename, however many files it holds, and
 says it's done. The files are deleted afterwards, in the background, on the
 task's host. A worktree outside the state folder's file system is removed
 by Git as before, which takes longer. A deletion cut short, as by a
-reboot, finishes on the next retire, discard or refresh. What can't be
+reboot, finishes on the next retire, discard or refresh. A folder made
+read-only, or that can't be listed, is made writable and deleted. What can't be
 deleted, as files a container made as root, stays in `trash/` under a
 name starting `.left-`, for you to delete.
 
@@ -995,7 +997,8 @@ header line. A failed creation keeps the draft.
   once Roost has checked out the submodules and copied what
   `.worktreeinclude` lists, and finds the primary checkout in `$ROOST_REPO`,
   for anything else it needs from there.
-- `roost-ready-worktrees`, on by default: after a task starts, its host makes
+- `roost-ready-worktrees`, on by default: once a task has started, past what its
+  terminal shows before the agent, as its checkout and setup, its host makes
   another worktree of the project in the background, detached, under the state
   folder's `ready/`. The next task there takes it, moving it into place and
   checking out only the files that changed since, rather than every file: in a
@@ -1004,7 +1007,7 @@ header line. A failed creation keeps the draft.
   that leaves files there means no worktree is kept ready. It needs Git 2.36 on
   the task's host, for `git hook run`. It
   costs one more checkout of each project you start tasks in, which `git
-  worktree list` shows; one not taken in a week goes. Set it to `nil` in
+  worktree list` shows; one not taken in a week goes at the next refresh. Set it to `nil` in
   `.dir-locals.el` for a project too large to keep twice, and the next task
   there removes it.
 - `roost-teardown-command`: a shell command run in a task's worktree just before

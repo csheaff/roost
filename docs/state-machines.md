@@ -456,21 +456,22 @@ Invariants:
 - I4. No wish is lost: one made while a run is busy is carried out by that run, or by
   the one that wished, once the other lets go (`tend_wanted`). A wish is written, and
   removed once carried out only if unchanged, under `ready/.lock`.
-- I5. What a crash leaves goes on the next run, and all of it when turned off:
+- I5. What a crash leaves goes on the next run, or after the next listing, and all of it when turned off:
   holds by `make crash`'s `CreateFromReady`, which tends with nothing kept after
   each recovery and finds no worktree left.
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
-| | a creation replies | | | its repository's wish noted, then a run in the background carries out each wish | `tend_ready_later`, `want_ready`, `tend_wanted` |
+| | a creation replies | | | its repository's wish noted, then a run in the background, once the task is past its checkout and setup (`started`), or after READY_WAIT_SECONDS, carries out each wish | `tend_ready_later`, `want_ready`, `tend_wanted` |
 | | a wish to keep one | none for the repository | Making | Git makes one at the task's start | `tend_one` |
 | Making | Git done | clean | Ready | mark says `ready` | `tend_one` |
 | Making | Git fails, or leaves files | | gone | removed | `drop_ready` |
 | Ready | a wish to keep one | at another commit | Making | Git checks out what differs | `tend_one` |
 | Ready | a creation asked with `ready` | | Taken | moved to the task's path (Creation's table) | `take_ready` |
-| Ready | a wish | to keep none, or a second for the repository, or made over READY_DAYS ago, or its repository gone | Going | | `tend_one` |
+| Ready | a wish | to keep none, or a second for the repository, or made over READY_DAYS ago, or its repository gone | Going | | `sweep_ready` |
+| Ready | a listing replies | made over READY_DAYS ago, or its repository gone, and `.tending` free | Going | a run in the background, under `.tending` | `prune_ready_later`, `unwanted_ready`, `sweep_ready` |
 | Going | the same run | | gone | removed, Git's record of it too | `drop_ready` |
-| Making | helper dies | | Going, on the next run | | `tend_one` |
+| Making | helper dies | | Going, on the next run or listing | | `sweep_ready` |
 
 Open: not modelled yet; a model would follow "Adding a machine". A repository whose
 `post-checkout` hook leaves files never gets one, and each creation makes and drops
@@ -640,13 +641,15 @@ What each step leaves if it stops there, and what asking again does.
 | 10 | staging folder, `unregister_gone`, `delete_branch` | registry | branch still there, `check_worktree` finds no folder and goes on |
 | 11 | `Store.remove` | registry | record gone; attachments, what its agent showed and a page it was writing first, so a kill between keeps the record |
 | 12 | `delete_remote_branch` | none | remote branch stays; nothing else depends on it |
-| 13 | once the reply has gone, `empty_trash_later`: a process in a session of its own deletes each trash entry whose task has no record, renamed to `.deleting-…` first, under `trash.lock` | trash lock | what it was deleting stays, and the next retire, discard, forget or listing finishes it; an entry of a task still recorded stays until its record goes |
+| 13 | once the reply has gone, `empty_trash_later`: a process in a session of its own deletes each trash entry whose task has no record, renamed to `.deleting-…` first, under `trash.lock`, making writable, then deleting, a folder it can't list | trash lock | what it was deleting stays, and the next retire, discard, forget or listing finishes it; an entry of a task still recorded stays until its record goes |
 
 `discard`: steps 2, 4, then `check_worktree(branch=False)`; the dry run stops
 there. Then `expect` against the branch, `told` against `discard_losses` counted
 again, `offers` against the offers the record holds (`require_offers_named`),
 `stop`, `told` counted once more, now that nothing the agent left running writes
-there (refused then with the agent stopped), removal with force, branch, record. No checkpoint: `expect`, `told` and
+there (refused then with the agent stopped), a worktree Git was cut short
+making unlocked (`unlock_unmade`), so that one refused stays cut short,
+removal with force, branch, record. No checkpoint: `expect`, `told` and
 `offers` are the guards, and a retry asks Emacs for a new dry run.
 
 `forget`: step 2, then no live pane, `require_offers_named`, the window closed,
@@ -1403,10 +1406,15 @@ Invariants:
 - I6. Roost removes what a run cut short left of the worktree only when you
   discard the task, as any worktree, its contents counted: Git's `initializing`
   lock doesn't prove nobody wrote there since, so a resume refuses it and
-  `discard` unlocks it once you said so (`unlock_unmade`). A hangup, as from
+  `discard` unlocks it once you said so and nothing refuses, just before
+  removing it (`unlock_unmade`). A hangup, as from
   `stop`, lets Git remove it itself, and a resume makes it again. One Git
   finished is taken as made only on the task's branch with nothing else
-  there, ignored files too; else the run stops and keeps it.
+  there, ignored files too; else the run stops and keeps it. A listing says
+  `worktreeCutShort` of a task whose worktree Git was cut short making, with
+  no run at it, and `retire` and `merge` refuse it saying so (`cut_short`),
+  rather than call what Git checked out uncommitted, so that Emacs offers to
+  discard it and resumes it no more.
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |

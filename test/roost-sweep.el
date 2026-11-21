@@ -91,6 +91,8 @@ KIND is `committed', `uncommitted', `untracked' or `binary'."
      (worktreeComplete))
     ("stopped making its worktree" (status . "failed") (live) (worktreeComplete)
      (error . "Git couldn't make the task's worktree; resuming the task tries again"))
+    ;; Git was killed making it, as when its host restarts: only a discard takes it.
+    ("cut short making its worktree" (status . "crashed") (live) (worktreeComplete) (worktreeCutShort . t))
     ("codex starting" (status . "starting") (agent . "codex") (live . t))
     ("codex relayed starting" (status . "starting") (agent . "codex") (programStatus . t) (live . t))
     ("opencode failed turn" (status . "failed") (agent . "opencode") (live . t) (lastEvent . "StopFailure")
