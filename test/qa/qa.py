@@ -623,7 +623,9 @@ class Run:
         frames = screen.get("frames") or {}
         # By key: tasks can share a name.  The sidebar, one for every frame,
         # marks the task opened last, so with one frame, that frame's.
-        if task and len(frames) == 1 and qa_sidebar(screen) and screen.get("marked") != task["key"]:
+        # Collapsed, it lists no task to mark.
+        if (task and len(frames) == 1 and qa_sidebar(screen) and not screen.get("sidebar-collapsed")
+                and screen.get("marked") != task["key"]):
             problems.append("The sidebar marks %s, not %s, the frame's task (%s)"
                             % (screen.get("marked"), task["key"], task["name"]))
         docked = {(window.get("frame"), window["buffer"]) for window in screen["windows"] if window.get("side")}
@@ -2130,6 +2132,34 @@ def panel_keys(qa, repo):
             ("the echo area says so", lambda s: s["echo"] == "Sidebar on")])
     finally:
         qa.emacs.eval("(progn (roost-task-panel-mode 1) (roost-sidebar-mode 1) t)")
+
+
+@journey("The sidebar, collapsed and expanded")
+def collapse_sidebar(qa, repo):
+    """The « at the top of the sidebar collapses it to a strip, which keeps
+    the terminal beside it, and a click on the strip's » expands it to the
+    width it had."""
+    name = start_task(qa, "Show me the whole terminal")
+    open_task(qa, name)
+    sidebar = lambda s: qa.window(s, "roost-sidebar-list-mode")
+    wide = sidebar(qa.screen())["total"]
+    try:
+        qa.click_in("header", "«")
+        qa.step("« collapses the sidebar", expect=[
+            ("it is a strip", lambda s: s["sidebar-collapsed"] and sidebar(s)["total"] < 8),
+            ("with a » to expand it", lambda s: sidebar(s)["header"].strip() == "»"),
+            ("and no tasks", lambda s: not sidebar(s)["text"].strip()),
+            ("the echo area says how to have it back",
+             lambda s: s["echo"] == "Sidebar collapsed; a click on it shows it again"),
+            ("you are in the terminal", lambda s: not sidebar(s)["selected"]),
+            ("which stays", lambda s: terminals(s))])
+        qa.click_in("header", "»")
+        qa.step("» expands it", expect=[
+            ("as wide as it was", lambda s: not s["sidebar-collapsed"] and sidebar(s)["total"] == wide),
+            ("with its tasks", lambda s: name in sidebar_rows(s)),
+            ("the echo area says so", lambda s: s["echo"] == "Sidebar expanded")])
+    finally:
+        qa.emacs.eval("(progn (when roost--sidebar-collapsed (roost-sidebar-collapse)) t)")
 
 
 @journey("Stop and resume an agent")
@@ -4615,7 +4645,7 @@ def page_as_written(qa, repo):
 
 
 JOURNEYS = [sweep, answer, next_waiting, fold, resize, merge, review, notes, since_looked, panes, window_buffers, reconnect_away, shell,
-            dashboard, panel_keys, stop_resume, retire, discard, teardown, send, attach, update, conflicts, restart,
+            dashboard, panel_keys, collapse_sidebar, stop_resume, retire, discard, teardown, send, attach, update, conflicts, restart,
             search, workload, question_left,
             walk_away,
             frames, draft_frames, org, drafts, draft_fields, by_clicks, conversation, clicks, overlap, region, tabs,
