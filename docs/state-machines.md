@@ -215,6 +215,17 @@ real code before it was fixed.
 | --- | --- | --- | --- | --- |
 | VIEWS-24 | S4 | The same function held twice while a question is open, as two alike closures, is one hook of `minibuffer-exit-hook` but counted twice: once you are done it runs once, and Roost counts one held for good, so the sweeps' `left-behind` rule and QA's `held` say it waits | [Held for the minibuffer](#held-for-the-minibuffer) | Fixed, `roost-the-same-thing-held-twice-for-a-question-goes-once-it-is-done` |
 
+### Found by the models, 2026-11-21
+
+Found as the model of a task on its host was brought in line with a worktree its
+runner makes in its terminal, and replayed on the real code. The
+[worktree made ahead](#worktree-made-ahead) got a model of its own then, which found
+nothing.
+
+| Finding | Sev | What goes wrong | Machine | Status |
+| --- | --- | --- | --- | --- |
+| LC-11 | S3 | `stop` on a task whose worktree Git is still checking out kills Git a second into removing what it made, so part of a large one stays, which Git no longer lists. Resuming the task refuses it, `retire` can't read it, and the discard that is the only way on counts every file left as uncommitted: 70,936 of 120,000 when replayed | [The runner's stages](#the-runners-stages) | Open: `TaskOnHost.finding-stop-kills-clean-up.cfg` |
+
 ## A task on its host
 
 The helper's records and what it does to Git, from a task being asked for to its
@@ -267,7 +278,7 @@ Invariants:
 | Live | stop | | Ended | agent's pane and shell closed, status `stopped` | `stop` |
 | Live | agent exits | | Ended | `exited` or `failed` | `runner` |
 | Live | pane missing | | Ended | `crashed`, with `statusBeforeCrash` | `list_tasks` |
-| Ended | resume | worktree there | Live | new `runId` | `resume`, `spawn` |
+| Ended | resume | worktree there, or yet to be made (`worktreeComplete` false) | Live | new `runId` | `resume`, `spawn` |
 | Ended (`crashed`) | pane found | | Live | status restored | `list_tasks` |
 | Live, Ended | retire, merge | checks pass | Finishing | save `retiringCommit` | `retire` |
 | Finishing | | | Ended, then Removing | `stop`, then marker | `retire`, `remove_worktrees` |
@@ -435,7 +446,8 @@ Lets a new task skip checking out every file.
 
 Invariants:
 - I1. None is taken twice: a take marks it not ready, under `ready/.lock`, before
-  Git moves it.
+  Git moves it. Nor is one taken while a run moves it to another commit or removes
+  it: a sweep marks each it keeps or drops not ready, under the same lock.
 - I2. A task takes only one holding nothing but Git's checkout: it is checked clean,
   ignored files too, before its branch is made and its hook runs, as no one may write
   in a folder Roost made ahead. The check runs no program the repository's config
@@ -473,9 +485,16 @@ Invariants:
 | Going | the same run | | gone | removed, Git's record of it too | `drop_ready` |
 | Making | helper dies | | Going, on the next run or listing | | `sweep_ready` |
 
-Open: not modelled yet; a model would follow "Adding a machine". A repository whose
-`post-checkout` hook leaves files never gets one, and each creation makes and drops
-one in the background.
+`test/formal/worktree_made_ahead` checks I1 as `TakenOnce`, I2 as `TakenClean`, I3 as
+`StartsAsAdded`, I4 as `NoWishLost`, I5 as `NothingLeft`, and the table's Ready as
+`ReadyIsThere`: two or three creations at once, the run each leaves, a listing's
+run, any of them killed between two steps, a file written in a folder under
+`ready/`, and a week passing. `.claude/skills/verify-worktree-made-ahead` says how
+to run it, and what it leaves out: a second repository, and what the task's own
+hook writes.
+
+Open: a repository whose `post-checkout` hook leaves files never gets one, and each
+creation makes and drops one in the background.
 
 ### Registry lock
 
@@ -501,8 +520,9 @@ Invariants:
   saving. Holds at every site (below).
 - I3. Nothing nests `locked` in one process: flock on a second descriptor would
   deadlock. Holds; `abandon` is called under it, `undo_creation` takes it.
-- I4. No lock order cycle: registry is taken while holding a note or the
-  `create` ID lock, never the reverse with a blocking wait; the worktree lock
+- I4. No lock order cycle: registry is taken while holding a note, the
+  `create` ID lock or, by the run that makes a task's worktree, that task's
+  worktree lock, never the reverse with a blocking wait; the worktree lock
   and the note, and the repository's merge lock, are only tried without blocking
   while the registry lock is held. Holds.
 
@@ -519,7 +539,8 @@ Steps outside any lock, by design: `merged_pull_request_head` (only its answer
 is kept, and `retire` compares it to the branch's tip read under the lock);
 `settle_creations` before `list`; `check_pull_requests` and `add_git_stats`
 after it; everything in `make_task` up to its `locked` block, but a fork's look at
-its source, above.
+its source, above; and Git making a task's worktree in its terminal, under that
+task's worktree lock alone (`make_worktree`).
 
 Illegal or refused: nothing refuses; everything queues. No holder waits on Git's
 hooks or a stopped tmux server any more: a server under SIGSTOP costs each `list`
@@ -540,15 +561,19 @@ Says what holds a task's worktree while the registry lock is released.
 | State | Meaning | How you can tell |
 | --- | --- | --- |
 | Free | | both probes of `worktree_holder` succeed |
-| Work | shared: `pr`, a look, an attachment, a fork reading where its work stands | SH free, EX refused: `worktree_holder` says "work" |
+| Work | shared: `pr`, a look, an attachment, a fork reading where its work stands, the run making the task's worktree | SH free, EX refused: `worktree_holder` says "work" |
 | Removal | exclusive: `remove_worktrees`, or Git's merge (`integrating`) | SH refused: "removal"; the record says which |
 
 Invariants:
 - I1. Taken and probed only under the registry lock, so `worktree_holder`'s own
   brief hold never collides with a taker. Holds at every call, a fork's of its
-  source among them (`conversation_to_fork`).
-- I2. Held by the request alone, and nothing it starts (`holding_worktree`), so what
-  Git or a hook leaves running keeps no hold. A request that takes it for long
+  source among them (`conversation_to_fork`), but one: the run that makes a task's
+  worktree takes its hold with no registry lock (`make_worktree`). A probe at
+  that instant refuses it, and the run ends: see
+  [Known and not fixed](#known-and-not-fixed).
+- I2. Held by the request alone, or by the task's run as it makes the worktree, and
+  nothing either starts (`holding_worktree`), so what Git or a hook leaves running
+  keeps no hold. A request that takes it for long
   outlives Emacs's wait ([Request lifetime](#request-lifetime)), which is why it
   can. A helper killed alone, which nothing but `make crash` does, frees it with Git
   still at work.
@@ -559,13 +584,13 @@ Invariants:
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
-| Free | `pr`, look, attach, a fork of it | | Work | shared | `holding_worktree` |
+| Free | `pr`, look, attach, a fork of it, its run making its worktree | | Work | shared | `holding_worktree` |
 | Work | same | | Work | shared again | `holding_worktree` |
 | Free | removal | | Removal | exclusive | `remove_worktrees` |
 | Free | merge, update | | Removal | exclusive | `integrating` |
 | Work | removal | | refused | "busy", before anything changes | `require_not_removing` |
 | Removal | anything but looking | | refused | "still removing", "still merging", "still updating" | `require_not_removing` |
-| Work, Removal | the request ends | | Free | | kernel |
+| Work, Removal | the request, or the run, ends | | Free | | kernel |
 
 Illegal or refused: a helper killed in teardown, by a reboot's kin, leaves the lock
 free and the command running in its own session: a retry runs it again beside
@@ -632,7 +657,7 @@ What each step leaves if it stops there, and what asking again does.
 | 2 | `require_not_removing` | registry | refused, nothing changed |
 | 3 | `require_finished`, pane ownership; `permission` at Codex's plan menu counts as finished. Then `require_offers_named`: the record holds no offer but those the request says its question named (`offers`) | registry | refused, nothing changed |
 | 4 | `put_back_removed`: first, but on a dry run, `finish_trashed`, a move into the trash cut short finished, which a dry run's `require_nothing_kept` passes over (`pending_trash`); then, if `removing`, Git's removal cut short put back | registry | Git forgets a worktree in the trash; restores tracked files, its link |
-| 5 | `check_worktree`, clean, submodules, Git lock, agent work | registry | refused, nothing changed |
+| 5 | `check_worktree`, with a worktree Git was cut short making refused first, saying so (`cut_short`); clean, submodules, Git lock, agent work | registry | refused, nothing changed |
 | 6 | branch moved from `expect`, then merge, into `integrationBranch` as the record has it then; the record read again after, with `require_finished`, `require_clean` and `require_offers_named` again | registry, released while Git merges | see next machine; a second merge finds it there. Refused after: merged, and not retired |
 | 7 | `safe_to_delete`, by `integrationBranch` and `startCommit` as the record has them now; save `retiringCommit` | registry | |
 | 8 | `stop`: what is the task's, by the ownership rule below, noted as `leftRunning` (PID and start) before the panes close; the agent's and shell's panes closed; then all of it ended, SIGTERM then SIGKILL (`end_left_running`) | registry | task stopped; agent's window gone, nothing that is the task's still running; or refused, naming what won't end, `leftRunning` kept, so that the next request, panes gone, still ends or refuses on it |
@@ -701,7 +726,10 @@ Invariants:
 - I4. After a step fails past 8, the task is stopped, and the merge has happened, as
   `landed` shows. With its worktree still there, `resume` works. Once removal has
   gone through, as when `delete_branch` then fails, `resume` refuses for want of a
-  worktree: the way on is to clear what refused it and finish the task again.
+  worktree: the way on is to clear what refused it and finish the task again. A
+  task whose record says its worktree was never made, as one whose `post-checkout`
+  hook failed in its terminal, resumes even then: its run makes the worktree
+  again, and it finishes as before.
 - I6. No offer goes with a task but those the question before named. Emacs reads the
   task's offers once, names them in the question, and sends their IDs with the
   request (`offers`); `require_offers_named` refuses while the record holds another,
@@ -732,8 +760,9 @@ Invariants:
 Illegal or refused: an agent at work, a task another pane took, an offer the
 question didn't name, a dirty worktree,
 unmerged commits, work in its agent's worktree or submodules, a locked worktree,
-a fork reading its worktree, and for `merge` a branch moved from `expect`; each
-before anything changes. `discard`
+one Git was cut short making, a fork reading its worktree, its run making its
+worktree, and for `merge` a branch moved from `expect`; each before anything
+changes. `discard`
 refuses what `check_worktree` refuses with `branch=False`, a link, a path outside
 Roost's folder, a moved worktree, and a missing one whose branch the primary checkout
 holds; then a branch moved since its dry run, more to lose than it told you, an offer
@@ -839,6 +868,11 @@ Invariants:
   `~/.git`; then an unlinked one reads as the outer repository's, and every
   action refuses. Not true of agent worktrees, which lie inside the primary
   checkout: `worktree_at` asks at the path, and takes no answer from further up.
+
+Two more are read from the record before any of these: a worktree its runner has
+yet to make (`unmade`), which what needs the folder refuses as still being made
+(`require_worktree`), and one Git was cut short making (`cut_short`), which only a
+discard takes. [The runner's stages](#the-runners-stages) has both.
 
 Illegal or refused: `check_worktree` refuses every row above but Good, Gone, Locked and
 Unlinked, for merge, retire, `pr` and `update`. With `branch=False`, for `discard`,
@@ -1403,12 +1437,19 @@ Invariants:
   checks the record under that lock, so a task finished before it started is
   left alone. Until the worktree is made, nothing in Emacs opens it, and the
   helper refuses what needs it (`require_worktree`) and lists no Git stats.
+  Holds: `MadeAlone` in `test/formal/task_on_host`. Nothing of yours rests on
+  the hold, as `stop` ends the run before anything is removed: it is what
+  refuses a discard, and its preview, while Git still writes there.
 - I6. Roost removes what a run cut short left of the worktree only when you
   discard the task, as any worktree, its contents counted: Git's `initializing`
   lock doesn't prove nobody wrote there since, so a resume refuses it and
   `discard` unlocks it once you said so and nothing refuses, just before
   removing it (`unlock_unmade`). A hangup, as from
-  `stop`, lets Git remove it itself, and a resume makes it again. One Git
+  `stop`, lets Git remove it itself, and a resume makes it again. **Broken**
+  for a worktree Git needs over a second to remove (LC-11): `stop` kills what
+  the pane left running a second after it asks (`end_left_running`), Git
+  among it, and what is left is no longer Git's, so the next run refuses it
+  and only a discard takes it, counting its files as yours. One Git
   finished is taken as made only on the task's branch with nothing else
   there, ignored files too; else the run stops and keeps it. A listing says
   `worktreeCutShort` of a task whose worktree Git was cut short making, with
@@ -1422,7 +1463,7 @@ Invariants:
 | Waiting | lock had | `stopped`, `retired` | exit 0 | | `runner` |
 | Waiting | launch made | | Worktree, or next | argv fixed now, hook settings written | `agent.launch` |
 | Worktree | lock had | other `runId`, `stopped`, `retired` | exit 0 | nothing made | `make_worktree` |
-| Worktree | lock refused | a removal or merge holds it | exit 0 | says so in the pane; the status is left to that | `make_worktree` |
+| Worktree | lock refused | a removal or merge holds it, or a request probes the lock at that instant | exit 0 | says so in the pane; a record still this run's, and not stopped, reads `failed` | `make_worktree`, `runner` |
 | Worktree | made | | Submodules, or next | `worktreeComplete` saved, and `submodulesComplete` False with a `.gitmodules`; the runner moves into it | `make_worktree` |
 | Worktree | Git or `post-checkout` fails | | Ended, `failed` | what the hook wrote kept; resumed, that stops it again | `make_worktree` |
 | Submodules | `decided` | this run | same | `allSubmodules` saved before Git initializes any | `check_out_submodules` |
@@ -1431,11 +1472,18 @@ Invariants:
 | Setup | done | | Agent | flag saved | `runner` |
 | any stage | fails | | Ended, `failed` | `error` shown in the pane | `runner` |
 | any stage | SIGHUP, as `stop` | | gone | flag stays False; next run redoes it | |
+| Worktree | SIGHUP, as `stop` | Git needs over a second to remove what it made | gone, its worktree partly there | part of the folder stays, which Git no longer lists; the next run refuses it, and a discard takes it (LC-11) | `stop`, `end_left_running` |
 | Agent | ends | this run, not `stopped` | Ended | see [Agent status](#agent-status) | `runner` |
 
-Checked: a stop or kill in each stage, then resume. Sound.
+Checked: a stop or kill in each stage, then resume. Sound, but for a stop as Git
+checks out a large worktree (LC-11). `test/formal/task_on_host` has the Worktree
+stage, as `TaskOnHostUnmade.cfg`: every order of the run's steps with two
+requests, a stop, a resume, the host restarting as Git makes the worktree, and a
+file someone wrote in what that left. It checks I5 as `MadeAlone`, I6 as
+`KeptButByDiscard`, `DiscardTold` and `StartsWhole`, and that a stop leaves
+nothing only a discard takes as `StopLeavesNone`, which LC-11 breaks.
 
-Open: none.
+Open: LC-11.
 
 ### The relay and its recorder
 
@@ -3807,6 +3855,14 @@ agent says "before retiring", from `require_finished`; and `inspect` while a
 worktree is removed, or after that was cut short, says to resume the task, which
 those states refuse.
 
+A task whose worktree its runner has yet to make came later too, and is read from
+the code and its model rather than run. It reads as Worktree gone, but that
+`resume` is ok, and that `update`, `pr` and `look`, and `shell` while its window is
+there, say the worktree is still being made, whether or not a run is at it. While
+its run makes it, the finishing actions read as Work holds worktree. One Git was
+cut short making reads as Ended, but that `retire` and `merge` refuse it, saying
+so, and that `resume` starts a run which refuses it.
+
 ### Action by status
 
 By the agent's status, where `L` is a pane that's live, and `D` one dead or gone.
@@ -3904,6 +3960,9 @@ next one starts somewhere else.
   the attach; ghostel-tmux switching a controller to another session, before its
   first pane or with its hook held: `test/formal/terminal_seam` finds nothing there
   beyond VIEWS-17 to 22, now fixed.
+- **The worktree made ahead.** Two or three creations at once, the run each leaves,
+  a listing's run, any of them killed between two steps, a file written in a folder
+  under `ready/`, and a week passing: `test/formal/worktree_made_ahead` finds nothing.
 
 Not proved: that sshd leaves a helper running after a dropped connection, taken from
 OpenSSH's behaviour and not run; perspective.el and tab-bar paths, read but not driven;
@@ -3924,3 +3983,4 @@ otherwise.
 | `approvalsLeft` may be GitLab EE's alone, which would fail the merge request query on a CE server | [A task's pull request](#a-tasks-pull-request) | Unverified: needs a run against one |
 | Forgetting a task while its tmux server is stopped can drop the record of an agent still running | [Finishing a task](#finishing-a-task) | It is the way out when tmux doesn't answer, and the worktree and branch stay |
 | A signed-out `gh` freezes words, with no sign but `roost-doctor` | [What the forge last said](#what-the-forge-last-said) | By design: a task keeps what it had |
+| The run that makes a task's worktree takes the worktree lock with no hold of the registry lock, so a finishing request's probe of that lock at the same instant refuses it: the run ends, and the task reads `failed`, with no reason but that the agent exited (found 2026-11-21) | [Worktree lock](#worktree-lock) | A window of microseconds, only as you finish a task while it starts, and resuming starts it. Taking the hold under the registry lock would close it |

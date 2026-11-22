@@ -14,7 +14,9 @@
 (* commit only that one's branch has; a fork is made of it, which reads    *)
 (* its worktree; its agent offers a task, which its record keeps; and you  *)
 (* stop the task, a request of its own, as Emacs does before it retires    *)
-(* one whose agent reports work in the background, or forgets one.         *)
+(* one whose agent reports work in the background, or forgets one; and the *)
+(* task begins with no worktree, which its runner makes in its terminal    *)
+(* (`make_worktree`), where Git may be cut short making it.                *)
 (*                                                                         *)
 (* Git is cut down to sets of work: each unit is a file someone wrote,     *)
 (* uncommitted, or the commit it became.  A unit that a step of Roost's   *)
@@ -47,14 +49,24 @@ CONSTANTS
                     \*   read the question;
                     \* "stop": you stop the task (`K`), or Emacs does for you
                     \*   before it asks its host to retire or forget it;
-                    \* "resume": you resume it once stopped (`s`)
+                    \* "resume": you resume it once stopped (`s`);
+                    \* "unmade": the task may begin with its worktree yet to
+                    \*   be made, by its runner in its terminal
+                    \*   (`worktreeInTerminal`); the host may restart as Git
+                    \*   makes it, which counts as a crash, and someone may
+                    \*   write in what that left;
+                    \* "slow clean-up": Git, hung up by `stop` as it makes the
+                    \*   worktree, is still removing what it made when `stop`
+                    \*   kills what the pane left running: a finding's timing
     Break          \* "none", or a guard turned off, for a TaskOnHost.<variant>.cfg:
                     \* "retire_force", "branch_no_cas", "no_safe_check",
                     \* "agent_only_went", "no_stamp", "agent_any_branch", "no_recount",
                     \* "x_not_seen_again", "x_stamp_first", "proof_goes",
                     \* "going_counts", "retarget_own", "fork_no_hold",
                     \* "fork_any_time", "offer_after_stop", "offers_not_named",
-                    \* "offers_named_once", "resume_any_time"
+                    \* "offers_named_once", "resume_any_time",
+                    \* "cut_short_remade", "cut_short_retired",
+                    \* "cut_short_uncounted", "cut_short_made", "run_no_hold"
 
 Req   == 1..MaxRequests
 Kinds == {"retire", "merge", "discard", "forget"}
@@ -63,7 +75,10 @@ Src   == 0      \* the commit of the task this one was forked from; work made
 
 VARIABLES
     \* Git.
-    tw,           \* the task's worktree: "there", "partly" (Git was removing it), "gone"
+    tw,           \* the task's worktree: "there", "partly" (Git was removing it),
+                  \* "half" (Git was making it: locked `initializing`), "left"
+                  \* (what `stop` left of one Git was making: a folder Git no
+                  \* longer lists), "gone"
     twDirty,      \* uncommitted files in it
     tb,           \* the task's branch exists
     tbCommits,    \* its commits: since the task started, and Src for a fork
@@ -94,18 +109,25 @@ VARIABLES
                   \* with (`started_at`): `B` never moves it
     offers,       \* how many tasks its agent offers, in `offers`
     \* The agent's process, and the locks.
-    agent,        \* "working", "idle", "stopped"
+    agent,        \* "working", "idle", "stopped"; "starting", its run has yet
+                  \* to make its worktree, and no agent runs
     regLock,      \* 0, or the request holding registry.lock
     wtLock,       \* 0, or the request holding tasks/<id>.removing exclusively
     reading,      \* a fork of this task: "no", none yet; "held", it reads the
                   \* worktree, holding tasks/<id>.removing shared; "unheld",
                   \* it reads it with no hold; "done"
+    made,         \* worktreeComplete in its record: FALSE until the run that
+                  \* made its worktree says so
+    making,       \* its run, at `make_worktree`: "no"; "held", it holds
+                  \* tasks/<id>.removing shared; "git", and Git makes the
+                  \* worktree; "save", and Git has, the record yet to say so
     \* The requests.
     req,
     \* What the rules read.
     next,         \* the next unit of work
     crashes,
-    lost,         \* <<unit, request, "commit" or "file">>: what Roost took
+    lost,         \* <<unit, request, "commit" or "file">>: what Roost took;
+                  \* request 0 is the task's run
     xRemovedBy,   \* the requests that removed x
     removedOther, \* Roost removed what isn't the task's own
     retargeted,   \* you changed the branch it merges into
@@ -117,11 +139,14 @@ recordVars == <<rec, status, removing, retiringCommit, noted>>
 ghostVars  == <<next, crashes, lost, xRemovedBy, removedOther>>
 \* What `Also` brings.  Only the steps that say so change these: `Outside`
 \* and `Roost` leave them as they are for every other step.
-alsoVars   == <<src, integ, base, offers, reading, retargeted, readPartly, untold>>
+alsoVars   == <<src, integ, base, offers, reading, retargeted, readPartly, untold, made, making>>
 vars       == <<gitVars, recordVars, agent, regLock, wtLock, req, ghostVars, alsoVars>>
 
 -----------------------------------------------------------------------------
 (* What Git holds, and what Roost reads of it.                              *)
+
+\* What is left of a worktree Git didn't finish making.
+Unfinished == {"half", "left"}
 
 Exists == (IF tw # "gone" THEN twDirty ELSE {}) \cup (IF tb THEN tbCommits ELSE {})
           \cup mainCommits \cup (IF mine THEN mineCommits ELSE {})
@@ -160,7 +185,10 @@ Losses ==
         others == mainCommits \cup (IF mine THEN mineCommits ELSE {})
                   \cup (IF wt /\ ~ours THEN wtCommits ELSE {})
                   \cup (IF There("src") /\ ~Going("src") THEN {Src} ELSE {})
-        files  == (IF tw # "gone" THEN twDirty ELSE {}) \cup (IF AsMade THEN xDirty ELSE {})
+        \* Broken: `cut_short_uncounted` takes what Git was cut short making
+        \* for Git's alone, and counts nothing in it.
+        counted == tw # "gone" /\ ~(Break = "cut_short_uncounted" /\ tw = "half")
+        files  == (IF counted THEN twDirty ELSE {}) \cup (IF AsMade THEN xDirty ELSE {})
     IN  [commits |-> Cardinality(own \ others), changes |-> Cardinality(files),
          x |-> IF AsMade THEN 1 ELSE 0]
 
@@ -191,15 +219,21 @@ NoRequest == [kind |-> "none", pc |-> "none", expect |-> {}, told |-> Losses, to
               stamped |-> FALSE]
 
 Init ==
-    /\ tw = "there" /\ twDirty = {} /\ tb = TRUE /\ mainCommits = {}
+    /\ twDirty = {} /\ tb = TRUE /\ mainCommits = {}
+    \* A task's worktree is there once its creation replies; or, asked for
+    \* with `worktreeInTerminal`, its branch alone is, its record says the
+    \* worktree is yet to be made, and its runner is about to.
+    /\ \/ tw = "there" /\ made = TRUE /\ status = "ready" /\ agent = "idle"
+       \/ "unmade" \in Also /\ tw = "gone" /\ made = FALSE /\ status = "active" /\ agent = "starting"
+    /\ making = "no"
     \* A task starts at a commit main has; a fork, where its source stood.
     /\ \/ tbCommits = {} /\ base = {} /\ src = "gone"
        \/ "forked" \in Also /\ tbCommits = {Src} /\ base = {Src} /\ src = "there"
     /\ mine = TRUE /\ mineCommits = {}
     /\ x = "none" /\ xOn = "wt" /\ xDirty = {} /\ wt = FALSE /\ wtCommits = {}
-    /\ rec = TRUE /\ status = "ready" /\ removing = 0 /\ retiringCommit = FALSE /\ noted = "none"
+    /\ rec = TRUE /\ removing = 0 /\ retiringCommit = FALSE /\ noted = "none"
     /\ integ = "main" /\ offers = 0
-    /\ agent = "idle" /\ regLock = 0 /\ wtLock = 0 /\ reading = "no"
+    /\ regLock = 0 /\ wtLock = 0 /\ reading = "no"
     /\ req = [r \in Req |-> NoRequest]
     /\ next = 1 /\ crashes = 0 /\ lost = {} /\ xRemovedBy = {} /\ removedOther = FALSE
     /\ retargeted = FALSE /\ readPartly = FALSE /\ untold = FALSE
@@ -217,8 +251,9 @@ Write(var, more) == next <= MaxWork /\ var' = var \cup {next} /\ next' = next + 
 YouPrompt == Outside(agent = "idle" /\ agent' = "working" /\ UNCHANGED <<gitVars, next>>)
 TurnEnds  == Outside(agent = "working" /\ agent' = "idle" /\ UNCHANGED <<gitVars, next>>)
 
-\* `update_hook`, under the registry lock, until the task is stopped.
-Hook == /\ regLock = 0 /\ rec /\ agent # "stopped"
+\* `update_hook`, under the registry lock, until the task is stopped.  A
+\* run that has yet to make its worktree has started no agent to say so.
+Hook == /\ regLock = 0 /\ rec /\ agent \in {"working", "idle"}
         /\ status' = (IF agent = "working" THEN "active" ELSE "ready")
         /\ status' # status
         /\ UNCHANGED <<gitVars, rec, removing, retiringCommit, noted, agent, regLock, wtLock, req,
@@ -303,7 +338,7 @@ YouRemoveX == Outside((ReplaceInWindow \/ ~InWindow)
 \* The steps no other may name: each says what it leaves as it was.
 Aside(A, unchanged) ==
     /\ A
-    /\ UNCHANGED <<gitVars, recordVars, agent, regLock, wtLock, req, ghostVars>>
+    /\ UNCHANGED <<gitVars, recordVars, agent, regLock, wtLock, req, ghostVars, made, making>>
     /\ UNCHANGED unchanged
 
 \* `retarget`, whole under the registry lock: `require_not_removing` refuses
@@ -346,11 +381,13 @@ SourceEnds == Aside(
 \* registry lock, `require_not_removing` refuses while its worktree goes or
 \* Git merges it, and once a removal was cut short; then it keeps the
 \* worktree, shared, while `snapshot` reads it with the registry lock let
-\* go.  Broken: `fork_no_hold` asks without the registry lock and reads
-\* with no hold, as the code did; `fork_any_time` reads one a removal cut
-\* short left.
+\* go.  Its agent's conversation is what the fork continues, so a task
+\* whose worktree was never made, and whose agent never ran, has no fork.
+\* Broken: `fork_no_hold` asks without the registry lock and reads with no
+\* hold, as the code did; `fork_any_time` reads one a removal cut short
+\* left.
 ForkBegins == Aside(
-    /\ "fork reads" \in Also /\ reading = "no" /\ rec /\ tw # "gone" /\ wtLock = 0
+    /\ "fork reads" \in Also /\ reading = "no" /\ rec /\ made /\ tw # "gone" /\ wtLock = 0
     /\ Break = "fork_no_hold" \/ regLock = 0
     /\ Break = "fork_any_time" \/ removing = 0
     /\ reading' = (IF Break = "fork_no_hold" THEN "unheld" ELSE "held"),
@@ -367,10 +404,11 @@ Asked == \E r \in Req : req[r].pc \in {"start", "git merge", "after merge", "mer
 \* `propose_task`, from the agent's own server, which may be answering as
 \* `stop` closes its pane: under the registry lock, refused once the task
 \* is stopped.  One made once you were asked, as while you read the
-\* question, is for a config with "offer once asked".  Broken:
-\* `offer_after_stop` takes one from a stopped task.
+\* question, is for a config with "offer once asked".  A run that has yet
+\* to make the task's worktree has started no agent, and no server of its.
+\* Broken: `offer_after_stop` takes one from a stopped task.
 AgentOffers == Aside(
-    /\ "offer" \in Also /\ offers = 0 /\ regLock = 0 /\ rec
+    /\ "offer" \in Also /\ offers = 0 /\ regLock = 0 /\ rec /\ made
     /\ agent # "idle"
     /\ Break = "offer_after_stop" \/ status # "stopped"
     /\ "offer once asked" \in Also \/ ~Asked \/ agent = "stopped"
@@ -385,26 +423,125 @@ AgentOffers == Aside(
 \* `require_not_removing` refuses it while the task's worktree goes or Git
 \* merges it, and once a removal was cut short.  It closes the pane, so
 \* the agent writes no more, and the record says "stopped", after which
-\* `propose_task` refuses.
+\* `propose_task` refuses.  A run making the task's worktree ends too, its
+\* hold of the worktree with it, and Git, hung up, removes what it made.
 YouStop ==
     /\ "stop" \in Also /\ regLock = 0 /\ rec /\ wtLock = 0 /\ removing = 0
     /\ agent # "stopped" \/ status # "stopped"
     /\ agent' = "stopped" /\ status' = "stopped"
-    /\ UNCHANGED <<gitVars, rec, removing, retiringCommit, noted, regLock, wtLock, req, ghostVars, alsoVars>>
+    /\ \/ tw' = (IF making = "git" THEN "gone" ELSE tw)
+       \* `end_left_running` gives what the pane left running a second,
+       \* then kills it: Git too, if it has yet to remove all it made.
+       \/ "slow clean-up" \in Also /\ making = "git" /\ tw' = "left"
+    /\ making' = "no"
+    /\ UNCHANGED <<twDirty, tb, tbCommits, mainCommits, mine, mineCommits, x, xOn, xDirty, wt, wtCommits,
+                   rec, removing, retiringCommit, noted, regLock, wtLock, req, ghostVars,
+                   src, integ, base, offers, reading, retargeted, readPartly, untold, made>>
 
 \* `resume`, whole under the registry lock: a stopped task's agent starts
 \* again in its worktree, its record "starting", and may work and offer as
 \* before.  Refused with no worktree, and by `require_not_removing` while
 \* the worktree goes or Git merges it, and once a removal was cut short:
 \* by that no offer comes between a request's `stop` and its record going.
-\* A fork reading the worktree doesn't hold it off.  Broken:
+\* A fork reading the worktree doesn't hold it off.  A task whose record
+\* says its worktree is yet to be made is resumed whatever is there: its
+\* run makes it as it begins, or refuses what it finds.  Broken:
 \* `resume_any_time` resumes it whatever a request is doing to it.
 YouResume ==
     /\ "resume" \in Also /\ regLock = 0 /\ rec
     /\ Break = "resume_any_time" \/ (wtLock = 0 /\ removing = 0)
-    /\ agent = "stopped" /\ tw = "there"
-    /\ agent' = "working" /\ status' = "active"
+    /\ agent = "stopped" /\ (tw = "there" \/ ~made)
+    /\ agent' = (IF made THEN "working" ELSE "starting") /\ status' = "active"
     /\ UNCHANGED <<gitVars, rec, removing, retiringCommit, noted, regLock, wtLock, req, ghostVars, alsoVars>>
+
+-----------------------------------------------------------------------------
+(* The task's run as it begins, in its terminal (`runner`): with its       *)
+(* record saying the worktree is yet to be made, `make_worktree` makes it  *)
+(* before any agent starts.  `stop` ends the run at any step (`YouStop`),  *)
+(* and nothing finishes the task under it: `retire` and `merge` refuse an  *)
+(* agent that is starting, `forget` a live pane, and a `discard` stops it  *)
+(* first.                                                                  *)
+
+Run(A) ==
+    /\ A
+    /\ UNCHANGED <<tb, tbCommits, mainCommits, mine, mineCommits, x, xOn, xDirty, wt, wtCommits,
+                   rec, removing, retiringCommit, noted, regLock, wtLock, req, xRemovedBy, removedOther,
+                   src, integ, base, offers, reading, retargeted, readPartly, untold>>
+
+\* The run ends, saying why in its pane, and its record says `failed`,
+\* which finishing takes for an agent at rest.
+RunEnds == making' = "no" /\ agent' = "stopped" /\ status' = "ready"
+
+\* It takes the task's worktree lock, shared, with no hold of the registry
+\* lock, so that nothing removes or merges the worktree as Git makes it.
+\* While a removal or a merge holds it, it ends.
+RunHolds == agent = "starting" /\ making = "no" /\ Run(
+    /\ IF wtLock = 0 THEN making' = "held" /\ UNCHANGED <<agent, status>> ELSE RunEnds
+    /\ UNCHANGED <<tw, twDirty, made, next, crashes, lost>>)
+
+\* Under the registry lock it reads its record again, which is still its
+\* own, as `stop` would have ended it.  Then, holding the worktree: with
+\* none there and its branch, Git makes one, locked as `initializing`
+\* until its checkout is done.  One Git finished, on the task's branch
+\* with nothing else in it, is taken as made.  Anything else it keeps,
+\* and ends: what Git was cut short making, where nothing proves only Git
+\* wrote since, what `stop` left of one, one that holds more than Git's
+\* checkout, or no branch.
+\* Broken: `cut_short_remade` forces away what Git was cut short making,
+\* as a creation cut short is undone, and makes it anew; `cut_short_made`
+\* takes whatever folder is there as made.
+RunLooks == agent = "starting" /\ making = "held" /\ regLock = 0 /\ rec /\ Run(
+    /\ CASE tw = "gone" /\ tb ->
+              tw' = "half" /\ making' = "git" /\ UNCHANGED <<twDirty, agent, status, lost>>
+         [] tw = "half" /\ tb /\ Break = "cut_short_remade" ->
+              /\ twDirty' = {} /\ making' = "git"
+              /\ lost' = lost \cup {<<u, 0, "file">> : u \in twDirty}
+              /\ UNCHANGED <<tw, agent, status>>
+         [] (tw = "there" /\ twDirty = {}) \/ (tw \in {"there", "half"} /\ Break = "cut_short_made") ->
+              making' = "save" /\ UNCHANGED <<tw, twDirty, agent, status, lost>>
+         [] OTHER ->
+              RunEnds /\ UNCHANGED <<tw, twDirty, lost>>
+    /\ UNCHANGED <<made, next, crashes>>)
+
+\* Git has made it, and lets go of its own lock.  Then its `post-checkout`
+\* hook runs, and may fail: the run ends, and what the hook wrote stays.
+RunGitDone == agent = "starting" /\ making = "git" /\ Run(
+    /\ tw' = "there"
+    /\ \/ making' = "save" /\ UNCHANGED <<twDirty, agent, status, next>>
+       \/ RunEnds /\ UNCHANGED <<twDirty, next>>
+       \/ RunEnds /\ Write(twDirty, TRUE)
+    /\ UNCHANGED <<made, crashes, lost>>)
+
+\* Under the registry lock again, its record still its own: the worktree
+\* is made, says the record, the worktree is let go, and its agent starts.
+RunSaves == agent = "starting" /\ making = "save" /\ regLock = 0 /\ rec /\ Run(
+    /\ made' = TRUE /\ making' = "no" /\ agent' = "working"
+    /\ UNCHANGED <<tw, twDirty, status, next, crashes, lost>>)
+
+\* The host restarts, or the run and Git are killed: the kernel lets go of
+\* the worktree, and what Git was making stays, locked.  The record says
+\* `starting` until a listing finds its pane gone.
+RunCutShort == agent = "starting" /\ crashes < MaxCrashes /\ Run(
+    /\ agent' = "stopped" /\ making' = "no" /\ crashes' = crashes + 1
+    /\ UNCHANGED <<tw, twDirty, made, status, next, lost>>)
+
+\* `list_tasks`, under the registry lock: a task whose pane is gone, and
+\* whose record says its agent is at work, reads `crashed`.
+Poll == /\ regLock = 0 /\ rec /\ agent = "stopped" /\ status = "active"
+        /\ status' = "ready"
+        /\ UNCHANGED <<gitVars, rec, removing, retiringCommit, noted, agent, regLock, wtLock, req,
+                       ghostVars, alsoVars>>
+
+\* Someone writes in what Git left, or in a worktree whose run ended before
+\* its record said it was made: Git's lock doesn't keep anyone out.  Not
+\* once a request has read what is there: what anyone but the task's agent
+\* writes between that and the removal is lost, as in any worktree, which
+\* this model leaves out.
+SomeoneWrites == Outside(
+    /\ ~made /\ agent = "stopped" /\ tw \in Unfinished \cup {"there"}
+    /\ \A r \in Req : req[r].pc \in {"none", "start", "done", "dead"}
+    /\ Write(twDirty,
+             UNCHANGED <<tw, tb, tbCommits, mainCommits, mine, mineCommits, x, xOn, xDirty, wt, wtCommits, agent>>))
 
 -----------------------------------------------------------------------------
 (* You ask, or ask again: a new helper process, whatever the last one is   *)
@@ -416,8 +553,9 @@ YouResume ==
 
 Ask(r, k) ==
     /\ req[r].pc = "none" /\ rec /\ \A q \in 1..(r - 1) : req[q].pc # "none"
-    \* a dry run is refused while a request, or a fork, holds the worktree
-    /\ k = "discard" => (wtLock = 0 /\ reading # "held")
+    \* a dry run is refused while a request, a fork, or the run making the
+    \* worktree holds it
+    /\ k = "discard" => (wtLock = 0 /\ reading # "held" /\ (making = "no" \/ Break = "run_no_hold"))
     /\ req' = [req EXCEPT ![r] = [NoRequest EXCEPT !.kind = k, !.pc = "start", !.expect = tbCommits,
                                   !.told = Losses, !.toldBranch = tb, !.toldOffers = offers]]
     /\ UNCHANGED <<gitVars, recordVars, agent, regLock, wtLock, ghostVars, alsoVars>>
@@ -435,7 +573,7 @@ Refuse(r)  == req' = [req EXCEPT ![r].pc = "done", ![r].refused = TRUE] /\ regLo
 \* The record's offers go with it (`Store.remove`).
 Roost(r, A) ==
     /\ A
-    /\ UNCHANGED <<next, crashes, src, integ, base, offers, reading, retargeted, readPartly>>
+    /\ UNCHANGED <<next, crashes, src, integ, base, offers, reading, retargeted, readPartly, made, making>>
     /\ lost' = lost \cup {<<u, r, IF u \in Committed THEN "commit" ELSE "file">> : u \in Exists \ Exists'}
     /\ xRemovedBy' = IF x # "none" /\ x' = "none" THEN xRemovedBy \cup {r} ELSE xRemovedBy
     /\ removedOther' = (removedOther \/ (x = "other" /\ x' = "none") \/ (mine /\ ~mine'))
@@ -447,8 +585,11 @@ PutBack == IF removing # 0 /\ tw = "partly" THEN "there" ELSE tw
 
 \* `rpc` takes the lock and reads the record (`read_to_act_on`), and
 \* `require_not_removing` refuses every finishing action while a request
-\* holds the worktree lock, or a fork holds it shared.
-Held == wtLock # 0 \/ reading = "held"
+\* holds the worktree lock, or a fork holds it shared, or the run making
+\* the task's worktree does.  Broken: `run_no_hold` has the run take no
+\* hold of it; a request that then stops the task leaves `making` as it
+\* was, where `MadeAlone` has already failed.
+Held == wtLock # 0 \/ reading = "held" \/ (making # "no" /\ Break # "run_no_hold")
 
 \* `require_offers_named`, under the registry lock: a request is refused
 \* while the record holds an offer its question didn't name.  The lock is
@@ -476,28 +617,39 @@ Start(r) == req[r].pc = "start" /\ regLock = 0 /\ Roost(r,
     \* `merge`, a branch gone or moved from `expect`, then `merging_in`,
     \* `integration_branch` and `integrating`, with the branch it merges
     \* into as the record has it now (`into`).
+    \* A worktree Git was cut short making is refused, saying so
+    \* (`cut_short`), once the agent is at rest and its offers are named:
+    \* only a discard takes it.  So is what `stop` left of one, which Git
+    \* can't read (`check_worktree`).  Broken: `cut_short_retired` forces
+    \* away what Git was cut short making, as Git's alone.
     \/ /\ rec /\ ~Held /\ k \in {"retire", "merge"}
        /\ LET doMerge == k = "merge" /\ (tb \/ ~retiringCommit)
+              clears  == Break = "cut_short_retired" /\ PutBack = "half" /\ status # "active" /\ Named(r)
+              there   == IF clears THEN "gone" ELSE PutBack
+              dirty   == IF clears THEN {} ELSE twDirty
               ok      == /\ status # "active"
                          /\ Named(r)
-                         /\ PutBack = "gone" \/ twDirty = {}
+                         /\ there \notin Unfinished
+                         /\ there = "gone" \/ dirty = {}
                          /\ ~(AsMade /\ (xDirty # {} \/ Ahead # {}))
                          /\ doMerge => (tb /\ tbCommits = req[r].expect /\ CanMergeInto(integ))
-          IN /\ tw' = PutBack
+          IN /\ tw' = there /\ twDirty' = dirty
              /\ CASE ~ok      -> Refuse(r) /\ UNCHANGED wtLock
                 []   doMerge  -> /\ req' = [req EXCEPT ![r].pc = "git merge", ![r].tip = tbCommits,
                                             ![r].into = integ, ![r].hadBranch = tb,
-                                            ![r].hadWorktree = (PutBack # "gone")]
+                                            ![r].hadWorktree = (there # "gone")]
                                  /\ wtLock' = r /\ regLock' = 0
                 []   OTHER    -> /\ req' = [req EXCEPT ![r].pc = "checkpoint", ![r].hadBranch = tb,
-                                            ![r].hadWorktree = (PutBack # "gone")]
+                                            ![r].hadWorktree = (there # "gone")]
                                  /\ regLock' = r /\ UNCHANGED wtLock
-       /\ UNCHANGED <<twDirty, tb, tbCommits, mainCommits, mine, mineCommits, x, xOn, xDirty, wt,
+       /\ UNCHANGED <<tb, tbCommits, mainCommits, mine, mineCommits, x, xOn, xDirty, wt,
                       wtCommits, recordVars, agent>>
     \* `discard`: the branch moved from `expect`, more to lose than you
     \* were told (`told`), or an offer the question didn't name, refuses;
     \* else `stop`.  Counted and stopped in one step: an agent's write in
-    \* the moment between is left out.
+    \* the moment between is left out.  What Git was cut short making is
+    \* counted as any worktree is, and left as it is by a discard refused:
+    \* it is unlocked (`unlock_unmade`) only as `RemoveWorktree` removes it.
     \/ /\ rec /\ ~Held /\ k = "discard"
        /\ LET now == Losses
               ok  == /\ tb = req[r].toldBranch /\ (tb => tbCommits = req[r].expect)
@@ -664,6 +816,7 @@ Next ==
     \/ OtherMakesX \/ OtherWritesX \/ OtherCommitsX \/ YouRemoveX
     \/ \E b \in Targets : YouRetarget(b)
     \/ SourceBegins \/ SourceEnds \/ ForkBegins \/ ForkReads \/ AgentOffers \/ YouStop \/ YouResume
+    \/ RunHolds \/ RunLooks \/ RunGitDone \/ RunSaves \/ RunCutShort \/ Poll \/ SomeoneWrites
     \/ \E r \in Req, k \in Kinds : Ask(r, k)
     \/ \E r \in Req : Request(r)
     \/ Finished /\ UNCHANGED vars
@@ -676,7 +829,7 @@ Spec == Init /\ [][Next]_vars
 \* Roost deletes work only when you discard its task: retire, merge,
 \* forget, a retry or a crash never take a file or a commit from every
 \* folder and branch.
-KeptButByDiscard == \A l \in lost : req[l[2]].kind = "discard"
+KeptButByDiscard == \A l \in lost : l[2] \in Req /\ req[l[2]].kind = "discard"
 
 \* Finishing takes only what is the task's own: never your branch `mine`,
 \* and never a worktree at x its agent didn't make, or one made there since.
@@ -695,4 +848,17 @@ ForkWhole == ~readPartly
 
 \* The offers that go with a task are those its question named.
 OffersTold == ~untold
+
+\* A task's record says its worktree is made only of one Git finished: no
+\* agent starts in what Git was cut short making.
+StartsWhole == made => tw \notin Unfinished
+
+\* A task stopped as its run made its worktree has none, and resumes:
+\* `stop` leaves nothing there that only a discard takes.
+StopLeavesNone == tw # "left"
+
+\* Nothing finishes a task while its run makes its worktree: no request
+\* counts what is there, stops the task or removes anything with the run
+\* still at it.
+MadeAlone == making # "no" => \A r \in Req : req[r].pc \in {"none", "start", "done", "dead"}
 =============================================================================

@@ -1,0 +1,93 @@
+#!/usr/bin/env python3
+"""Which functions the task_on_host models describe have changed since the
+commit they were last checked against:  python3 test/formal/task_on_host/covered.py [COMMIT]
+
+Prints each covered function as `same`, `changed` or `gone`, comparing the
+working tree with COMMIT (by default SYNC, below).  A `changed` one means
+the models need another look: see .claude/skills/verify-task-on-host.
+Exits 1 when any changed."""
+
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+# The commit at which the models were last confirmed to describe the code.
+SYNC = "c1616b6"
+
+ROOT = Path(__file__).resolve().parents[3]
+# Top-level functions only: `Store.remove`, `Store.read_to_act_on` and
+# `ClaudeAgent.made_worktree`, which the skill's table also names, are methods,
+# and are read by hand.
+COVERED = {
+    "scripts/roost_remote.py": [
+        # Start: the lock, the record read, and each action's refusals.
+        "rpc", "answer", "require_not_removing", "retire", "discard", "forget", "require_finished",
+        "require_clean", "require_agent_work_kept", "require_nothing_kept", "require_offers_named",
+        "check_worktree", "put_back_removed", "finish_trashed", "pending_trash", "untrash",
+        "discard_losses", "cut_short",
+        # GitMerge, AfterMerge, MergeFailed.
+        "integrating", "merging_in", "integration_branch", "merge_task",
+        # Checkpoint.
+        "safe_to_delete", "branches_going", "started_at",
+        # Stop, YouStop, YouResume, Poll.
+        "stop", "close_panes", "pane_sessions", "left_running", "end_left_running", "resume", "spawn",
+        "list_tasks", "owned_pane", "asks_about_plan",
+        # RemoveBegin to RemoveEnd.
+        "remove_worktrees", "holding_worktree", "worktree_holder", "remove_agent_worktrees",
+        "agent_worktree_seen", "run_teardown", "trash_worktree", "relink_removed", "unlock_unmade",
+        # DeleteBranch, RemoveRecord.
+        "delete_branch", "unregister_gone",
+        # AsMade, Ahead, Losses, Going.
+        "is_as_made", "made_since", "agent_work", "agent_branch",
+        # Hook, AgentMakesX, AgentEntersX.
+        "update_hook", "agent_worktree", "claude_hook_settings",
+        # YouRetarget.
+        "retarget",
+        # ForkBegins, ForkReads: `make_task` up to its fork's snapshot.
+        "conversation_to_fork", "make_task",
+        # AgentOffers.
+        "propose_task", "task_offers",
+        # RunHolds to RunSaves, RunCutShort.
+        "runner", "make_worktree", "unmade", "initializing",
+    ],
+}
+
+
+def body(text, path, name):
+    """NAME's definition in TEXT, the source of PATH, with its decorators,
+    to the next top-level form."""
+    if path.endswith(".py"):
+        start = re.compile(r"^def %s\(" % re.escape(name))
+        top = re.compile(r"^[^\s#)]")
+    else:
+        start = re.compile(r"^\(def(un|const|var|var-keymap|macro) %s(\s|$)" % re.escape(name))
+        top = re.compile(r"^\(")
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if start.match(line):
+            j = i + 1
+            while j < len(lines) and not top.match(lines[j]):
+                j += 1
+            while i and lines[i - 1].startswith("@"):  # its decorators too
+                i -= 1
+            return "\n".join(lines[i:j]).rstrip()
+    return None
+
+
+def main(commit):
+    changed = False
+    for path, names in COVERED.items():
+        now = (ROOT / path).read_text()
+        then = subprocess.run(["git", "-C", str(ROOT), "show", "%s:%s" % (commit, path)],
+                              capture_output=True, text=True, check=True).stdout
+        for name in names:
+            new, old = body(now, path, name), body(then, path, name)
+            word = "gone" if new is None else "same" if new == old else "changed"
+            changed |= word != "same"
+            print("%-8s %s  %s" % (word, path, name))
+    return 1 if changed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1] if len(sys.argv) > 1 else SYNC))
