@@ -15010,7 +15010,13 @@ under a dozen columns, `roost--status-mark' stands for it."
                       (not (roost--field task 'worktreeMissing))
                       (when-let* ((branch (roost--other-branch task)))
                         (propertize (if (equal branch "HEAD") "detached"
-                                      (concat "on " (truncate-string-to-width branch 14 nil nil "…")))
+                                      ;; As much of it as the whole name, and a gap,
+                                      ;; leave room for, and 14 columns
+                                      ;; of it beside a name that is cut.
+                                      (concat "on " (truncate-string-to-width
+                                                     branch
+                                                     (max 14 (- room (string-width (roost--row-name task)) 6))
+                                                     nil nil "…")))
                                     'face 'roost-status-permission))))
          (label (cond (astray (if (funcall fits astray) astray
                                 (propertize "!" 'face 'roost-status-permission)))
@@ -15136,6 +15142,12 @@ for any other directory, which asks for a host and a folder first."
                                           (goto-char (button-start button))
                                           (call-interactively #'roost-new-task))))
           (insert "\n")
+          ;; Ruled off from its tasks, as in the dashboard: an offer's row
+          ;; is as dim as a heading, and a project to start a task in reads
+          ;; as one.
+          (when-let* ((colour (roost--hairline)))
+            (add-face-text-property start (point)
+                                    (list :underline (list :color colour :position t) :extend t) t))
           ;; `c' on the heading starts a task in this project; a
           ;; conversation's is none of yours.
           (when (and repo (not (roost--conversation-p (cadr group))))
@@ -15182,7 +15194,7 @@ for any other directory, which asks for a host and a folder first."
     ;; Its end of line too, where point is after a click or C-e.
     (insert (propertize "\n" 'roost-new-conversation t))
     (when (> (or roost-sidebar-recent-projects 0) 0)
-      (insert roost--gap (propertize "Start a task in" 'face 'roost-dim) "\n")
+      (insert roost--gap (roost--ruled (concat (propertize "Start a task in" 'face 'roost-dim) "\n")))
       (dolist (directory (roost--recent-projects tasks))
         (insert (roost--sidebar-project-row directory width)))
       (insert (roost--sidebar-project-row nil width)))
