@@ -1057,6 +1057,97 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(self.request("leave", id=talk["id"], on=True)["error"],
                          "A conversation has no pull request to leave to its agent")
 
+    def test_a_pull_request_roost_merges_is_asked_for_once_for_each_head(self):
+        head, url = "a" * 40, "https://github.com/o/r/pull/12"
+        store = roost.Store(str(self.state))
+
+        def record_pull_request(task, **fields):
+            record = store.read(task["id"])
+            record["pr"] = dict(dict(number=12, url=url, state="OPEN", head=head), **fields)
+            store.save(record)
+
+        def merge(task, **args):
+            return self.request("merge-pr", id=task["id"], **dict(dict(number=12, head=head), **args))
+
+        # Yours unless the task was made otherwise, and a conversation's never.
+        plain = self.create(name="plain")
+        record_pull_request(plain)
+        self.assertNotIn("prMerge", plain)
+        self.assertNotIn("prMerge", self.create(name="odd", mergePr="octopus"))
+        self.assertNotIn("prMerge", self.create(name="Conversation 09:15", directory="/nowhere", conversation=True,
+                                                mergePr="squash"))
+        task = self.create(name="merges", mergePr="squash")
+        self.assertEqual(task["prMerge"], "squash")
+        with patch.object(roost, "gh") as gh:
+            self.assertEqual(merge(plain)["error"], "Merging this task's pull request is left to you")
+            # Only the open pull request its record has, on GitHub, at a commit.
+            self.assertEqual(merge(task)["error"], "This task's pull request is not #12")
+            record_pull_request(task)
+            for args, error in ((dict(number=13), "This task's pull request is not #13"),
+                                (dict(number="12"), "Invalid pull request number"),
+                                (dict(head="main"), "Invalid commit"),
+                                (dict(head="--admin"), "Invalid commit")):
+                self.assertEqual(merge(task, **args).get("error"), error)
+            for fields, error in ((dict(state="MERGED"), "The pull request is merged"),
+                                  (dict(state="CLOSED"), "The pull request is closed"),
+                                  (dict(forge="gitlab"), "Roost merges pull requests on GitHub only"),
+                                  (dict(url="https://github.com/o/r/pull/12 --admin"),
+                                   "Roost merges pull requests on GitHub only"),
+                                  (dict(url="--admin"), "Roost merges pull requests on GitHub only")):
+                record_pull_request(task, **fields)
+                self.assertEqual(merge(task).get("error"), error)
+            gh.assert_not_called()
+            self.assertNotIn("prMergeAsked", store.read(task["id"]))
+            # One call, by its URL, in no repository, for that head alone.
+            record_pull_request(task)
+            updated = store.read(task["id"])["updatedAt"]
+            merged = merge(task)
+            self.assertTrue(merged["ok"], merged)
+            gh.assert_called_once_with(None, "pr", "merge", url, "--squash", "--match-head-commit", head,
+                                       timeout=roost.MERGE_SECONDS)
+            asked = merged["result"]["prMergeAsked"]
+            self.assertEqual((asked["number"], asked["head"], asked["merged"]), (12, head, True))
+            self.assertNotIn("error", asked)
+            # No event of the agent's, and the forge says when it merged.
+            self.assertEqual(merged["result"]["updatedAt"], updated)
+            self.assertEqual(merged["result"]["pr"]["state"], "OPEN")
+            # Asked again, as by another Emacs or after no reply: not twice.
+            again = merge(task)
+            self.assertIs(again["result"]["alreadyAsked"], True)
+            self.assertEqual(gh.call_count, 1)
+            self.assertNotIn("alreadyAsked", store.read(task["id"]))
+        # What GitHub refuses is recorded, on one line, and waits on you: not
+        # asked again for that head, but for the next one its agent pushes.
+        other = self.create(name="refused", mergePr="rebase")
+        record_pull_request(other)
+        with patch.object(roost, "gh", side_effect=roost.RoostError("X Pull request is not mergeable:\n  the base branch policy prohibits the merge.")) as gh:
+            refused = merge(other)
+            self.assertTrue(refused["ok"], refused)
+            self.assertEqual(refused["result"]["prMergeAsked"]["error"],
+                             "X Pull request is not mergeable: the base branch policy prohibits the merge.")
+            self.assertNotIn("merged", refused["result"]["prMergeAsked"])
+            self.assertIs(merge(other)["result"]["alreadyAsked"], True)
+            self.assertEqual(gh.call_count, 1)
+        with patch.object(roost, "gh") as gh:
+            record_pull_request(other, head="b" * 40)
+            pushed = merge(other, head="b" * 40)
+            gh.assert_called_once_with(None, "pr", "merge", url, "--rebase", "--match-head-commit", "b" * 40,
+                                       timeout=roost.MERGE_SECONDS)
+            self.assertEqual((pushed["result"]["prMergeAsked"]["head"], pushed["result"]["prMergeAsked"]["merged"]),
+                             ("b" * 40, True))
+        # A helper killed before GitHub answered leaves it asked for, with no
+        # word of what came of it: never asked twice.
+        killed = self.create(name="killed", mergePr="merge")
+        record_pull_request(killed)
+        with patch.object(roost, "gh", side_effect=KeyboardInterrupt), self.assertRaises(KeyboardInterrupt):
+            merge(killed)
+        asked = store.read(killed["id"])["prMergeAsked"]
+        self.assertEqual((asked["number"], asked["head"]), (12, head))
+        self.assertFalse({"merged", "error"} & set(asked))
+        with patch.object(roost, "gh") as gh:
+            self.assertIs(merge(killed)["result"]["alreadyAsked"], True)
+            gh.assert_not_called()
+
     def test_an_agent_that_did_something_since_emacs_judged_is_not_told(self):
         # Found by the model (LeftPullRequest.no-as-of.cfg): Emacs judges by
         # the copy it holds. You prompt the agent from where Roost doesn't

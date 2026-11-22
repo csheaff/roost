@@ -104,6 +104,8 @@ ghostel-tmux, the default, choose it themselves."
          (roost--turns-sent (make-hash-table :test 'equal))
          (roost--telling (make-hash-table :test 'equal))
          (roost--untold (make-hash-table :test 'equal))
+         (roost--merging (make-hash-table :test 'equal))
+         (roost--unmerged (make-hash-table :test 'equal))
          (roost--told-here (make-hash-table :test 'equal))
          (roost--sent-at (make-hash-table :test 'equal))
          (roost--workload nil)
@@ -11605,6 +11607,123 @@ field (FIELD . :none) is left out."
        ;; Forgotten with the task.
        (roost--apply-snapshot "dev" nil)
        (should (eq (gethash '("dev" "0123456789abcdef") roost--pr-verdicts 'gone) 'gone)))))))
+
+;;;; A pull request Roost merges
+
+(defun roost-test--merges (requests)
+  "The parameters of each time Roost asked a host to merge, among REQUESTS."
+  (mapcar #'cadr (seq-filter (lambda (request) (equal (car request) "merge-pr")) requests)))
+
+(defun roost-test--merging-task (&rest status)
+  "A task as `roost-test--turn-task' makes it, made for Roost to squash-merge."
+  (cons '(prMerge . "squash") (apply #'roost-test--turn-task status)))
+
+(ert-deftest roost-merges-a-pull-request-that-is-ready-once ()
+  (roost-test--isolated
+   (let (requests said)
+     (roost-test--telling requests
+       (cl-letf (((symbol-function 'message)
+                  (lambda (format &rest args) (when format (push (apply #'format format args) said)))))
+         ;; Yours unless the task was made otherwise: nothing is asked.
+         (let ((task (roost--cache-task "dev" (roost-test--turn-task))))
+           (should-not (roost-test--merges requests))
+           (should (equal (roost--turn task) "to merge")))
+         (roost--apply-snapshot "dev" nil)
+         ;; Made to merge, it is asked for at the head GitHub was asked
+         ;; about, and waits on nobody meanwhile: no word, no news.
+         (let ((task (roost--cache-task "dev" (roost-test--merging-task))))
+           (should (equal (roost-test--merges requests)
+                          '(((id . "0123456789abcdef") (number . 12) (head . "a1")))))
+           (should-not (roost--turn task))
+           (should-not (roost--news-turn task))
+           (should (string-search "Roost merges it" (substring-no-properties (roost--next-step task))))
+           ;; Not twice while its host has yet to answer.
+           (roost--cache-task "dev" (roost-test--merging-task))
+           (should (= (length (roost-test--merges requests)) 1)))
+         ;; Merged, as its host says: said once, and still not yours while
+         ;; GitHub has yet to be asked again.
+         (let* ((asked `(prMergeAsked (number . 12) (head . "a1") (at . ,(roost-test--ago 5)) (merged . t)))
+                (reply (cons asked (roost-test--merging-task))))
+           (funcall (nth 2 (car requests)) reply)
+           (should (equal said '("Merged fix auth's #12")))
+           (should (= (length (roost-test--merges requests)) 1))
+           (should-not (roost--turn (gethash '("dev" "0123456789abcdef") roost--tasks))))
+         ;; A merge that never showed, two minutes on, waits on you.
+         (let ((task (roost--cache-task
+                      "dev" (cons `(prMergeAsked (number . 12) (head . "a1") (at . ,(roost-test--ago 600)))
+                                  (roost-test--merging-task)))))
+           (should (equal (roost--turn task) "to merge"))
+           (should (= (length (roost-test--merges requests)) 1))))))))
+
+(ert-deftest roost-a-merge-github-refuses-waits-on-you ()
+  (roost-test--isolated
+   (let (requests said)
+     (roost-test--telling requests
+       (cl-letf (((symbol-function 'message)
+                  (lambda (format &rest args) (when format (push (apply #'format format args) said)))))
+         (roost--cache-task "dev" (roost-test--merging-task))
+         ;; GitHub's refusal, as the host's record has it: yours, and why.
+         (let ((asked `(prMergeAsked (number . 12) (head . "a1") (at . ,(roost-test--ago 5))
+                                     (error . "Pull request is not mergeable"))))
+           (funcall (nth 2 (car requests)) (cons asked (roost-test--merging-task)))
+           (should (equal said '("Roost could not merge fix auth's #12: Pull request is not mergeable")))
+           (let ((task (gethash '("dev" "0123456789abcdef") roost--tasks)))
+             (should (equal (roost--turn task) "to merge"))
+             (should (string-search "opens it to merge" (substring-no-properties (roost--next-step task)))))
+           ;; Not asked again for that head, but for the next the agent pushes.
+           (roost--cache-task "dev" (cons asked (roost-test--merging-task)))
+           (should (= (length (roost-test--merges requests)) 1))
+           (roost--cache-task "dev" (cons asked (append (roost-test--merging-task '(head . "b2"))
+                                                        nil)))
+           (should (= (length (roost-test--merges requests)) 1)))
+         ;; A host that refuses, or never answers, leaves it yours too.
+         (roost--apply-snapshot "dev" nil)
+         (setq requests nil said nil)
+         (roost--cache-task "dev" (roost-test--merging-task))
+         (funcall (nth 3 (car requests)) "No reply")
+         (should (equal said '("Roost could not merge fix auth's #12: No reply")))
+         (let ((task (roost--cache-task "dev" (roost-test--merging-task))))
+           (should (equal (roost--turn task) "to merge"))
+           (should (= (length (roost-test--merges requests)) 1))))))))
+
+(ert-deftest roost-merges-only-what-reads-to-merge ()
+  ;; Whatever holds the word back holds the merge back, and so does a
+  ;; draft, another forge, and a pull request from another branch.
+  (roost-test--isolated
+   (let (requests)
+     (roost-test--telling requests
+       (dolist (status '(((checks . ((passing . 2) (failing . 0) (pending . 1))))
+                         ((checks . ((passing . 2) (failing . 1) (pending . 0))))
+                         ((threads . 1))
+                         ((requested "copilot"))
+                         ((review . "CHANGES_REQUESTED"))
+                         ((mergeable . "CONFLICTING"))
+                         ((mergeState . "BLOCKED"))
+                         ((draft . t))))
+         (roost--cache-task "dev" (apply #'roost-test--merging-task status))
+         (should-not (roost-test--merges requests))
+         (roost--apply-snapshot "dev" nil))
+       (dolist (fields '(((unpushed . 1)) ((dirty . t)) ((status . "running"))
+                         ((pr . ((number . 12) (url . "https://gitlab.com/o/r/-/merge_requests/12")
+                                 (state . "OPEN") (head . "a1") (forge . "gitlab"))))
+                         ((prMerge . "fast-forward"))))
+         (roost--cache-task "dev" (append fields (roost-test--merging-task)))
+         (should-not (roost-test--merges requests))
+         (roost--apply-snapshot "dev" nil))))))
+
+(ert-deftest roost-a-new-task-merges-as-its-project-says ()
+  (roost-test--isolated
+   (let (requests)
+     (cl-letf (((symbol-function 'roost--request)
+                (lambda (_host action parameters &rest _) (push (cons action parameters) requests))))
+       (dolist (case '((nil . nil) (squash . "squash") (rebase . "rebase") (octopus . nil)))
+         (let ((roost-merge-pull-requests (car case)))
+           (roost--create-task default-directory "one" "main" "prompt" "claude")
+           (should (equal (alist-get 'mergePr (cdr (car requests))) (cdr case)))))
+       ;; A conversation has no pull request to merge.
+       (let ((roost-merge-pull-requests 'squash))
+         (roost--create-task default-directory "talk" nil "prompt" "claude" nil nil '((conversation . t)))
+         (should-not (alist-get 'mergePr (cdr (car requests)))))))))
 
 ;;;; A pull request left to its agent
 

@@ -2923,6 +2923,9 @@ def make_task(store, request, create_id):
     # leaves one: whatever the agent, as Roost does the telling.
     if request.get("leavePr") is True and not conversation:
         task.update(prLeft=True, prLeftAt=now(), prLeftGen=uuid.uuid4().hex[:12])
+    # And Roost merges it once it is ready, this way: as the project says.
+    if request.get("mergePr") in MERGE_METHODS and not conversation:
+        task["prMerge"] = request["mergePr"]
     # The task whose agent offered this one, which shows it under that, and
     # the offer it was made from, which waits no more once it is saved.
     parent, offer = request.get("parent"), text(request.get("offer"))
@@ -5502,6 +5505,78 @@ def tell(store, task, verdict, key, number, count=None, gitlab=False, as_of=None
     # left: a prompt of yours with the same words is another.
     send(store, task, words, send_id=hashlib.sha256(
         ("%s %s %d %s %s" % (task["id"], task.get("prLeftGen"), number, verdict, key)).encode()).hexdigest()[:32])
+    return task
+
+
+# How Roost merges a pull request it is to merge, as `gh pr merge` names them.
+MERGE_METHODS = ("squash", "merge", "rebase")
+MERGE_SECONDS = 45
+MERGE_ERROR_LIMIT = 300
+
+
+def merge_asked(task):
+    """The merge Roost last asked the forge for of TASK's pull request, or
+    None: the pull request's number, the head it was to merge, when, and
+    once the forge answered, `merged` or the `error` it gave."""
+    asked = task.get("prMergeAsked")
+    return asked if (isinstance(asked, dict) and counted(asked.get("number"), TOLD_NUMBERS)
+                     and commit_id(asked.get("head"))) else None
+
+
+def begin_merge(store, task, number, head):
+    """Record that Roost asks the forge to merge TASK's pull request NUMBER
+    at HEAD, and return its URL; None when it asked for that before. Only
+    for a task made to have Roost merge its pull request (`prMerge`), the
+    open pull request its record has, on GitHub, and once for each head:
+    one the forge refused waits on you until its agent pushes again.
+    Recorded before the forge is asked, and kept whatever comes of it: a
+    helper that dies between the two leaves a pull request that may not
+    have merged, which then waits on you."""
+    if task.get("prMerge") not in MERGE_METHODS:
+        raise RoostError("Merging this task's pull request is left to you")
+    if not counted(number, TOLD_NUMBERS):
+        raise RoostError("Invalid pull request number")
+    if not commit_id(head):
+        raise RoostError("Invalid commit")
+    pr = recorded_pull_request(task)
+    if pr.get("number") != number:
+        raise RoostError("This task's pull request is not #%d" % number)
+    if pr.get("state") in ("CLOSED", "MERGED"):
+        raise RoostError("The pull request is %s" % pr["state"].lower())
+    url = pr.get("url")
+    if pr.get("forge") == "gitlab" or not (
+            isinstance(url, str) and re.fullmatch(r"https://[^/\s]+/[^/\s]+/[^/\s]+/pull/%d" % number, url)):
+        raise RoostError("Roost merges pull requests on GitHub only")
+    asked = merge_asked(task)
+    if asked and (asked["number"], asked["head"]) == (number, head):
+        return None
+    task["prMergeAsked"] = dict(number=number, head=head, at=now())
+    store.save(task)
+    return url
+
+
+def merge_pull_request(url, method, head):
+    """Ask GitHub to merge the pull request at URL by METHOD, one of
+    MERGE_METHODS, while its head is HEAD: a push since is not merged.
+    One `gh` call, by the pull request's URL, in no repository: it touches
+    no branch or worktree here. Return what GitHub refused it for, or None."""
+    try:
+        gh(None, "pr", "merge", url, "--" + method, "--match-head-commit", head, timeout=MERGE_SECONDS)
+    except (RoostError, OSError) as error:
+        return " ".join(str(error).split())[:MERGE_ERROR_LIMIT] or "gh pr merge failed"
+    return None
+
+
+def end_merge(store, task_id, number, head, error):
+    """TASK_ID's record, with what came of the merge `begin_merge` recorded
+    for NUMBER at HEAD: `merged`, or ERROR. Not when another was asked for
+    since. The pull request's own record stays as the forge last said: the
+    next time it is asked says it merged, and at which commit."""
+    task = store.read(task_id)
+    asked = merge_asked(task)
+    if asked and (asked["number"], asked["head"]) == (number, head):
+        asked.update(dict(error=error) if error else dict(merged=True))
+        store.save(task)
     return task
 
 
@@ -10873,6 +10948,23 @@ def answer(request):
                     store.save(task)
             # One found open was pushed to, as above, though nothing counted how much.
             return {"ok": True, "result": outgoing(task if opened else dict(task, pushed=None))}
+        if action == "merge-pr":
+            number, head = request.get("number"), request.get("head")
+            with store.locked():
+                task = store.read_to_act_on(request["id"])
+                if task["status"] == "retired":
+                    raise RoostError("Task is retired")
+                require_not_removing(store, task, action)
+                url = begin_merge(store, task, number, head)
+                method = task["prMerge"]
+            if url is None:
+                return {"ok": True, "result": outgoing(dict(task, alreadyAsked=True))}
+            # Asking GitHub is slow, so it runs without the registry lock:
+            # the agent's hooks and other requests go on meanwhile.
+            error = merge_pull_request(url, method, head)
+            with store.locked():
+                task = end_merge(store, request["id"], number, head, error)
+            return {"ok": True, "result": outgoing(task)}
         if action == "look":
             return {"ok": True, "result": outgoing(look(store, request["id"], tracked=request.get("tracked") is True))}
         if action == "list":

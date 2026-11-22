@@ -647,7 +647,45 @@ as Roost does the telling.
 - Five times at most for each kind on one pull request. After that, or when
   the agent stops with the pull request as it was, the task waits on you as
   before, with its word and a notification. `L` twice starts the count again.
-- Roost never merges: `to merge` is always yours.
+- Roost doesn't merge it unless you say so for the project
+  ([below](#who-merges)): `to merge` is yours.
+
+### Who merges
+
+You do, unless a project says otherwise. With `roost-merge-pull-requests`
+nil, a pull request that is ready reads `to merge` and waits for you.
+
+Set to `squash`, `merge` or `rebase`, Roost merges a new task's pull request
+that way at the moment it would read `to merge`: every check passed, no
+review still asked for (Copilot's included), none asking for changes, no
+review thread open, and GitHub finding no conflict and no branch rule in
+the way. The row then goes from the agent's status to `merged`, and Roost
+says "Merged fix auth's #12". With `L` as well, you see the task twice: when
+you start it and when it has merged.
+
+It is a setting of the project, so one you take more care over keeps the
+last look. In a project's `.dir-locals.el`:
+
+    ((nil . ((roost-merge-pull-requests . squash))))
+
+Emacs asks before it trusts that, as for any variable a directory sets
+that isn't marked safe. Or set it for every project in your init file and
+set it to nil in the ones you merge yourself.
+
+- Roost asks GitHub once for each commit, with one `gh pr merge` for the
+  commit GitHub was asked about: a push since isn't merged with it. A merge
+  GitHub refuses, or never answers for, waits on you as `to merge`, and
+  Roost says why.
+- Roost goes by what GitHub says. Have the branch's rules there require
+  the checks and reviews you rely on: GitHub then refuses a merge without
+  them, whatever Roost saw.
+- To hold one pull request back, mark it a draft or leave a review comment
+  on it: Roost merges only what reads `to merge`.
+- Tasks started before you set it stay yours to merge. It works with any
+  agent, on GitHub only, for the task's own pull request, while Emacs runs.
+- Roost can't stop an agent from merging by itself: if the project's own
+  instructions (`CLAUDE.md`, `AGENTS.md`) tell agents to merge, they will.
+  Roost never edits those files.
 - Emacs has to be running, as only Emacs asks GitHub or GitLab.
 - Roost can't see a prompt you left half typed in the agent's terminal
   before going elsewhere: the line would join it.
@@ -1053,6 +1091,10 @@ header line. A failed creation keeps the draft.
 - `roost-leave-pull-requests` (nil): leave each new task's pull request to
   its agent, as [`L`](#a-pull-request-left-to-its-agent) does for one task.
   For tasks started after you turn it on.
+- `roost-merge-pull-requests` (nil): who merges a new task's pull request.
+  Nil leaves it to you; `squash`, `merge` or `rebase` has Roost merge it
+  that way once it would read `to merge` ([Who merges](#who-merges)). May
+  be set per project in `.dir-locals.el`.
 - `roost-remote-control` (nil): start each Claude Code task with Remote
   Control (`--remote-control`, `--name`), named for the task, so it shows
   in the Claude app and at claude.ai/code, which notify your phone when

@@ -187,6 +187,9 @@ what its host said when it read it.")
                                  (said . "Roost: A check failed on #12. Fix it.")))
                         (prLeftAt . ,(roost-sweep-late--now)))
                       (assq-delete-all 'prTold (assq-delete-all 'prLeftAt record))))
+      ("merge-pr" (cons `(prMergeAsked (number . ,(alist-get 'number request)) (head . ,(alist-get 'head request))
+                                       (at . ,(roost-sweep-late--now)) (merged . t))
+                        (assq-delete-all 'prMergeAsked record)))
       ("retire" (roost-sweep-late--became record "retired"))
       ("forget" (roost-sweep-late--became record "forgotten"))
       ("merge" (roost-sweep-late--became record "retired" '(retiringCommit . "c9")))
@@ -229,7 +232,7 @@ SUCCESS and FAILURE take it when it comes.  Its host reads the world now."
       ("create" (unless (assq 'alreadyMade reply)
                   (setq roost-sweep-late--records
                         (append roost-sweep-late--records (list (cons (alist-get 'id reply) reply))))))
-      ((or "stop" "resume" "rename" "retarget" "leave" "tell" "shell" "pr" "take-offer")
+      ((or "stop" "resume" "rename" "retarget" "leave" "tell" "merge-pr" "shell" "pr" "take-offer")
        (when (assoc id roost-sweep-late--records)
          (setf (alist-get id roost-sweep-late--records nil nil #'equal) (assq-delete-all 'pushed reply)))))))
 
@@ -1082,6 +1085,15 @@ dashboard the command starts from."
                         (checkedAt . "2099-01-01T00:00:00+00:00")))
      :start ,(lambda () (roost--tell-agent (roost-sweep-late--mine)))
      :action "tell" :refusals ((,roost-sweep-late--retired) ("The agent is not at rest")))
+    (merge-pr
+     ;; Roost merges its pull request, which passed everything.
+     :fields ((prMerge . "squash") (live . t) (unpushed . 0) (dirty) (conflicts)
+              (pr (number . 12) (url . "https://github.com/o/r/pull/12") (state . "OPEN") (head . "a1"))
+              (prStatus (state . "OPEN") (head . "a1") (checks (passing . 2) (failing . 0) (pending . 0))
+                        (mergeable . "MERGEABLE") (requested) (threads . 0)
+                        (checkedAt . "2099-01-01T00:00:00+00:00")))
+     :start ,(lambda () (roost--merge-itself (roost-sweep-late--mine)))
+     :action "merge-pr" :refusals ((,roost-sweep-late--retired) ("Merging this task's pull request is left to you")))
     (retire
      :fields ((ahead . 0))
      :start ,(lambda () (roost-retire (roost-sweep-late--mine)))

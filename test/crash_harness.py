@@ -379,6 +379,11 @@ class Box:
         script.write_text("#!%s\n" % sys.executable + GH)
         script.chmod(0o755)
 
+    def merges(self):
+        """What the fake gh was asked to merge, each time."""
+        path = self.gh_dir / "merges"
+        return path.read_text().splitlines() if path.exists() else []
+
     def opened(self):
         path = self.gh_dir / "prs"
         return path.read_text().splitlines() if path.exists() else []
@@ -402,6 +407,9 @@ elif args[:2] == ["pr", "list"]:
                            state="MERGED" if tip else "OPEN", isDraft=False, headRefName=branch,
                            headRefOid=tip or "0" * 40)
                       for number, branch in enumerate(open_prs) if head in (None, branch)]))
+elif args[:2] == ["pr", "merge"]:
+    with open(os.path.join(folder, "merges"), "a") as out:
+        out.write(" ".join(args[2:]) + "\n")
 else:
     print("[]")
 """
