@@ -17092,9 +17092,13 @@ it of the same ID's, or nil for the first."
        (should (memq 'roost-status-permission
                      (ensure-list (get-text-property (1- (length astray)) 'face astray)))))
      (should (string-suffix-p " detached" (funcall row 30 "stopped" '(worktreeBranch . "HEAD"))))
-     ;; A long branch is cut, and a narrow sidebar keeps the name and a mark.
-     (should (string-suffix-p " on feature/long-…"
-                              (funcall row 40 "stopped" '(worktreeBranch . "feature/long-branch-name"))))
+     ;; A long branch is whole where the name leaves it room and a gap,
+     ;; and cut where it doesn't; a narrow sidebar keeps the name and a mark.
+     (should (equal (substring-no-properties
+                     (funcall row 40 "stopped" '(worktreeBranch . "feature/long-branch-name")))
+                    " fix auth    on feature/long-branch-name"))
+     (should (string-suffix-p "  on feature/long-b…"
+                              (funcall row 30 "stopped" '(worktreeBranch . "feature/long-branch-name"))))
      (should (string-suffix-p " !" (funcall row 16 "stopped" '(worktreeBranch . "feat"))))
      ;; On its own branch, at work, or with the worktree gone, as before.
      (should (string-suffix-p " stopped" (funcall row 30 "stopped")))

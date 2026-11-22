@@ -4,6 +4,12 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- The sidebar rules a hairline under each project's heading and under
+  "Start a task in", as the dashboard does under its headings, and a task
+  whose worktree is on another branch names as much of that branch as its
+  row has room for, rather than 14 columns of it. Nothing to do when
+  upgrading; `roost-decorate` set to nil draws no hairlines.
+
 - A new task's worktree, when none was made ahead for it, is now made in
   the task's terminal, where you see Git check out its files, rather than
   before Emacs hears back. In a 37,000-file project Emacs hears back in
