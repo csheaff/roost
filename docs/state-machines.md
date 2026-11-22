@@ -2686,7 +2686,8 @@ Invariants:
   the task's own pull request, open and no draft, on GitHub, with a check that
   passed (none at all reads the same as none yet), into the branch the task merges
   into. The helper takes the number its record has and no other, and refuses one
-  closed or merged.
+  closed or merged, and a task that no longer merges into the branch Emacs judged
+  the pull request to be into (`base`), as after another Emacs's `B`.
 - I8. Not under your hands: Emacs holds off while you are at the task's terminal,
   while a draft to the task is open, and for 30 s after you send it a prompt
   (`roost--prompting-p`), as you may be asking for more. It stays Roost's, and is

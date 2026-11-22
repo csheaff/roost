@@ -11636,7 +11636,7 @@ Its pull request is into main, which the task merges into."
          ;; about, and waits on nobody meanwhile: no word, no news.
          (let ((task (roost--cache-task "dev" (roost-test--merging-task))))
            (should (equal (roost-test--merges requests)
-                          '(((id . "0123456789abcdef") (number . 12) (head . "a1")))))
+                          '(((id . "0123456789abcdef") (number . 12) (head . "a1") (base . "main")))))
            (should-not (roost--turn task))
            (should-not (roost--news-turn task))
            (should (string-search "Roost merges it" (substring-no-properties (roost--next-step task))))

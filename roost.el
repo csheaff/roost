@@ -9026,7 +9026,10 @@ for more: it is asked for once you have left."
       (puthash key (cons occurrence (float-time)) roost--asked-here)
       (condition-case nil
           (roost--act task "merge-pr"
-                      `((number . ,(car occurrence)) (head . ,(cdr occurrence)))
+                      `((number . ,(car occurrence)) (head . ,(cdr occurrence))
+                        ;; The branch this judged it to be into: its host
+                        ;; refuses a task that merges into another by now.
+                        (base . ,(alist-get 'base (roost--field task 'prStatus))))
                       (lambda (updated)
                         (funcall done)
                         (let ((asked (alist-get 'prMergeAsked updated)))

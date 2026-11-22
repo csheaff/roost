@@ -1067,7 +1067,7 @@ class Lifecycle(unittest.TestCase):
             store.save(record)
 
         def merge(task, **args):
-            return self.request("merge-pr", id=task["id"], **dict(dict(number=12, head=head), **args))
+            return self.request("merge-pr", id=task["id"], **dict(dict(number=12, head=head, base="main"), **args))
 
         # Yours unless the task was made otherwise, and a conversation's never.
         plain = self.create(name="plain")
@@ -1086,7 +1086,12 @@ class Lifecycle(unittest.TestCase):
             for args, error in ((dict(number=13), "This task's pull request is not #13"),
                                 (dict(number="12"), "Invalid pull request number"),
                                 (dict(head="main"), "Invalid commit"),
-                                (dict(head="--admin"), "Invalid commit")):
+                                (dict(head="--admin"), "Invalid commit"),
+                                # Retargeted since Emacs judged, as by another Emacs.
+                                (dict(base="release"),
+                                 "The task no longer merges into the branch its pull request is into"),
+                                (dict(base=None),
+                                 "The task no longer merges into the branch its pull request is into")):
                 self.assertEqual(merge(task, **args).get("error"), error)
             for fields, error in ((dict(state="MERGED"), "The pull request is merged"),
                                   (dict(state="CLOSED"), "The pull request is closed"),

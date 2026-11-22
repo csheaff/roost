@@ -5534,9 +5534,9 @@ def merges_asked(task):
     return [entry for entry in asked if isinstance(entry, str)] if isinstance(asked, list) else []
 
 
-def begin_merge(store, task, number, head):
+def begin_merge(store, task, number, head, base):
     """Record that Roost asks the forge to merge TASK's pull request NUMBER
-    at HEAD, and return its URL; None when it asked for that before, the
+    at HEAD, into BASE, and return its URL; None when it asked for that before, the
     last time or any time (`merges_asked`). Only
     for a task made to have Roost merge its pull request (`prMerge`), the
     open pull request its record has, on GitHub, and once for each head:
@@ -5550,6 +5550,10 @@ def begin_merge(store, task, number, head):
         raise RoostError("Invalid pull request number")
     if not commit_id(head):
         raise RoostError("Invalid commit")
+    # The branch Emacs judged the pull request to be into, which the task
+    # merged into then: another Emacs may have changed that since.
+    if not (isinstance(base, str) and base) or task.get("integrationBranch") != base:
+        raise RoostError("The task no longer merges into the branch its pull request is into")
     pr = recorded_pull_request(task)
     if pr.get("number") != number:
         raise RoostError("This task's pull request is not #%d" % number)
@@ -10971,7 +10975,7 @@ def answer(request):
                 if task["status"] == "retired":
                     raise RoostError("Task is retired")
                 require_not_removing(store, task, action)
-                url = begin_merge(store, task, number, head)
+                url = begin_merge(store, task, number, head, request.get("base"))
                 method = task["prMerge"]
             if url is None:
                 return {"ok": True, "result": outgoing(dict(task, alreadyAsked=True))}

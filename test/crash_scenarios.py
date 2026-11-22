@@ -351,7 +351,7 @@ class MergePr(KeepsTask):
     says what was asked."""
 
     action = "merge-pr"
-    args = dict(number=12, head="a" * 40)
+    args = dict(number=12, head="a" * 40, base="main")
 
     def arrange(self, box):
         box.origin()
