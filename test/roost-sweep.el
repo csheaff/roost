@@ -1487,6 +1487,38 @@ Return them as (PROBLEM . PLACES), PLACES naming the view, state and width."
   (roost-test--isolated
    (roost-sweep--report (roost-sweep--run #'roost-sweep--check-plain-faces '(sidebar)))))
 
+;; Not `sliced': one sidebar, drawn twice.
+(ert-deftest roost-the-sidebar-rules-its-headings ()
+  ;; A hairline under each project's heading and under "Start a task in",
+  ;; as the dashboard has under its headings, and under no task's row; none
+  ;; where `roost-decorate' is off.
+  (roost-test--isolated
+   (let ((ruled (lambda (decorated)
+                  (let (headings rows)
+                    (roost-sweep--world
+                      (save-window-excursion
+                        (cl-letf (((symbol-function 'roost--decorated-p) (lambda () decorated))
+                                  ((symbol-function 'roost--mix)
+                                   (lambda (&rest _) (and decorated "#123456"))))
+                          (let ((roost-decorate decorated)
+                                (buffer (roost-sweep--draw 'sidebar "running" 30)))
+                            (goto-char (point-min))
+                            (while (not (eobp))
+                              (let ((rule (and (string-search ":underline"
+                                                              (format "%S" (get-text-property (point) 'face)))
+                                               t)))
+                                (cond ((looking-at "[^ \n].* · \\|Start a task in") (push rule headings))
+                                      ((get-text-property (point) 'roost-task) (push rule rows))))
+                              (forward-line 1))
+                            (kill-buffer buffer)))))
+                    (list headings rows)))))
+     (pcase-let ((`(,headings ,rows) (funcall ruled t)))
+       (should (> (length headings) 2))
+       (should (seq-every-p #'identity headings))
+       (should rows)
+       (should-not (seq-some #'identity rows)))
+     (should-not (seq-some #'identity (car (funcall ruled nil)))))))
+
 (ert-deftest roost-sweep-rows-for-a-new-task-keep-to-their-keys ()
   ;; They have keys of their own, over the task keys of the sidebar's.
   (roost-test--isolated
