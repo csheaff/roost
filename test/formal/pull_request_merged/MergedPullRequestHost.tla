@@ -1,0 +1,3 @@
+---- MODULE MergedPullRequestHost ----
+EXTENDS MergedPullRequest
+====

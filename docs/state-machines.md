@@ -2659,7 +2659,8 @@ comment's time, the forge's, with `updatedAt`, the host's.
 ### A pull request Roost merges
 
 Kind: recorded, then derived. Lives in: the record's `prMerge`, written by
-`make_task`, and `prMergeAsked`, written by `begin_merge` and `end_merge`; in Emacs,
+`make_task`, and `prMergeAsked` and `prMergeHeads`, written by `begin_merge` and
+`end_merge`; in Emacs,
 `roost--merge-due-p`, `roost--merges-turn-p`, `roost--merging`, `roost--asked-here`
 and `roost--unmerged`.
 A task made while `roost-merge-pull-requests` names a way to merge, for its project,
@@ -2693,7 +2694,9 @@ Invariants:
 - I3. Only the commit Emacs judged: `gh pr merge` goes with `--match-head-commit`
   and the head GitHub was asked about. A push since is not merged with it.
 - I4. Once for each head: `prMergeAsked` is written before GitHub is asked and kept
-  whatever comes of it. Asked again, as by another Emacs or after no reply, the
+  whatever comes of it, and `prMergeHeads` remembers every head asked for, not only
+  the last: one asked for again after the next, as by an Emacs that has yet to hear
+  of a push, is not asked for twice, and waits on you. Asked again, as by another Emacs or after no reply, the
   helper says `alreadyAsked` and asks nothing. A helper killed between the record
   and the call leaves a pull request that was never asked for, which waits on you
   after two minutes, and never one asked for twice.
@@ -2716,7 +2719,8 @@ Invariants:
 | Asking | GitHub merges it | | Merged | `prMergeAsked.merged`; "Merged NAME's #N" | `end_merge`, `roost--merge-itself` |
 | Asking | GitHub refuses | | Yours again | `prMergeAsked.error`, said once; `to merge` shows | `end_merge`, `roost--merge-itself` |
 | Asking | The host refuses, or no reply | | Yours again | `roost--unmerged`; said once | `roost--merge-itself` |
-| Asking | Asked again | same number and head | Asking | `alreadyAsked`; GitHub not asked | `begin_merge` |
+| Asking | Asked again | a number and head in `prMergeHeads` | Asking | `alreadyAsked`; GitHub not asked | `begin_merge` |
+| Asking | Reply `alreadyAsked`, with nothing of this head in `prMergeAsked` | | Yours again | `roost--unmerged`; nothing said | `roost--merge-itself` |
 | Merged | The forge is asked again | | (merged, as "A task's pull request" has it) | The word `merged` | `check_pull_requests` |
 | Merged, Asking | Two minutes, the pull request still open | | Yours again | `to merge` shows; news | `roost--merges-turn-p` |
 | Yours again | The agent pushes, and it reads `to merge` again | another head | Due | | `roost--merge-due-p` |
@@ -2724,14 +2728,10 @@ Invariants:
 No Emacs running, nothing is merged: only Emacs asks the forge. Roost can't stop an
 agent that merges its own pull request, as a project's instructions may tell it to.
 
-No model yet: `test_a_pull_request_roost_merges_is_asked_for_once_for_each_head`
-holds I1 to I4, I6 and I7 on the helper, `MergePr` in `test/crash_scenarios.py` holds
-I4 with the helper killed at each step, and `roost-merges-a-pull-request-that-is-ready-once`,
-`roost-a-merge-github-refuses-waits-on-you` and `roost-merges-only-what-reads-to-merge`
-hold I2, I5 and I8 in Emacs. Open questions for a model: a reply to `merge-pr` that
-comes after a poll that already says `merged`; two Emacs asking at once; and an
-older list reply that takes `prMergeAsked` out of what Emacs holds, after which it
-asks again and the helper answers `alreadyAsked`.
+Model: `test/formal/pull_request_merged`, by `.claude/skills/verify-pull-request-merged`.
+It holds I1 to I5 and I8, and that "Merged" is said once. I6 and I7 are
+`test_a_pull_request_roost_merges_is_asked_for_once_for_each_head`, and `MergePr` in
+`test/crash_scenarios.py` kills the helper at each line.
 
 Assumed: GitHub's branch rules require the checks and reviews you rely on. Roost
 judges by what GitHub last said, up to a poll old.

@@ -5513,6 +5513,9 @@ MERGE_METHODS = ("squash", "merge", "rebase")
 # Well inside Emacs's wait for the reply.
 MERGE_SECONDS = 30
 MERGE_ERROR_LIMIT = 300
+# How many merges asked for a record remembers, the newest: one for each
+# head of the task's pull request that came to read "to merge".
+MERGES_REMEMBERED = 100
 
 
 def merge_asked(task):
@@ -5524,9 +5527,17 @@ def merge_asked(task):
                      and commit_id(asked.get("head"))) else None
 
 
+def merges_asked(task):
+    """Every merge Roost asked the forge for of TASK's pull requests, as
+    "NUMBER HEAD", oldest first: `prMergeAsked` has only the last."""
+    asked = task.get("prMergeHeads")
+    return [entry for entry in asked if isinstance(entry, str)] if isinstance(asked, list) else []
+
+
 def begin_merge(store, task, number, head):
     """Record that Roost asks the forge to merge TASK's pull request NUMBER
-    at HEAD, and return its URL; None when it asked for that before. Only
+    at HEAD, and return its URL; None when it asked for that before, the
+    last time or any time (`merges_asked`). Only
     for a task made to have Roost merge its pull request (`prMerge`), the
     open pull request its record has, on GitHub, and once for each head:
     one the forge refused waits on you until its agent pushes again.
@@ -5545,13 +5556,17 @@ def begin_merge(store, task, number, head):
     if pr.get("state") in ("CLOSED", "MERGED"):
         raise RoostError("The pull request is %s" % pr["state"].lower())
     url = pr.get("url")
-    if pr.get("forge") == "gitlab" or not (
-            isinstance(url, str) and re.fullmatch(r"https://[^/\s]+/[^/\s]+/[^/\s]+/pull/%d" % number, url)):
+    match = re.fullmatch(r"https://[^/\s]+/[^/\s]+/[^/\s]+/pull/(\d+)", url) if isinstance(url, str) else None
+    if pr.get("forge") == "gitlab" or not (match and match.group(1) == str(number)):
         raise RoostError("Roost merges pull requests on GitHub only")
-    asked = merge_asked(task)
-    if asked and (asked["number"], asked["head"]) == (number, head):
+    asked, entry = merge_asked(task), "%d %s" % (number, head)
+    # Not only the last: asked for a head, then the next, then the first
+    # again, as by an Emacs that has yet to hear of the push, it would be
+    # asked for twice.
+    if entry in merges_asked(task) or asked and (asked["number"], asked["head"]) == (number, head):
         return None
     task["prMergeAsked"] = dict(number=number, head=head, at=now())
+    task["prMergeHeads"] = (merges_asked(task) + [entry])[-MERGES_REMEMBERED:]
     store.save(task)
     return url
 
@@ -10812,7 +10827,7 @@ def require_not_removing(store, task, action):
 
 # Kept in task records for the helper's own use, and not sent to Emacs.
 PRIVATE = ("lastReply", "transcript", "requestFrom", "requestCall", "requestQuestion", "activityFrom", "hookAt",
-           "panePid", "endedRun", "integrating")
+           "panePid", "endedRun", "integrating", "prMergeHeads")
 
 
 def outgoing(result):

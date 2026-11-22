@@ -11692,11 +11692,24 @@ Its pull request is into main, which the task merges into."
            (roost--cache-task "dev" (cons asked (append (roost-test--merging-task '(head . "b2"))
                                                         nil)))
            (should (= (length (roost-test--merges requests)) 1)))
-         ;; A host that refuses, or never answers, leaves it yours too.
+         ;; Asked for before the last, as its host remembers, with nothing of
+         ;; it left to read: yours, in silence, and not asked for again.
          (roost--apply-snapshot "dev" nil)
          (setq requests nil said nil)
          (roost--cache-task "dev" (roost-test--merging-task))
-         (funcall (nth 3 (car requests)) "No reply")
+         (let ((other `(prMergeAsked (number . 12) (head . "b2") (at . ,(roost-test--ago 5)) (merged . t))))
+           (funcall (nth 2 (seq-find (lambda (request) (equal (car request) "merge-pr")) requests))
+                    (append `((alreadyAsked . t) ,other) (roost-test--merging-task)))
+           (should-not said)
+           (let ((task (roost--cache-task "dev" (cons other (roost-test--merging-task)))))
+             (should (equal (roost--turn task) "to merge"))
+             (should (= (length (roost-test--merges requests)) 1))))
+         ;; A host that refuses, or never answers, leaves it yours too.
+         (roost--apply-snapshot "dev" nil)
+         (clrhash roost--unmerged)
+         (setq requests nil said nil)
+         (roost--cache-task "dev" (roost-test--merging-task))
+         (funcall (nth 3 (seq-find (lambda (request) (equal (car request) "merge-pr")) requests)) "No reply")
          (should (equal said '("Roost could not merge fix auth's #12: No reply")))
          (let ((task (roost--cache-task "dev" (roost-test--merging-task))))
            (should (equal (roost--turn task) "to merge"))

@@ -9030,8 +9030,15 @@ for more: it is asked for once you have left."
                       (lambda (updated)
                         (funcall done)
                         (let ((asked (alist-get 'prMergeAsked updated)))
-                          ;; Asked for before, as by another Emacs, it was said then.
-                          (cond ((alist-get 'alreadyAsked updated))
+                          ;; Asked for before, as by another Emacs, it was said
+                          ;; then.  With nothing of it left in the record, as
+                          ;; for a head asked for before the last, it waits on
+                          ;; you, and is not asked for at every poll.
+                          (cond ((alist-get 'alreadyAsked updated)
+                                 (unless (and (equal (alist-get 'number asked) (car occurrence))
+                                              (equal (alist-get 'head asked) (cdr occurrence)))
+                                   (puthash key occurrence roost--unmerged)
+                                   (roost--redraw)))
                                 ((alist-get 'error asked)
                                  (message "Roost could not merge %s's %s: %s" name number
                                           (alist-get 'error asked)))

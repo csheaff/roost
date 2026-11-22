@@ -1135,6 +1135,15 @@ class Lifecycle(unittest.TestCase):
                                        timeout=roost.MERGE_SECONDS)
             self.assertEqual((pushed["result"]["prMergeAsked"]["head"], pushed["result"]["prMergeAsked"]["merged"]),
                              ("b" * 40, True))
+            # Nor for the first again, as by an Emacs that has yet to hear of
+            # the push: the record keeps the last, and remembers them all.
+            record_pull_request(other)
+            back = merge(other)
+            self.assertIs(back["result"]["alreadyAsked"], True)
+            self.assertEqual(back["result"]["prMergeAsked"]["head"], "b" * 40)
+            self.assertEqual(gh.call_count, 1)
+            self.assertNotIn("prMergeHeads", back["result"])
+            self.assertEqual(store.read(other["id"])["prMergeHeads"], ["12 " + head, "12 " + "b" * 40])
         # A helper killed before GitHub answered leaves it asked for, with no
         # word of what came of it: never asked twice.
         killed = self.create(name="killed", mergePr="merge")
