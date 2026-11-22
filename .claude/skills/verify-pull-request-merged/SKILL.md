@@ -136,7 +136,9 @@ its branch rules hold whatever else you rely on. Emacs judges by what a
 list last said, which a reviewer may have changed since: the model lets it
 ask for a head that was green and is no longer.
 
-Not modelled: `B` changing the branch the task merges into between what
+Not modelled: `MERGES_MOST`, a hundred heads after which `begin_merge`
+refuses, which the model's few pushes never reach (a test holds it); `B`
+changing the branch the task merges into between what
 Emacs judged and the request, which `begin_merge` refuses by the `base`
 Emacs sends (a test holds it); the two clocks of the two minutes, which Emacs reads by its
 own where it asked; `roost--prompting-p`'s 30 seconds, which the model

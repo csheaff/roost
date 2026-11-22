@@ -5513,9 +5513,10 @@ MERGE_METHODS = ("squash", "merge", "rebase")
 # Well inside Emacs's wait for the reply.
 MERGE_SECONDS = 30
 MERGE_ERROR_LIMIT = 300
-# How many merges asked for a record remembers, the newest: one for each
-# head of the task's pull request that came to read "to merge".
-MERGES_REMEMBERED = 100
+# How many merges Roost asks for of one task's pull requests, one for each
+# head that came to read "to merge": after that the merge is yours, as
+# forgetting the oldest would let it be asked for twice.
+MERGES_MOST = 100
 
 
 def merge_asked(task):
@@ -5569,8 +5570,11 @@ def begin_merge(store, task, number, head, base):
     # asked for twice.
     if entry in merges_asked(task) or asked and (asked["number"], asked["head"]) == (number, head):
         return None
+    if len(merges_asked(task)) >= MERGES_MOST:
+        raise RoostError("Roost has asked to merge this task's pull request %d times; the merge is left to you"
+                         % MERGES_MOST)
     task["prMergeAsked"] = dict(number=number, head=head, at=now())
-    task["prMergeHeads"] = (merges_asked(task) + [entry])[-MERGES_REMEMBERED:]
+    task["prMergeHeads"] = merges_asked(task) + [entry]
     store.save(task)
     return url
 

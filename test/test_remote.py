@@ -1149,6 +1149,15 @@ class Lifecycle(unittest.TestCase):
             self.assertEqual(gh.call_count, 1)
             self.assertNotIn("prMergeHeads", back["result"])
             self.assertEqual(store.read(other["id"])["prMergeHeads"], ["12 " + head, "12 " + "b" * 40])
+        # A hundred heads on, the merge is yours: none asked for is forgotten.
+        record = store.read(other["id"])
+        record["prMergeHeads"] = ["12 %040x" % count for count in range(roost.MERGES_MOST)]
+        store.save(record)
+        with patch.object(roost, "gh") as gh:
+            record_pull_request(other, head="c" * 40)
+            self.assertEqual(merge(other, head="c" * 40)["error"],
+                             "Roost has asked to merge this task's pull request 100 times; the merge is left to you")
+            gh.assert_not_called()
         # A helper killed before GitHub answered leaves it asked for, with no
         # word of what came of it: never asked twice.
         killed = self.create(name="killed", mergePr="merge")

@@ -2697,7 +2697,8 @@ Invariants:
 - I4. Once for each head: `prMergeAsked` is written before GitHub is asked and kept
   whatever comes of it, and `prMergeHeads` remembers every head asked for, not only
   the last: one asked for again after the next, as by an Emacs that has yet to hear
-  of a push, is not asked for twice, and waits on you. Asked again, as by another Emacs or after no reply, the
+  of a push, is not asked for twice, and waits on you. After a hundred heads
+  (`MERGES_MOST`) the helper asks for no more, rather than forget the oldest. Asked again, as by another Emacs or after no reply, the
   helper says `alreadyAsked` and asks nothing. A helper killed between the record
   and the call leaves a pull request that was never asked for, which waits on you
   after two minutes, and never one asked for twice.
