@@ -557,10 +557,12 @@ agent, or takes it back; tasks you start after changing this follow it."
   "Who merges a new task's pull request: you, or Roost once it is ready.
 Nil leaves the merge to you: the task reads \"to merge\" and waits.
 `squash', `merge' or `rebase' has Roost merge it that way instead, at
-the moment it would read \"to merge\": every check passed, no review
-still asked for, none asking for changes, no review thread open, and
-GitHub finding no conflict and no branch rule in the way.  One `gh pr
-merge' for the commit GitHub was asked about, once: a merge GitHub
+the moment it would read \"to merge\": every check passed, and there
+is one at least, no review still asked for, none asking for changes, no
+review thread open, and GitHub finding no conflict and no branch rule
+in the way.  Only into the branch the task merges into, and not while
+you are at the task's terminal or writing its agent a prompt.  One `gh
+pr merge' for the commit GitHub was asked about, once: a merge GitHub
 refuses waits on you.  On GitHub only, whatever the agent, while Emacs
 runs.  Roost goes by what GitHub says, so have the branch's rules there
 require the checks you rely on.
@@ -795,6 +797,10 @@ As `roost--tell-occurrence' has it: something else is tried again.")
 (defvar roost--merging (make-hash-table :test 'equal)
   "For each task key, the merge Roost asked its host for, until it replies.
 As `roost--merge-occurrence' has it.")
+
+(defvar roost--asked-here (make-hash-table :test 'equal)
+  "For each task key, the merge this Emacs asked its host for, and when.
+A cons of `roost--merge-occurrence' and `float-time'.")
 
 (defvar roost--unmerged (make-hash-table :test 'equal)
   "For each task key, the merge its host refused or never answered for.
@@ -1634,6 +1640,7 @@ A reply to create read before then can come after.")
              (remhash key roost--sent-at)
              (remhash key roost--untold)
              (remhash key roost--merging)
+             (remhash key roost--asked-here)
              (remhash key roost--unmerged))
             ((or (roost--judged-p task) (not (eq had 'unknown))) (puthash key turn roost--pr-verdicts)))
       ;; One held about it that is so no longer goes no more, though the
@@ -5515,6 +5522,8 @@ terminal the action ended closes."
              (let ((pushed (assq 'pushed updated))
                    (note (assq 'note updated))
                    (stale (assq 'stale updated))
+                   ;; And that a merge of its pull request was asked for before.
+                   (asked (assq 'alreadyAsked updated))
                    (already (alist-get 'alreadySent updated))
                    (torn (alist-get 'teardownFailure updated))
                    (output (alist-get 'teardownOutput updated))
@@ -5526,7 +5535,7 @@ terminal the action ended closes."
                (when-let* ((said (cdr (assoc action roost--action-messages))))
                  (message (if already "Already sent to %s" said) (roost--field task 'name)))
                (when callback
-                 (funcall callback (append (delq nil (list pushed note stale)) updated)))
+                 (funcall callback (append (delq nil (list pushed note stale asked)) updated)))
                (when left
                  (message "%s" (string-join (delq nil (list (current-message)
                                                             (concat "left in place: " (string-join left ", "))))
@@ -8955,8 +8964,9 @@ asked, and `merged' or the `error' GitHub gave once it answered."
   "Whether Roost is to ask GitHub to merge TASK's pull request now.
 That is for a task made to have Roost merge it, whose own pull request,
 on GitHub and no draft, reads \"to merge\" as `roost--pr-verdict' has
-it.  Once for each head: not one its host has asked for, nor one it
-refused or never answered for."
+it, with a check that passed, into the branch the task merges into.
+Once for each head: not one its host has asked for, nor one it refused
+or never answered for."
   (and (member (roost--field task 'prMerge) roost--merge-methods)
        ;; The task's own, which its record has: not the one from another
        ;; branch its worktree is on.
@@ -8964,6 +8974,14 @@ refused or never answered for."
        (eq (roost--pr-state task) 'open)
        (not (equal (alist-get 'forge (roost--field task 'pr)) "gitlab"))
        (equal (roost--pr-verdict task) "to merge")
+       ;; None at all also reads so: GitHub may not have heard of them
+       ;; yet, as just after a push.
+       (let ((passing (alist-get 'passing (alist-get 'checks (roost--field task 'prStatus)))))
+         (and (numberp passing) (> passing 0)))
+       ;; Not into another branch, as its agent may have opened it against.
+       (let ((base (alist-get 'base (roost--field task 'prStatus)))
+             (branch (roost--field task 'integrationBranch)))
+         (and base (equal base branch)))
        (roost--merge-occurrence task)
        (not (roost--merge-asked task))
        (not (equal (gethash (roost--key task) roost--unmerged) (roost--merge-occurrence task)))
@@ -8979,36 +8997,51 @@ then GitHub, asked again, says it merged."
                   ((not (alist-get 'error asked)))
                   ((not (equal (gethash (roost--key task) roost--unmerged)
                                (roost--merge-occurrence task))))
-                  (seconds (roost--seconds-since (alist-get 'at asked))))
+                  ;; By this machine's clock where it asked: a host's may
+                  ;; differ from it by minutes.
+                  (seconds (if-let* ((here (gethash (roost--key task) roost--asked-here))
+                                     ((equal (car here) (roost--merge-occurrence task))))
+                               (- (float-time) (cdr here))
+                             (roost--seconds-since (alist-get 'at asked)))))
         (< seconds roost--pr-grace))))
 
 (defun roost--merge-itself (task)
   "Ask TASK's host to merge its pull request, if Roost is to.
 As `roost--merge-due-p' has it.  Its host asks GitHub once, for the
 head Emacs judged by, the way the task was made to merge.  What GitHub
-or the host refuses waits on you, and Roost says why."
+or the host refuses waits on you, and Roost says why.  Not while you
+are at the task's terminal or writing its agent a prompt, which may ask
+for more: it is asked for once you have left."
   (when-let* (((roost--merge-due-p task))
               (key (roost--key task))
               (occurrence (roost--merge-occurrence task))
-              ((not (gethash key roost--merging))))
+              ((not (gethash key roost--merging)))
+              ((not (when-let* ((watched (roost--watched-task)))
+                      (equal (roost--key watched) key))))
+              ((not (roost--prompting-p task))))
     (let ((name (roost--field task 'name))
           (number (roost--pr-name task))
           (done (lambda () (remhash key roost--merging))))
       (puthash key occurrence roost--merging)
+      (puthash key (cons occurrence (float-time)) roost--asked-here)
       (condition-case nil
           (roost--act task "merge-pr"
                       `((number . ,(car occurrence)) (head . ,(cdr occurrence)))
                       (lambda (updated)
                         (funcall done)
                         (let ((asked (alist-get 'prMergeAsked updated)))
-                          (cond ((alist-get 'error asked)
+                          ;; Asked for before, as by another Emacs, it was said then.
+                          (cond ((alist-get 'alreadyAsked updated))
+                                ((alist-get 'error asked)
                                  (message "Roost could not merge %s's %s: %s" name number
                                           (alist-get 'error asked)))
                                 ((eq (alist-get 'merged asked) t)
                                  (message "Merged %s's %s" name number)))))
                       (lambda (err)
                         (funcall done)
-                        (puthash key occurrence roost--unmerged)
+                        ;; Nothing waits of a task that went meanwhile.
+                        (when (gethash key roost--tasks)
+                          (puthash key occurrence roost--unmerged))
                         (message "Roost could not merge %s's %s: %s" name number err)
                         (roost--redraw)))
         (error (funcall done))

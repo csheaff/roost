@@ -5510,7 +5510,8 @@ def tell(store, task, verdict, key, number, count=None, gitlab=False, as_of=None
 
 # How Roost merges a pull request it is to merge, as `gh pr merge` names them.
 MERGE_METHODS = ("squash", "merge", "rebase")
-MERGE_SECONDS = 45
+# Well inside Emacs's wait for the reply.
+MERGE_SECONDS = 30
 MERGE_ERROR_LIMIT = 300
 
 

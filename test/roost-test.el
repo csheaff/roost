@@ -105,6 +105,7 @@ ghostel-tmux, the default, choose it themselves."
          (roost--telling (make-hash-table :test 'equal))
          (roost--untold (make-hash-table :test 'equal))
          (roost--merging (make-hash-table :test 'equal))
+         (roost--asked-here (make-hash-table :test 'equal))
          (roost--unmerged (make-hash-table :test 'equal))
          (roost--told-here (make-hash-table :test 'equal))
          (roost--sent-at (make-hash-table :test 'equal))
@@ -11615,8 +11616,10 @@ field (FIELD . :none) is left out."
   (mapcar #'cadr (seq-filter (lambda (request) (equal (car request) "merge-pr")) requests)))
 
 (defun roost-test--merging-task (&rest status)
-  "A task as `roost-test--turn-task' makes it, made for Roost to squash-merge."
-  (cons '(prMerge . "squash") (apply #'roost-test--turn-task status)))
+  "A task as `roost-test--turn-task' makes it, made for Roost to squash-merge.
+Its pull request is into main, which the task merges into."
+  (append '((prMerge . "squash") (integrationBranch . "main"))
+          (apply #'roost-test--turn-task (append status '((base . "main"))))))
 
 (ert-deftest roost-merges-a-pull-request-that-is-ready-once ()
   (roost-test--isolated
@@ -11648,6 +11651,19 @@ field (FIELD . :none) is left out."
            (should (equal said '("Merged fix auth's #12")))
            (should (= (length (roost-test--merges requests)) 1))
            (should-not (roost--turn (gethash '("dev" "0123456789abcdef") roost--tasks))))
+         ;; Asked for before, as by another Emacs: nothing more is said.
+         (funcall (nth 2 (car requests))
+                  (append `((alreadyAsked . t)
+                            (prMergeAsked (number . 12) (head . "a1") (at . ,(roost-test--ago 5)) (merged . t)))
+                          (roost-test--merging-task)))
+         (should (= (length said) 1))
+         ;; By this machine's clock, whatever its host's says.
+         (let ((task (roost--cache-task
+                      "dev" (cons `(prMergeAsked (number . 12) (head . "a1") (at . ,(roost-test--ago 900))
+                                                 (merged . t))
+                                  (roost-test--merging-task)))))
+           (should-not (roost--turn task)))
+         (clrhash roost--asked-here)
          ;; A merge that never showed, two minutes on, waits on you.
          (let ((task (roost--cache-task
                       "dev" (cons `(prMergeAsked (number . 12) (head . "a1") (at . ,(roost-test--ago 600)))
@@ -11699,7 +11715,12 @@ field (FIELD . :none) is left out."
                          ((review . "CHANGES_REQUESTED"))
                          ((mergeable . "CONFLICTING"))
                          ((mergeState . "BLOCKED"))
-                         ((draft . t))))
+                         ((draft . t))
+                         ;; No check at all, which GitHub may yet hear of.
+                         ((checks . ((passing . 0) (failing . 0) (pending . 0))))
+                         ;; Into another branch than the task merges into.
+                         ((base . "release"))
+                         ((base . :none))))
          (roost--cache-task "dev" (apply #'roost-test--merging-task status))
          (should-not (roost-test--merges requests))
          (roost--apply-snapshot "dev" nil))
@@ -11709,7 +11730,24 @@ field (FIELD . :none) is left out."
                          ((prMerge . "fast-forward"))))
          (roost--cache-task "dev" (append fields (roost-test--merging-task)))
          (should-not (roost-test--merges requests))
-         (roost--apply-snapshot "dev" nil))))))
+         (roost--apply-snapshot "dev" nil))
+       ;; Nor while you are at its terminal, or writing its agent a prompt,
+       ;; which may ask for more.  Roost's all the while, and asked for
+       ;; once you have left.
+       (let (watching)
+         (cl-letf (((symbol-function 'roost--watched-task)
+                    (lambda () (and watching (gethash '("dev" "0123456789abcdef") roost--tasks)))))
+           (setq watching t)
+           (let ((task (roost--cache-task "dev" (roost-test--merging-task))))
+             (should-not (roost-test--merges requests))
+             (should-not (roost--turn task)))
+           (setq watching nil)
+           (puthash '("dev" "0123456789abcdef") (float-time) roost--sent-at)
+           (roost--cache-task "dev" (roost-test--merging-task))
+           (should-not (roost-test--merges requests))
+           (clrhash roost--sent-at)
+           (roost--cache-task "dev" (roost-test--merging-task))
+           (should (= (length (roost-test--merges requests)) 1))))))))
 
 (ert-deftest roost-a-new-task-merges-as-its-project-says ()
   (roost-test--isolated

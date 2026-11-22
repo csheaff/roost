@@ -1089,7 +1089,8 @@ dashboard the command starts from."
      ;; Roost merges its pull request, which passed everything.
      :fields ((prMerge . "squash") (live . t) (unpushed . 0) (dirty) (conflicts)
               (pr (number . 12) (url . "https://github.com/o/r/pull/12") (state . "OPEN") (head . "a1"))
-              (prStatus (state . "OPEN") (head . "a1") (checks (passing . 2) (failing . 0) (pending . 0))
+              (prStatus (state . "OPEN") (head . "a1") (base . "main")
+                        (checks (passing . 2) (failing . 0) (pending . 0))
                         (mergeable . "MERGEABLE") (requested) (threads . 0)
                         (checkedAt . "2099-01-01T00:00:00+00:00")))
      :start ,(lambda () (roost--merge-itself (roost-sweep-late--mine)))

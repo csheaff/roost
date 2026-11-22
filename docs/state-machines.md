@@ -2660,7 +2660,8 @@ comment's time, the forge's, with `updatedAt`, the host's.
 
 Kind: recorded, then derived. Lives in: the record's `prMerge`, written by
 `make_task`, and `prMergeAsked`, written by `begin_merge` and `end_merge`; in Emacs,
-`roost--merge-due-p`, `roost--merges-turn-p`, `roost--merging` and `roost--unmerged`.
+`roost--merge-due-p`, `roost--merges-turn-p`, `roost--merging`, `roost--asked-here`
+and `roost--unmerged`.
 A task made while `roost-merge-pull-requests` names a way to merge, for its project,
 has Roost merge its pull request: at the moment it would read `to merge`, Emacs asks
 the helper (`merge-pr`), which asks GitHub with one `gh pr merge`. A task made
@@ -2672,7 +2673,7 @@ otherwise is never merged this way.
 | Roost's, waiting | Not ready: nothing to merge yet | `prMerge`, `roost--pr-verdict` not `to merge` |
 | Due | Reads `to merge`, and not asked for at this head | `roost--merge-due-p` |
 | Asking | Asked of the host, no reply yet | `roost--merging` has the task; the record has `prMergeAsked` for this head with neither `merged` nor `error` |
-| Merged | GitHub took it; the forge has yet to be asked again | `prMergeAsked.merged`, under `roost--pr-grace` old |
+| Merged | GitHub took it; the forge has yet to be asked again | `prMergeAsked.merged`, under `roost--pr-grace` old, by this Emacs's clock where it asked (`roost--asked-here`) |
 | Yours again | GitHub refused, the host refused or never answered, or two minutes passed with the pull request still open | `prMergeAsked.error`, `roost--unmerged`, or `prMergeAsked` older than `roost--pr-grace` |
 
 Invariants:
@@ -2681,8 +2682,14 @@ Invariants:
   only `make_task` writes, from the project's setting when the task was made. No
   request turns it on later, and a conversation never has it.
 - I2. Only what reads `to merge`: Emacs asks only on `roost--pr-verdict`'s word, for
-  the task's own pull request, open and no draft, on GitHub. The helper takes the
-  number its record has and no other, and refuses one closed or merged.
+  the task's own pull request, open and no draft, on GitHub, with a check that
+  passed (none at all reads the same as none yet), into the branch the task merges
+  into. The helper takes the number its record has and no other, and refuses one
+  closed or merged.
+- I8. Not under your hands: Emacs holds off while you are at the task's terminal,
+  while a draft to the task is open, and for 30 s after you send it a prompt
+  (`roost--prompting-p`), as you may be asking for more. It stays Roost's, and is
+  asked for at the next poll after you leave.
 - I3. Only the commit Emacs judged: `gh pr merge` goes with `--match-head-commit`
   and the head GitHub was asked about. A push since is not merged with it.
 - I4. Once for each head: `prMergeAsked` is written before GitHub is asked and kept
@@ -2704,7 +2711,7 @@ Invariants:
 | --- | --- | --- | --- | --- | --- |
 | None | Task created with `mergePr` | one of `MERGE_METHODS`, not a conversation | Roost's, waiting | `prMerge` set | `make_task` |
 | Roost's, waiting | Checks pass, reviews come back, threads close | verdict `to merge`, as "Verdict and turn" has it; own pull request, open, on GitHub | Due | No word on the row, no notice | `roost--yours`, `roost--merges-turn-p` |
-| Due | Task cached | not asking, not unmerged | Asking | `merge-pr` asked | `roost--merge-itself` |
+| Due | Task cached | not asking, not unmerged, you not at its terminal nor prompting it | Asking | `merge-pr` asked | `roost--merge-itself` |
 | Asking | The helper takes it | `begin_merge`'s guards | Asking | `prMergeAsked` written, then `gh pr merge` without the registry lock | `begin_merge`, `merge_pull_request` |
 | Asking | GitHub merges it | | Merged | `prMergeAsked.merged`; "Merged NAME's #N" | `end_merge`, `roost--merge-itself` |
 | Asking | GitHub refuses | | Yours again | `prMergeAsked.error`, said once; `to merge` shows | `end_merge`, `roost--merge-itself` |
@@ -2721,9 +2728,10 @@ No model yet: `test_a_pull_request_roost_merges_is_asked_for_once_for_each_head`
 holds I1 to I4, I6 and I7 on the helper, `MergePr` in `test/crash_scenarios.py` holds
 I4 with the helper killed at each step, and `roost-merges-a-pull-request-that-is-ready-once`,
 `roost-a-merge-github-refuses-waits-on-you` and `roost-merges-only-what-reads-to-merge`
-hold I2 and I5 in Emacs. Open questions for a model: a reply to `merge-pr` that
-comes after a poll that already says `merged`; two Emacs asking at once; and the
-host's clock against this machine's in the two minutes of I5.
+hold I2, I5 and I8 in Emacs. Open questions for a model: a reply to `merge-pr` that
+comes after a poll that already says `merged`; two Emacs asking at once; and an
+older list reply that takes `prMergeAsked` out of what Emacs holds, after which it
+asks again and the helper answers `alreadyAsked`.
 
 Assumed: GitHub's branch rules require the checks and reviews you rely on. Roost
 judges by what GitHub last said, up to a poll old.

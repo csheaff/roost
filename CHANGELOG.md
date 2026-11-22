@@ -8,7 +8,8 @@ What each release changes, and what to do when upgrading. Newest first.
   Nil, the default, leaves it to you as before. `squash`, `merge` or
   `rebase` has Roost merge it that way, with one `gh pr merge`, at the
   moment it would read `to merge`: every check passed, no review still
-  asked for, no thread open, and nothing on GitHub in the way. It can be
+  asked for, no thread open, and nothing on GitHub in the way. Not while
+  you are at the task's terminal or writing its agent a prompt. It can be
   set per project in `.dir-locals.el`, so a project you take more care
   over keeps the last look. A merge GitHub refuses waits on you. On GitHub
   only. Nothing to do when upgrading.

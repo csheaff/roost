@@ -659,7 +659,9 @@ Set to `squash`, `merge` or `rebase`, Roost merges a new task's pull request
 that way at the moment it would read `to merge`: every check passed, no
 review still asked for (Copilot's included), none asking for changes, no
 review thread open, and GitHub finding no conflict and no branch rule in
-the way. The row then goes from the agent's status to `merged`, and Roost
+the way. It also wants one check at least to have passed, as a pull
+request GitHub has no checks for yet reads the same as one with none, and
+the pull request to be into the branch the task merges into. The row then goes from the agent's status to `merged`, and Roost
 says "Merged fix auth's #12". With `L` as well, you see the task twice: when
 you start it and when it has merged.
 
@@ -679,6 +681,9 @@ set it to nil in the ones you merge yourself.
 - Roost goes by what GitHub says. Have the branch's rules there require
   the checks and reviews you rely on: GitHub then refuses a merge without
   them, whatever Roost saw.
+- Not while you are at the task's terminal, have a draft to its agent
+  open, or have just sent it a prompt: you may be asking for more. Roost
+  merges it once you have left.
 - To hold one pull request back, mark it a draft or leave a review comment
   on it: Roost merges only what reads `to merge`.
 - Tasks started before you set it stay yours to merge. It works with any
