@@ -11472,8 +11472,6 @@ Status is the last observation from the task's host.
   (add-hook 'window-selection-change-functions #'roost--selection-changed nil t)
   (add-hook 'after-change-major-mode-hook #'roost--quiet-display 90 t)
   (add-hook 'window-size-change-functions #'roost--task-info-resized nil t)
-  ;; Docked, its window has a header line for the button that collapses it.
-  (roost--plain-header-line)
   (roost--evil-state 'roost-task-info-mode roost-evil-state)
   (roost--quiet-display))
 
@@ -12932,9 +12930,26 @@ scrolled it away."
              (roost--insert-details task width t))
     (roost--insert-fold "Details" 'details)))
 
+(defvar-keymap roost--panel-collapse-map
+  :doc "A click on the » before a docked panel's name."
+  "<mouse-1>" #'roost-task-panel-collapse)
+
+(defun roost--panel-docked-p ()
+  "Whether a window showing this task panel is docked beside a terminal."
+  (seq-some (lambda (window) (eq (window-parameter window 'window-side) 'right))
+            (get-buffer-window-list nil nil t)))
+
 (defun roost--insert-task-title (task width)
-  "Insert TASK's name, its status and where it runs, in WIDTH columns."
-  (let* ((name (propertize (roost--field task 'name) 'face 'roost-title))
+  "Insert TASK's name, its status and where it runs, in WIDTH columns.
+Docked, a » before the name collapses the panel: at the edge beside the
+terminal, as the sidebar's « is, and on no line of its own."
+  (let* ((name (concat (if (roost--panel-docked-p)
+                           (concat (propertize "»" 'face 'roost-dim 'mouse-face 'highlight
+                                               'help-echo "mouse-1: collapse the task panel"
+                                               'keymap roost--panel-collapse-map)
+                                   " ")
+                         "")
+                       (propertize (roost--field task 'name) 'face 'roost-title)))
          (word (roost--row-word task))
          (state (concat (roost--status-light task (cons 'panel (current-buffer)) t)
                         (propertize (concat " " word)
@@ -15532,16 +15547,7 @@ scrolled stays where you left it."
                (roost--refresh-host (roost--field task 'host) nil)))))
     (roost--keep-side-width 'left (when-let* ((window (get-buffer-window roost--sidebar-buffer)))
                                     (and (window-parameter window 'window-side) window)))
-    (let ((panel (roost--task-panel-window)))
-      (when panel
-        ;; Whole, a button at its top collapses it; the strip has its own.
-        (set-window-parameter
-         panel 'header-line-format
-         (unless (eq (window-buffer panel) (get-buffer roost--panel-strip-buffer))
-           (list (propertize " " 'display '(space :align-to (- right 2)))
-                 (roost--side-button "»" "mouse-1: collapse the task panel"
-                                     #'roost-task-panel-collapse)))))
-      (roost--keep-side-width 'right panel))))
+    (roost--keep-side-width 'right (roost--task-panel-window))))
 
 (defun roost--panel-strip-buffer ()
   "The buffer the task panel's window shows while collapsed, made if need be."
@@ -15774,7 +15780,7 @@ from the start, add `(roost-task-panel-mode 1)' to your configuration."
 
 (defun roost-task-panel-collapse ()
   "Collapse the task panel to a strip at the frame's edge, or expand it again.
-The » at the top of the panel does this, and so does a click on the
+The » before the task's name in the panel does this, and so does a click on the
 strip.  It expands to the width it had: the last you dragged it to, else
 `roost-task-panel-width'.  Collapsed, it says nothing of the task; the
 sidebar and the mode line still say which tasks wait for you."

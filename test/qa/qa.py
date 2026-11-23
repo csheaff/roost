@@ -1041,7 +1041,7 @@ def merge(qa, repo):
     qa.wait("its terminal", lambda s: any(w["mode"].startswith("tmux-control") and w["selected"]
                                           for w in s["windows"]))
     qa.step("n goes to the task that asks", expect=[
-        ("its panel is beside the terminal", lambda s: qa.window(s, "roost-task-info-mode")["text"].startswith(name))])
+        ("its panel is beside the terminal", lambda s: panel_text(qa, s).startswith(name))])
     qa.type("yes\r")
     qa.status(name, "ready", "idle")
     # Listed under Committed: before, it can show between the agent's add and commit.
@@ -1382,7 +1382,9 @@ def panel_text(qa, screen):
     """The docked panel's text, or else that of the first task panel on screen."""
     docked = next((w for w in screen["windows"]
                    if w["mode"] == "roost-task-info-mode" and w.get("side") == "right"), None)
-    return (docked or qa.window(screen, "roost-task-info-mode") or {}).get("text", "")
+    text = (docked or qa.window(screen, "roost-task-info-mode") or {}).get("text", "")
+    # Docked, the button that collapses it comes before the task's name.
+    return text[2:] if text.startswith("» ") else text
 
 
 def terminals(screen, terminal=None):
@@ -1931,7 +1933,7 @@ def panes(qa, repo):
     qa.step("The other task", expect=[
         ("only its own terminal", lambda s: terminals(s)
          and all(w["terminal"] == s["task"]["terminal"] for w in terminals(s))),
-        ("its panel beside it", lambda s: (qa.window(s, "roost-task-info-mode") or {}).get("text", "").startswith(second))])
+        ("its panel beside it", lambda s: panel_text(qa, s).startswith(second))])
     qa.keys("C-c C-s")
     qa.wait("the session prompt", lambda s: s["prompt"])
     # Showing the session chosen, as vertico chooses the first at once.
@@ -2170,7 +2172,7 @@ def collapse_sidebar(qa, repo):
 
 @journey("The task panel, collapsed and expanded")
 def collapse_panel(qa, repo):
-    """The » at the top of the task panel collapses it to a strip, which gives
+    """The » before the task's name in its panel collapses it to a strip, which gives
     the terminal its columns, and a click on the strip's « expands it to the
     width it had."""
     name = start_task(qa, "Give the terminal the room")
@@ -2181,7 +2183,7 @@ def collapse_panel(qa, repo):
     wide = panel(before)["total"]
     columns = terminals(before)[0]["columns"]
     try:
-        qa.click_header("»", "roost-task-info-mode")
+        qa.click_text("»", "roost-task-info-mode")
         qa.step("» collapses the task panel", expect=[
             ("it is a strip", lambda s: s["panel-collapsed"] and panel(s) and panel(s)["total"] < 8),
             ("with a « to expand it", lambda s: panel(s)["header"].strip() == "«"),

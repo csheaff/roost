@@ -369,8 +369,8 @@ it to a strip at the frame's edge, in every task. A click on the strip, or
 `RET` there, expands it to the width it had. Collapsed, it lists no tasks;
 the mode line still counts those waiting for you.
 
-The task panel docked beside a terminal collapses the same way: the `»` at
-its top, or `M-x roost-task-panel-collapse`, leaves a strip at the frame's
+The task panel docked beside a terminal collapses the same way: the `»`
+before the task's name, or `M-x roost-task-panel-collapse`, leaves a strip at the frame's
 right edge and gives the terminal its columns, and a click on the strip, or
 `RET` there, expands it to the width it had.
 

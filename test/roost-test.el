@@ -4391,19 +4391,23 @@ BODY gets the window and the last task's key."
          (unwind-protect
              (cl-flet ((button (window)
                          ;; The command of the button in WINDOW's header line.
-                         (let* ((header (or (window-parameter window 'header-line-format)
-                                            (buffer-local-value 'header-line-format
-                                                                (window-buffer window))))
-                                (part (seq-find (lambda (part) (get-text-property 0 'local-map part))
-                                                header)))
-                           (should part)
-                           (list (substring-no-properties part)
-                                 (keymap-lookup (get-text-property 0 'local-map part)
-                                                "<header-line> <mouse-1>")))))
+                         (with-current-buffer (window-buffer window)
+                           (if-let* ((header header-line-format)
+                                     (part (seq-find (lambda (part) (get-text-property 0 'local-map part))
+                                                     header)))
+                               (list (substring-no-properties part)
+                                     (keymap-lookup (get-text-property 0 'local-map part)
+                                                    "<header-line> <mouse-1>"))
+                             ;; Whole, it is the first thing in the panel,
+                             ;; before the task's name, on no line of its own.
+                             (list (buffer-substring-no-properties 1 2)
+                                   (keymap-lookup (get-text-property 1 'keymap) "<mouse-1>")
+                                   (buffer-substring-no-properties
+                                    3 (+ 3 (length (roost--field task 'name)))))))))
                (roost--sync-side-windows)
                (let ((panel (roost--task-panel-window)))
                  (should (eq (window-buffer panel) (roost--task-info-buffer task)))
-                 (should (equal (button panel) '("»" roost-task-panel-collapse)))
+                 (should (equal (button panel) (list "»" 'roost-task-panel-collapse (roost--field task 'name))))
                  (roost-test--resize-side panel 48)
                  (roost--sync-side-windows)
                  (should (= (roost--side-width 'right) 48))
@@ -4452,7 +4456,7 @@ BODY gets the window and the last task's key."
                  (should (eq (window-buffer panel) (roost--task-info-buffer task)))
                  (should (= (window-total-width panel) 50))
                  (should (= (roost--side-width 'right) 50))
-                 (should (equal (button panel) '("»" roost-task-panel-collapse)))
+                 (should (equal (button panel) (list "»" 'roost-task-panel-collapse (roost--field task 'name))))
                  ;; Turned off and on, it is whole.
                  (roost-task-panel-collapse)
                  (should roost--panel-collapsed)
