@@ -110,11 +110,27 @@ the time its host replies.")
 (defvar-local roost-ghostel-tmux--stands-in-for nil
   "In a buffer standing in for a pane, the controller it waits for.")
 
+(defvar ghostel-tmux--panes)
+(declare-function ghostel-tmux--controller-live-p "ghostel-tmux" ())
+
+(defun roost-ghostel-tmux--attached-p (controller)
+  "Whether CONTROLLER is one of `ghostel-tmux-controllers'.
+Asked of CONTROLLER alone where ghostel-tmux can be: its list looks
+through every buffer, and Roost asks this for each terminal and each
+task's status, which with fifty terminals open took seconds a command.
+NEEDS: `ghostel-tmux--panes' and `ghostel-tmux--controller-live-p', what
+`ghostel-tmux-controllers' tells a controller by; without them, its list."
+  (if (and (boundp 'ghostel-tmux--panes) (fboundp 'ghostel-tmux--controller-live-p))
+      (and (buffer-live-p controller)
+           (with-current-buffer controller
+             (and ghostel-tmux--panes (ghostel-tmux--controller-live-p) t)))
+    (and (memq controller (ghostel-tmux-controllers)) t)))
+
 (defun roost-ghostel-tmux--controller ()
   "The controller of the current buffer's attached session, or nil.
 A pane's, the one a stand-in waits for, or the buffer itself."
   (let ((controller (or (ghostel-tmux-controller) roost-ghostel-tmux--stands-in-for)))
-    (and (memq controller (ghostel-tmux-controllers)) controller)))
+    (and (roost-ghostel-tmux--attached-p controller) controller)))
 
 (defun roost-ghostel-tmux--buffer-place ()
   "The place of the current buffer.

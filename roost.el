@@ -2975,11 +2975,17 @@ a view of a terminal, such as its scrollback, is no terminal."
   (with-current-buffer buffer
     (when (and (roost--tmux-buffer-p)
                (roost--tmux-bound-p "buffer-session") (roost--tmux-buffer-session))
-      (let ((tasks (seq-filter (lambda (task)
-                                 (and (equal (roost--field task 'host) (roost--tmux-buffer-host))
-                                      (equal (roost--field task 'socket) (roost--tmux-buffer-socket-name))
-                                      (equal (roost--field task 'session) (roost--tmux-buffer-session))))
-                               (roost-tasks))))
+      ;; Asked of the terminal once, not once for each task: ghostel-tmux
+      ;; looks through every buffer to answer, and with fifty terminals
+      ;; open and as many tasks that took seconds.
+      (let* ((host (roost--tmux-buffer-host))
+             (socket (roost--tmux-buffer-socket-name))
+             (session (roost--tmux-buffer-session))
+             (tasks (seq-filter (lambda (task)
+                                  (and (equal (roost--field task 'host) host)
+                                       (equal (roost--field task 'socket) socket)
+                                       (equal (roost--field task 'session) session)))
+                                (roost-tasks))))
         (and tasks (null (cdr tasks)) (car tasks))))))
 
 (defun roost--terminal-place (buffer)

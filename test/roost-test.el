@@ -1167,6 +1167,29 @@ terminal's, on a pty.  Skips the test where it can't be made."
             (should-not (roost--terminal-task terminal))))
        (kill-buffer terminal)))))
 
+;; ghostel-tmux looks through every buffer to say where a terminal is, so
+;; with fifty terminals open, asking for each task took seconds a command.
+(ert-deftest roost-a-terminal-is-asked-its-place-once-however-many-tasks ()
+  (roost-test--isolated
+   (let ((terminal (generate-new-buffer " terminal"))
+         (asked 0))
+     (unwind-protect
+         (roost-test--with-tmux-buffers
+          (let ((one (roost--cache-task "dev" (roost-test--task "1111111111111111"))))
+            (dotimes (n 20)
+              (let ((other (roost-test--task (format "%016d" (+ n 2)))))
+                (setf (alist-get 'session other) (format "other-%d" n))
+                (roost--cache-task "dev" other)))
+            (with-current-buffer terminal
+              (setq major-mode 'tmux-control-mode
+                    roost-test--tmux (list :host "dev" :socket "main" :session (roost--field one 'session))))
+            (cl-letf* ((host (symbol-function 'tmux-control-buffer-host))
+                       ((symbol-function 'tmux-control-buffer-host)
+                        (lambda () (cl-incf asked) (funcall host))))
+              (should (eq (roost--terminal-task terminal) one)))
+            (should (= asked 1))))
+       (kill-buffer terminal)))))
+
 (ert-deftest roost-a-frame-whose-task-is-gone-follows-the-terminal-it-shows ()
   ;; Once a task is merged, its window shows another task's terminal; the
   ;; panel follows that task, rather than no task at all.
@@ -12872,6 +12895,31 @@ nil), it is discarded."
                (should (equal (roost-ghostel-tmux-buffer-session) "two")))))
        (kill-buffer controller)
        (kill-buffer pane)))))
+
+;; `ghostel-tmux-controllers' looks through every buffer; Roost asks of one
+;; controller for each terminal and each task's status.
+(defvar ghostel-tmux--panes)
+(ert-deftest roost-ghostel-tmux-asks-one-controller-whether-it-is-attached ()
+  (roost-test--isolated
+   (roost-test--ghostel-backend)
+   (let ((controller (generate-new-buffer " controller"))
+         (live t))
+     (unwind-protect
+         (cl-letf (((symbol-function 'ghostel-tmux-controllers)
+                    (lambda () (error "Looked through every buffer")))
+                   ((symbol-function 'ghostel-tmux--controller-live-p) (lambda () live)))
+           (let ((ghostel-tmux--panes '(pane)))
+             (should (roost-ghostel-tmux--attached-p controller))
+             (setq live nil)
+             (should-not (roost-ghostel-tmux--attached-p controller))
+             (setq live t)
+             (should-not (roost-ghostel-tmux--attached-p nil)))
+           (let ((ghostel-tmux--panes nil))
+             (should-not (roost-ghostel-tmux--attached-p controller)))
+           (kill-buffer controller)
+           (let ((ghostel-tmux--panes '(pane)))
+             (should-not (roost-ghostel-tmux--attached-p controller))))
+       (when (buffer-live-p controller) (kill-buffer controller))))))
 
 (ert-deftest roost-ghostel-tmux-pane-starts-in-its-tasks-worktree ()
   ;; `find-file' from a task's terminal starts in its worktree, as with

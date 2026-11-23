@@ -4,6 +4,12 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Roost stays quick with many task terminals open. With about fifty,
+  each command that asked which task a terminal shows looked through
+  every buffer once for each task, and starting a task took four to ten
+  seconds; it takes two to five now, the rest being Emacs drawing and
+  collecting garbage. Nothing to do when upgrading.
+
 - A `»` before the task's name in the panel docked beside a terminal collapses it
   to a strip at the frame's right edge, and a click on the strip expands it
   to the width it had, as the sidebar's `«` does for the sidebar. `M-x
