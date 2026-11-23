@@ -1135,7 +1135,7 @@ question from another of the same prompt asked after it."
        ;; The main frame's, though a child frame such as a note box is selected.
        ;; Collapsed, the strip's.
        (sidebar-width . ,(if-let* ((roost--sidebar-collapsed)
-                                   (window (get-buffer-window roost--sidebar-buffer)))
+                                   (window (get-buffer-window roost--sidebar-buffer frame)))
                              (roost--strip-width window)
                            roost-sidebar-width))
        (sidebar-collapsed . ,(if roost--sidebar-collapsed t :json-false))

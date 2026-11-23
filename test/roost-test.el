@@ -4268,6 +4268,8 @@ BODY gets the window and the last task's key."
                  (roost--sync-side-windows)
                  (should (= (window-body-width sidebar) 2))
                  (should (= (roost--side-width 'left) 36))
+                 ;; Nor does a drag that expanding it is the first to see.
+                 (roost-test--resize-side sidebar 12)
                  ;; A click anywhere on the strip, or RET there, expands it.
                  (with-current-buffer roost--sidebar-buffer
                    (should (eq (keymap-lookup (current-local-map) "<mouse-1>") 'roost-sidebar-collapse))

@@ -13332,7 +13332,8 @@ finish with it.  The others act on the task it sits under."
 
 (defconst roost--clicked-commands
   '(roost-dashboard-mouse-open roost-dashboard-mouse-menu roost-compose-open-task
-    roost-sidebar-new-task roost-sidebar-project-menu roost-compose-submit roost-compose-cancel
+    roost-sidebar-new-task roost-sidebar-project-menu roost-sidebar-collapse
+    roost-compose-submit roost-compose-cancel
     roost-compose-dismiss-offer roost-open-offer roost-offer-mouse-menu
     roost-click-key roost-send-submit roost-send-cancel roost-send-attach
     roost-pr-submit roost-pr-submit-draft roost-pr-cancel)
@@ -15522,7 +15523,11 @@ to, and the width every task shares waits for it to expand."
              (wanted (if strip (roost--strip-width window) (roost--side-width side)))
              ;; Narrower than Emacs lets a window you resize get.
              (ignore (if strip window 'preserved)))
-        (cond ((and changed (not strip) (= (frame-width) (nth 1 before)))
+        (cond ((and changed (not strip)
+                    ;; A drag of the strip, expanded before it was seen,
+                    ;; is no width for the sidebar.
+                    (not (eq (nth 3 before) 'strip))
+                    (= (frame-width) (nth 1 before)))
                (setf (alist-get side roost--side-widths) width)
                ;; Frames synced before this one have the old width.
                (when (cdr (frame-list))
