@@ -646,7 +646,10 @@ class Run:
                     problems.append("%s, another task's terminal, is beside %s's" % (window["buffer"], own["name"]))
             if window["mode"] == "roost-sidebar-list-mode" and window["total"] != screen["sidebar-width"]:
                 problems.append("The sidebar is %d columns wide, not %d" % (window["total"], screen["sidebar-width"]))
-            if window.get("short"):
+            # Not while a question is open: ghostel-tmux leaves a terminal's
+            # rows as they are until the minibuffer closes, so one that Magit
+            # or a menu resized just before is a row off for as long.
+            if window.get("short") and not screen.get("prompt"):
                 # A pane on its way to its window's size, as takes a moment
                 # over a slow connection: it has to get there.
                 short, deadline = window["short"], time.monotonic() + 8
