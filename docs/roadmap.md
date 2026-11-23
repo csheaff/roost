@@ -351,8 +351,23 @@ Larger, or undecided.
   session. The host's daemons shut down cleanly, with no crash, so the
   crash reports are the Mac's alone.
 
-  Not tried: resizing. Look again once a release leaves no crash
-  reports on macOS.
+  Resizing, tried the same day on the Mac and on the Linux host, with
+  the same results on both. Narrowing a window from 79 to 34 columns
+  and widening it back reached the program each time, and a 150-column
+  line reflowed whole. A reattach in a narrower window gave the session
+  that width. A real Claude redrew its screen at 34 columns and back at
+  79, answered a turn while narrow, and kept every reply through a
+  reattach at 33. Narrowing left one more copy of its banner in the
+  scrollback, as in #78; widening and reattaching left none.
+
+  Two clients at different widths share one size: the one that last
+  typed sets it, and it stays after that client leaves. A 48-column
+  client drew a 29-column session narrow but whole; a 29-column client
+  wrapped a 48-column session. With tmux, Roost takes the size back for
+  the window you are looking at; under zmx it would need a way to do
+  that without typing into the agent, and zmx has no command for it.
+
+  Look again once a release leaves no crash reports on macOS.
 - **herdr-core in place of tmux.** [herdr-core](https://github.com/herdrdev/herdr-core)
   (`hc`), split out of herdr on 2026-10-16, keeps each task's terminal in
   a background process with a documented API, answers the agent's status
