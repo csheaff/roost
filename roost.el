@@ -11451,7 +11451,8 @@ Emacs 31's."
               (list (propertize " " 'display '(space :align-to 0))
                     (roost--side-button "«" "mouse-1: show the task panel"
                                         #'roost-task-panel-collapse)))
-  (roost--plain-header-line))
+  (roost--plain-header-line)
+  (roost--evil-state 'roost-panel-strip-mode roost-evil-state))
 
 (define-derived-mode roost-task-info-mode special-mode "Roost Task"
   "A task's next step, prompt, changes and details.
@@ -15784,9 +15785,9 @@ sidebar and the mode line still say which tasks wait for you."
              (eq (window-parameter nil 'window-side) 'right))
     (roost--leave-side-window))
   (roost--sync-all-frames)
-  (message (if roost--panel-collapsed
-               "Task panel collapsed; a click on it shows it again"
-             "Task panel expanded")))
+  (message (cond (roost--panel-collapsed "Task panel collapsed; a click on it shows it again")
+                 ((or (roost--task-panel-window) (not (roost--frame-task))) "Task panel expanded")
+                 (t "Task panel expanded; it shows once the terminal has room beside it"))))
 
 (defun roost-task-info-quit ()
   "Close this task panel.
@@ -15817,6 +15818,8 @@ Requests under way go too, as their replies would find no Roost to take them."
     (with-selected-frame frame
       (when-let* ((panel (roost--task-panel-window)))
         (delete-window panel))))
+  (when (get-buffer roost--panel-strip-buffer)
+    (kill-buffer roost--panel-strip-buffer))
   (remove-hook 'window-configuration-change-hook #'roost--layout-changed)
   (remove-hook 'after-delete-frame-functions #'roost--frame-deleted)
   (remove-hook 'tab-bar-tab-post-select-functions #'roost--sidebar-show-current)

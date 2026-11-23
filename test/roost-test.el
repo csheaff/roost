@@ -4429,6 +4429,17 @@ BODY gets the window and the last task's key."
                  (should (eq (roost--task-panel-window) panel))
                  (should (= (window-body-width panel) 2))
                  (should (= (roost--side-width 'right) 50))
+                 ;; Expanded where it has no room, it says so, and waits.
+                 (let (said)
+                   (cl-letf (((symbol-function 'message)
+                              (lambda (format &rest arguments)
+                                (setq said (and format (apply #'format format arguments))))))
+                     (roost-task-panel-collapse))
+                   (should (string-search "once the terminal has room" said)))
+                 (should-not (roost--task-panel-window))
+                 (roost-task-panel-collapse)
+                 (setq panel (roost--task-panel-window))
+                 (should (= (window-body-width panel) 2))
                  ;; Nor does a drag that expanding it is the first to see.
                  (setq room 160)
                  (roost-test--resize-side panel 12)
