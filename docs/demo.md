@@ -36,7 +36,11 @@ The title bar was cropped from each capture.
 
 All four were taken on 2026-11-16, with Roost as it is after 0.12.0 and
 terminals through ghostel-tmux; the hero, the review and the dashboard
-again that day, once a task's terminal was named by its host and task. `ledger` has a `plot.py` that draws a bar
+again that day, once a task's terminal was named by its host and task. The
+hero was taken once more on 2026-11-22, the same way, with the sidebar's
+headings ruled and a button at the top of the sidebar and of the panel that
+collapses it: its Pi sessions used inkling-2-mini in LM Studio, those on
+`dev` were of Pi 1.3.0, and its Claude Code was 2.1.330. `ledger` has a `plot.py` that draws a bar
 chart as a PNG with no plotting library. `spending-chart` was asked to add a
 `chart` command that draws spending by category with it, to run it, and to
 look at the picture with Pi's read tool, which is what puts the picture in
