@@ -12774,6 +12774,57 @@ nil), it is discarded."
        (kill-buffer controller)
        (kill-buffer pane)))))
 
+(ert-deftest roost-ghostel-tmux-pane-starts-in-its-tasks-worktree ()
+  ;; `find-file' from a task's terminal starts in its worktree, as with
+  ;; tmux-control, rather than where the attach ran.
+  (roost-test--isolated
+   (roost-test--ghostel-backend)
+   (let* ((worktree (make-temp-file "roost-worktree" t))
+          (controller (generate-new-buffer " controller"))
+          (pane (generate-new-buffer " pane"))
+          (far (generate-new-buffer " far pane"))
+          (place '(nil "main" "roost-123456")))
+     (unwind-protect
+         (cl-letf (((symbol-function 'ghostel-tmux-controller)
+                    (lambda (&optional buffer)
+                      (and (memq (or buffer (current-buffer)) (list pane far)) controller)))
+                   ((symbol-function 'ghostel-tmux-session-name) (lambda (&rest _) (nth 2 place))))
+           (roost--cache-task nil (cons (cons 'worktree worktree) (roost-test--task)))
+           (roost--cache-task "far" (roost-test--task "fedcba9876543210"))
+           (with-current-buffer controller
+             (setq roost-ghostel-tmux--place place))
+           (with-current-buffer pane
+             (setq default-directory (expand-file-name "~/"))
+             (setq-local ghostel-tmux-pane-mode t)
+             (roost-ghostel-tmux--pane-made)
+             (should (equal default-directory (file-name-as-directory worktree))))
+           ;; A remote task's, through TRAMP, without reaching its host.
+           (with-current-buffer controller
+             (setq roost-ghostel-tmux--place '("far" "main" "roost-123456")))
+           (setq place '("far" "main" "roost-123456"))
+           (with-current-buffer far
+             (setq-local ghostel-tmux-pane-mode t)
+             (roost-ghostel-tmux--pane-made)
+             (should (equal default-directory "/ssh:far:/home/user/work/fix auth/")))
+           ;; Nor does a task with no worktree recorded.
+           (roost--cache-task "far" (assq-delete-all 'worktree (roost-test--task "fedcba9876543210")))
+           (with-current-buffer far
+             (setq default-directory (expand-file-name "~/"))
+             (roost-ghostel-tmux--pane-made)
+             (should (equal default-directory (expand-file-name "~/"))))
+           ;; A pane of no task's keeps the directory it had.
+           (with-current-buffer controller
+             (setq roost-ghostel-tmux--place '(nil "main" "someone-else")))
+           (setq place '(nil "main" "someone-else"))
+           (with-current-buffer pane
+             (setq default-directory (expand-file-name "~/"))
+             (roost-ghostel-tmux--pane-made)
+             (should (equal default-directory (expand-file-name "~/")))))
+       (kill-buffer controller)
+       (kill-buffer pane)
+       (kill-buffer far)
+       (delete-directory worktree t)))))
+
 (ert-deftest roost-ghostel-tmux-reaches-a-session-from-a-pane-it-left ()
   ;; Opening a task from a pane its last connection left attaches it, and
   ;; Roost sends the session commands from that pane at once.

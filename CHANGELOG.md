@@ -4,6 +4,10 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A task's terminal is in its worktree again, as it was before ghostel-tmux
+  became the default: `find-file` and other commands that read a file
+  name from it start there, rather than in your home directory. Nothing to
+  do when upgrading.
 - A `«` at the top of the sidebar collapses it to a strip at the frame's
   edge, and a click on the strip expands it to the width it had: the one
   you dragged it to, else `roost-sidebar-width`. `M-x
