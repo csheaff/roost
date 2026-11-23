@@ -45,15 +45,16 @@ Emacs 30 (built-in `use-package`), with Ghostel from MELPA:
   ;; :custom (roost-hosts '(nil "devbox"))  ; SSH hosts too; nil is this one
   :config
   (roost-watch-mode 1)                      ; notice waiting agents from startup
-  (roost-sidebar-mode 1)                    ; the task list at the left
-  (roost-task-panel-mode 1))                ; a task's panel beside its terminal
+  (roost-sidebar-mode 1))                   ; the task list at the left
 ```
 
 `roost-watch-mode` counts the agents waiting for you in the mode line and
 notifies you when one needs you. Without it, that starts only once you open
 Roost, so after a restart, agents still at work go unnoticed until then. The
-sidebar and the task's panel are optional ([below](#a-day-with-roost)):
-without those lines, `b` and `I` show them when you want them.
+sidebar is optional ([below](#a-day-with-roost)): without that line, `b`
+shows it when you want it. A task's panel docks beside its terminal unless
+you turn it off: `q` in the panel or `I` does, and `(roost-task-panel-mode
+-1)` in your configuration keeps it off from the start.
 
 Emacs 29: `M-x package-install` ghostel, `M-x package-vc-install`
 ghostel-tmux's URL, then Roost's, and
@@ -398,8 +399,8 @@ host, then a folder there, which after a click is the system's folder dialog
 for one on this machine. `X` on a project, or "Forget" on its menu, stops listing it until
 you start a task there again.
 
-**Read a task's panel.** `I` docks a panel at the right of an open task's
-terminal, kept current as the agent works. It is quiet until something is wrong: bold is
+**Read a task's panel.** A panel docks at the right of an open task's
+terminal, kept current as the agent works; `I` turns it off and on. It is quiet until something is wrong: bold is
 the task's name, and colour is what wants you, which comes first, under the
 name, after a `▲`: its worktree on another branch, a merge under way or one
 that would conflict, its worktree gone, its last error. Then what to do next,
@@ -787,7 +788,7 @@ redraws the panel and `q` closes it:
 | `l` | `roost-switch-task` | Choose a task by name, waiting tasks first |
 | `/` | `roost-search` | Find messages in your tasks' conversations, retired tasks' too; `RET` opens a live task, `TAB` shows more of a message (its first 1,500 characters), `n` and `p` move between messages, and `g` searches again. Each host reads the conversations Claude Code, Codex and Pi keep there, and each message names its agent; OpenCode's are not searched, and a host with an OpenCode task says so |
 | `b` | `roost-sidebar-mode` | Keep the task list at the left of the frame |
-| `I` | `roost-task-panel-mode` | Dock the open task's panel beside its terminal |
+| `I` | `roost-task-panel-mode` | Dock the open task's panel beside its terminal, or stop |
 | `u` | `roost-update` | Bring the task up to date: merge the branch it merges into, such as `main`, into it; for uncommitted changes or conflicts, offers to have its agent do it |
 | `P` | `roost-pr` | Draft a pull request for the task; if it has one, push new commits and open it (`C-u`: open only); after one closed, or merged with commits since, draft another |
 | `m` | `roost-merge-retire` | Merge committed work as one commit, then retire the task (a merge commit with `roost-merge-style` set to `merge`) |

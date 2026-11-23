@@ -1,6 +1,12 @@
 ;;; roost-test.el --- Task protocol and UI tests -*- lexical-binding: t; -*-
 (require 'ert)
 (require 'roost)
+;; Tests start with the task panel off, as they were written, and turn it
+;; on where they mean to: turning it off later would start the layout watch.
+;; Not in the Emacs `make qa' drives, which loads this file for its sweep
+;; and shows the panel as a new user's Emacs does.
+(when noninteractive
+  (setq roost-task-panel-mode nil))
 (defvar persp-mode nil)
 (defvar persp-modestring-short nil)
 (defvar persp-modestring-dividers nil)
@@ -4371,6 +4377,10 @@ BODY gets the window and the last task's key."
 (defun roost-test--resize-side (window width)
   "Make side WINDOW WIDTH columns wide, as a drag or a saved layout would."
   (window-resize window (- width (window-total-width window)) t 'preserved))
+
+;; The panel is on unless you turn it off.
+(ert-deftest roost-task-panel-is-on-from-the-start ()
+  (should (eq (eval (car (get 'roost-task-panel-mode 'standard-value)) t) t)))
 
 ;; The panel's » collapses it to a strip, the strip's « brings it back at
 ;; the width you dragged it to, and a narrow frame keeps the strip.

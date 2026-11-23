@@ -99,8 +99,7 @@ Emacs 30:
   ;; :custom (roost-hosts '(nil "devbox"))  ; SSH hosts too; nil is this one
   :config
   (roost-watch-mode 1)                      ; notice waiting agents from startup
-  (roost-sidebar-mode 1)                    ; the task list at the left
-  (roost-task-panel-mode 1))                ; a task's panel beside its terminal
+  (roost-sidebar-mode 1))                   ; the task list at the left
 ```
 
 Ghostel offers to download its native module the first time a terminal
