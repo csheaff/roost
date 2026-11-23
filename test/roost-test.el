@@ -12748,6 +12748,20 @@ A test stubs the functions of ghostel-tmux it reaches."
       (make-variable-buffer-local 'ghostel-tmux-pane-mode))
     (require 'roost-ghostel-tmux)))
 
+(defvar roost-test--one-controller nil
+  "Non-nil in a test of how Roost asks one controller whether it is attached.")
+
+(defun roost-test--attached-p (attached-p controller)
+  "Whether CONTROLLER is on the list a test gave `ghostel-tmux-controllers'.
+The tests' controllers are buffers ghostel-tmux did not make, so with
+ghostel-tmux itself loaded, ATTACHED-P would ask them what they can't
+answer.  It is asked only under `roost-test--one-controller'."
+  (if roost-test--one-controller
+      (funcall attached-p controller)
+    (and (memq controller (ghostel-tmux-controllers)) t)))
+
+(advice-add 'roost-ghostel-tmux--attached-p :around #'roost-test--attached-p)
+
 (defvar roost-ghostel-tmux--prepared-hosts)
 (defvar roost-ghostel-tmux--place)
 (defvar roost-ghostel-tmux--was-attached)
@@ -12929,6 +12943,7 @@ nil), it is discarded."
   (roost-test--isolated
    (roost-test--ghostel-backend)
    (let ((controller (generate-new-buffer " controller"))
+         (roost-test--one-controller t)
          (live t))
      (unwind-protect
          (cl-letf (((symbol-function 'ghostel-tmux-controllers)
