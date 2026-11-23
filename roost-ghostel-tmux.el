@@ -797,6 +797,18 @@ or made live again by an attach."
                        (prog1 (roost-ghostel-tmux--follow-session)
                          (setq roost-ghostel-tmux--was-attached t)))))
     (setq roost-ghostel-tmux--place place)
+    ;; As tmux-control did, `find-file' and the like start in the
+    ;; task's worktree, rather than where the attach ran.
+    ;; A remote one names its host as the attach did, which ghostel-tmux
+    ;; compares to find the pane's server.
+    (when-let* ((task (roost-ghostel-tmux--task place))
+                (worktree (roost--field task 'worktree))
+                (directory (file-name-as-directory worktree))
+                (directory (if (nth 0 place)
+                               (format "/ssh:%s:%s" (nth 0 place) directory)
+                             directory))
+                ((or (nth 0 place) (file-directory-p directory))))
+      (setq default-directory directory))
     ;; Ghostel puts the buffer's name back at each change of title.
     (setq-local ghostel-buffer-identification-format nil
                 mode-line-buffer-identification '((:eval (roost-ghostel-tmux--mode-line-name))))
@@ -806,21 +818,27 @@ or made live again by an attach."
 
 (defvar roost--tasks)
 
-(defun roost-ghostel-tmux--task-name (place)
-  "The name of the task whose tmux session is at PLACE, or nil.
+(defun roost-ghostel-tmux--task (place)
+  "The task whose tmux session is at PLACE, or nil.
 Nil too for a session several tasks share, from before each had its
 own, which is no one's: see `roost--terminal-task'.  The mode line asks
 at each redisplay, many times a second while a terminal streams, so
 this looks through the tasks as they are kept, without the list in
 order that `roost-tasks' makes."
-  (let (name (found 0))
+  (let (found (count 0))
     (maphash (lambda (_key task)
                (when (and (equal (roost--field task 'session) (nth 2 place))
                           (equal (roost--field task 'host) (nth 0 place))
                           (equal (roost--field task 'socket) (nth 1 place)))
-                 (setq name (roost--field task 'name) found (1+ found))))
+                 (setq found task count (1+ count))))
              roost--tasks)
-    (and (= found 1) name)))
+    (and (= count 1) found)))
+
+(defun roost-ghostel-tmux--task-name (place)
+  "The name of the task whose tmux session is at PLACE, or nil.
+See `roost-ghostel-tmux--task'."
+  (when-let* ((task (roost-ghostel-tmux--task place)))
+    (roost--field task 'name)))
 
 (defun roost-ghostel-tmux--mode-line-name ()
   "Return \"HOST › TASK\" for the mode line of the current pane buffer.
