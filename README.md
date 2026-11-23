@@ -12,7 +12,7 @@ worktree, a branch and a terminal, here or on any SSH host. It tells you which
 agents need you, and you review and merge their work with Magit. If you've
 used Orca, it's that idea, inside Emacs.
 
-![Emacs with three columns: Roost's sidebar listing nine agents on two hosts, the one you are on marked with a band, five ready, one working, one with changes not looked at and one asking permission, with what it asks under it; that agent's Pi terminal, named local › spending-chart in its mode line, where it has read the chart it drew, and the bar chart shows above its reply; and the task's panel, which says to review its changes in Magit and lists the file it changed](docs/images/roost-hero.png)
+![Emacs with three columns: Roost's sidebar listing nine agents on two hosts, the one you are on marked with a band, six ready, one working and one asking permission, with what it asks under it, and a button at its top that collapses it; that agent's Pi terminal, named local › spending-chart in its mode line, where it has read the chart it drew, and the bar chart shows above its reply; and the task's panel, which says to review its changes in Magit and lists the file it changed](docs/images/roost-hero.png)
 
 *Nine agents on two hosts: every task at the left, one agent's terminal in
 the middle, and what to do next at the right.*
