@@ -296,7 +296,7 @@ class Run:
 (roost--remember-project %(project)s)
 (roost-watch-mode 1)
 (roost-sidebar-mode 1)
-(roost-task-panel-mode 1)
+;; The task panel is on from the start.
 (keymap-global-set "C-c r" #'roost-dispatch)
 (with-current-buffer "*scratch*" (setq default-directory %(project)s))
 """ % dict(elpa=lisp(str(self.work / "elpa")),

@@ -297,12 +297,35 @@ Larger, or undecided.
   of tmux: start a terminal running a command in a folder, type into it,
   close it, and push events for its exit code and its program status (OSC
   7501, which tmux blocks for now; see Known gaps). Its IDs are never
-  reused, so a stale ID can't reach another terminal. Missing: a documented
-  way for Emacs to attach to a terminal and stream it, as ghostel-tmux does
-  with tmux's control mode. Rex's stream starts with a snapshot in Ghostty's own
-  format, and `rex block stream` isn't implemented: asked for in the beta
-  on 2026-10-21, and still so on 2026-10-26 ([validation](validation.md)).
-  Look again once Emacs can attach.
+  reused, so a stale ID can't reach another terminal. Emacs can attach
+  now: [rexel](https://github.com/dakra/rexel) (GPL-3) shows each Rex
+  block as a Ghostel buffer, loading the snapshot in Ghostty's format
+  that the stream starts with.
+
+  Run on 2026-11-22 through the checks the zmx entry below lists, with
+  rexel 0.6.0 and Ghostel 0.66.0 in batch Emacs, against a scratch Rex
+  server on the Mac (0.1.0-preview.21) and one on the Linux host
+  (snapshot 2506, through an ssh-forwarded socket). All passed, three
+  runs each:
+  - A block started from the CLI with nothing attached showed in full on
+    the first attach, and a reattach kept the whole scrollback (60 of 60
+    lines) and both OSC 8 links.
+  - A dropped connection, locally or by a `kill -9` of the ssh tunnel,
+    kept the buffer; rexel redialled by itself and was live again 2 s
+    after the tunnel came back. Bringing the tunnel back is left to you.
+  - Narrowing, widening and a narrower reattach each reached the
+    program, and a long line reflowed whole.
+  - A real Claude (2.1.330, Haiku) started with nothing attached reported
+    its status anyway: Ghostel showed idle on the first attach, then
+    working and done for each turn, typed with `rex send`. Replies and
+    links survived a reattach, and it redrew at 34 and 79 columns.
+
+  Two clients take turns at the size: attaching or selecting a window
+  takes the block, typing doesn't, the other client's mode line reads
+  "Sized by another client", and when the owner leaves the size goes back
+  to the client left. Rex logged no crash. What still stops it is Rex
+  itself: its server is for beta testers only and states no licence.
+  Look again once Rex is open to everyone.
 - **zmx and Ghostel in place of tmux.** [zmx](https://github.com/neurosnap/zmx)
   keeps each task's terminal in a small daemon of its own and redraws it
   from Ghostty's engine when you attach. Emacs would show a task as a plain
@@ -312,22 +335,62 @@ Larger, or undecided.
   links, Shift+Enter and program status worked without patches, and remote
   terminals shared one SSH connection, but zmx 0.8.1 isn't ready.
   Speed is not the reason: zmx's own readiness is what decides it.
-  Checked again on 2026-11-22 against zmx 1.0.1, from its changelog,
-  issues and source, not run. A task started with nothing attached now
-  shows on the first attach. 1.0 freezes the protocol between client and
-  daemon, so later 1.x upgrades should leave sessions reachable, but a
-  client of another version still gets no error: the daemon drops its
-  messages, so the helper would have to check the version itself. Its
-  source moves the last screenful into scrollback before a reattach
-  clears the screen, as #78's patch did, so the lost scrollback looks
-  fixed, though [zmx#296](https://github.com/neurosnap/zmx/pull/296) is
-  still open. It also has the fix proposed for a crash report on macOS
-  each time a session ends
-  ([zmx#294](https://github.com/neurosnap/zmx/issues/294)). Neither has
-  been run. Still open: a reattach turns links back into plain text,
-  because Ghostty's engine drops them when it saves a screen
-  ([zmx#97](https://github.com/neurosnap/zmx/issues/97)). Look again by
-  running 1.0.1 through #78's reattach checks, and once links survive.
+  Run again on 2026-11-22 with zmx 1.0.1 and Ghostel 0.65.0 on a Mac,
+  in batch Emacs at 79×23 with 60 lines of output and two OSC 8 links,
+  one scrolled into scrollback and one on screen; zmx 0.8.1 beside it
+  for comparison. Each check passed in each of three runs:
+  - A reattach keeps the whole scrollback, 60 of 60 lines; 0.8.1 kept
+    38, losing a screenful.
+  - A task started with nothing attached shows in full on the first
+    attach; 0.8.1 showed a blank screen.
+  - Both links still open after a reattach; 0.8.1 kept their colour
+    but not the links.
+
+  Two gaps are left:
+  - A client of another version: against a 0.8.1 session, 1.0.1's
+    `list` says "unreachable" at once and `send` fails with an error,
+    but `kill` hangs and `history` waits 5 s and prints nothing. 1.0
+    freezes the protocol, so this should matter only across the 1.0
+    line; the helper would still check versions before a kill.
+  - Each session that ends on macOS leaves a crash report, all twelve
+    of the run's from 1.0.1, the abort in
+    [zmx#294](https://github.com/neurosnap/zmx/issues/294), though 1.0.1
+    has that issue's proposed fix. Sessions worked regardless.
+
+  A real Claude (2.1.330, Haiku) did the same, in four turns, each
+  typed with `zmx send`. Started with nothing attached, it showed on the
+  first attach, and both replies and their link came back after a
+  reattach with no second banner. It reported no status, since zmx
+  answers its probe while nothing is attached, so Roost's relay would
+  still be needed. Attached at the start, it reported idle, working and
+  done to Ghostel, and kept reporting after a reattach.
+
+  On a Linux host (x86_64), shown on the Mac through `ssh -t`, the same
+  checks passed in each of three runs, each attach drawing in under
+  half a second. A session started over an ssh with no terminal
+  outlived that ssh. After a `kill -9` of the ssh under a terminal,
+  Ghostel closed the buffer, as in #78, and a reattach brought back the
+  whole scrollback and both links. Typing through ssh reached a shell
+  session. The host's daemons shut down cleanly, with no crash, so the
+  crash reports are the Mac's alone.
+
+  Resizing, tried the same day on the Mac and on the Linux host, with
+  the same results on both. Narrowing a window from 79 to 34 columns
+  and widening it back reached the program each time, and a 150-column
+  line reflowed whole. A reattach in a narrower window gave the session
+  that width. A real Claude redrew its screen at 34 columns and back at
+  79, answered a turn while narrow, and kept every reply through a
+  reattach at 33. Narrowing left one more copy of its banner in the
+  scrollback, as in #78; widening and reattaching left none.
+
+  Two clients at different widths share one size: the one that last
+  typed sets it, and it stays after that client leaves. A 48-column
+  client drew a 29-column session narrow but whole; a 29-column client
+  wrapped a 48-column session. With tmux, Roost takes the size back for
+  the window you are looking at; under zmx it would need a way to do
+  that without typing into the agent, and zmx has no command for it.
+
+  Look again once a release leaves no crash reports on macOS.
 - **herdr-core in place of tmux.** [herdr-core](https://github.com/herdrdev/herdr-core)
   (`hc`), split out of herdr on 2026-10-16, keeps each task's terminal in
   a background process with a documented API, answers the agent's status

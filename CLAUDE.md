@@ -164,5 +164,7 @@ they can do themselves.
 - Pull requests get a Copilot review. Fix the findings that hold up and
   answer the rest in a line on their thread. Ask for another round only
   after a fix that changes behaviour: "Needs a closer look" with no open
-  issues is as far as Copilot goes. Squash-merge once CI passes and every
-  thread is resolved. Main takes no direct pushes.
+  issues is as far as Copilot goes. Once CI passes and every thread is
+  resolved, stop and say the pull request is ready: Clay takes the last
+  look and squash-merges it. Don't merge it or turn on auto-merge. Main
+  takes no direct pushes.

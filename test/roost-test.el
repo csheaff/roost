@@ -1,6 +1,12 @@
 ;;; roost-test.el --- Task protocol and UI tests -*- lexical-binding: t; -*-
 (require 'ert)
 (require 'roost)
+;; Tests start with the task panel off, as they were written, and turn it
+;; on where they mean to: turning it off later would start the layout watch.
+;; Not in the Emacs `make qa' drives, which loads this file for its sweep
+;; and shows the panel as a new user's Emacs does.
+(when noninteractive
+  (setq roost-task-panel-mode nil))
 (defvar persp-mode nil)
 (defvar persp-modestring-short nil)
 (defvar persp-modestring-dividers nil)
@@ -130,6 +136,10 @@ ghostel-tmux, the default, choose it themselves."
          (roost--side-widths nil)
          (roost--perspectives (make-hash-table :test 'equal)))
      (set-frame-parameter nil 'roost-task nil)
+     ;; Watching the layout, as Roost is once it has shown a terminal or a
+     ;; side window, whichever test ran before: one that unloads Roost
+     ;; stops the watch.
+     (roost--watch-layout)
      ;; Seeing an agent is recorded on its host too, and so is what of its
      ;; pull request or work waits on you; tests that check it say so.
      (cl-letf (((symbol-function 'roost--record-seen) #'ignore)
@@ -140,6 +150,10 @@ ghostel-tmux, the default, choose it themselves."
        (unwind-protect (prog1 (progn ,@body) (roost-test--check-programs))
          ;; Held notifications would go a minute later, in another test.
          (when (timerp roost--notice-timer) (cancel-timer roost--notice-timer))
+         ;; So would the side windows change, for this test's layout.
+         (when (timerp roost--layout-timer)
+           (cancel-timer roost--layout-timer)
+           (setq roost--layout-timer nil))
          ;; So would a sweep a closed tab asked for, in another test's question.
          (when (and (boundp 'roost-ghostel-tmux--sweep-timer)
                     (timerp roost-ghostel-tmux--sweep-timer))
@@ -4395,6 +4409,10 @@ BODY gets the window and the last task's key."
   "Make side WINDOW WIDTH columns wide, as a drag or a saved layout would."
   (window-resize window (- width (window-total-width window)) t 'preserved))
 
+;; The panel is on unless you turn it off.
+(ert-deftest roost-task-panel-is-on-from-the-start ()
+  (should (eq (eval (car (get 'roost-task-panel-mode 'standard-value)) t) t)))
+
 ;; The panel's » collapses it to a strip, the strip's « brings it back at
 ;; the width you dragged it to, and a narrow frame keeps the strip.
 (ert-deftest roost-task-panel-collapses-and-comes-back-as-wide ()
@@ -6086,12 +6104,14 @@ the stubbed requests, `roost--display-task' and `dired' were asked."
   ;; Y's panel.
   (roost-test--isolated
    (let* ((roost-workspace 'tab-bar)
+          ;; The sidebar is one Roost shows: one it does not want goes at
+          ;; the reply's redraw, which leaves you where you asked from.
+          (roost-sidebar-mode t) (roost-task-panel-mode nil) (roost-sidebar-width 20)
           (x (roost--cache-task "dev" (roost-test--task "1111111111111111")))
           (y (roost--cache-task "dev" (append '((name . "other") (session . "roost-other") (windowId . "@10"))
                                               (roost-test--task "2222222222222222"))))
           (terminal (generate-new-buffer "x's terminal"))
           (code (generate-new-buffer "x's code.py"))
-          (sidebar (get-buffer-create roost--sidebar-buffer))
           (original-tab-bar-mode tab-bar-mode)
           (shows-terminal (lambda () (get-buffer-window terminal)))
           reply displayed opened)
@@ -6103,7 +6123,8 @@ the stubbed requests, `roost--display-task' and `dired' were asked."
           (cl-letf (((symbol-function 'roost--request)
                      (lambda (_host _action _params success &optional _failure) (setq reply success)))
                     ((symbol-function 'roost--display-task) (lambda (&rest _) (setq displayed t)))
-                    ((symbol-function 'dired) (lambda (&rest _) (setq opened t))))
+                    ((symbol-function 'dired) (lambda (&rest _) (setq opened t)))
+                    ((symbol-function 'frame-width) (lambda (&rest _) 200)))
             (delete-other-windows)
             (roost--activate-workspace x)
             (switch-to-buffer code)
@@ -6113,16 +6134,21 @@ the stubbed requests, `roost--display-task' and `dired' were asked."
             (should (equal (roost--current-workspace) "dev/other"))
             (should reply)
             (should-not (funcall shows-terminal))
-            ;; You go to the sidebar before the host replies: nothing opens.
-            (select-window (display-buffer-in-side-window sidebar '((side . left) (window-width . 20))))
-            (funcall reply (copy-tree y))
+            ;; You go to the sidebar, which the new tab has by now, before
+            ;; the host replies: nothing opens, and you stay there.
+            (roost--sync-side-windows)
+            (let ((sidebar (get-buffer-window roost--sidebar-buffer)))
+              (should (eq (window-parameter sidebar 'window-side) 'left))
+              (select-window sidebar)
+              (funcall reply (copy-tree y))
+              (should (eq (selected-window) sidebar)))
             (should-not displayed)
             (should-not opened)
             (should (equal (roost--current-workspace) "dev/other"))
             (should-not (funcall shows-terminal))))
        (while (cdr (roost--tabs)) (tab-bar-close-tab))
        (unless original-tab-bar-mode (tab-bar-mode -1))
-       (mapc #'kill-buffer (list terminal code sidebar))))))
+       (mapc #'kill-buffer (delq nil (list terminal code (get-buffer roost--sidebar-buffer))))))))
 
 (ert-deftest roost-request-wait-returns-results-and-signals-failures ()
   (cl-letf (((symbol-function 'roost--request)
