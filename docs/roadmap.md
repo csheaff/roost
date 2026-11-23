@@ -317,15 +317,17 @@ Larger, or undecided.
   shows on the first attach. 1.0 freezes the protocol between client and
   daemon, so later 1.x upgrades should leave sessions reachable, but a
   client of another version still gets no error: the daemon drops its
-  messages, so the helper would have to check the version itself. Still
-  open: a reattach loses the last screenful of scrollback
-  ([zmx#296](https://github.com/neurosnap/zmx/pull/296), no answer from
-  its maintainer since 2026-10-21), and it turns links back into plain
-  text, which zmx won't fix since Ghostty's engine drops them when it
-  saves a screen ([zmx#97](https://github.com/neurosnap/zmx/issues/97)).
-  New: each session that ends on macOS leaves a crash report
-  ([zmx#294](https://github.com/neurosnap/zmx/issues/294)). Look again
-  once a reattach keeps the whole scrollback and its links.
+  messages, so the helper would have to check the version itself. Its
+  source moves the last screenful into scrollback before a reattach
+  clears the screen, as #78's patch did, so the lost scrollback looks
+  fixed, though [zmx#296](https://github.com/neurosnap/zmx/pull/296) is
+  still open. It also has the fix proposed for a crash report on macOS
+  each time a session ends
+  ([zmx#294](https://github.com/neurosnap/zmx/issues/294)). Neither has
+  been run. Still open: a reattach turns links back into plain text,
+  because Ghostty's engine drops them when it saves a screen
+  ([zmx#97](https://github.com/neurosnap/zmx/issues/97)). Look again by
+  running 1.0.1 through #78's reattach checks, and once links survive.
 - **herdr-core in place of tmux.** [herdr-core](https://github.com/herdrdev/herdr-core)
   (`hc`), split out of herdr on 2026-10-16, keeps each task's terminal in
   a background process with a documented API, answers the agent's status
