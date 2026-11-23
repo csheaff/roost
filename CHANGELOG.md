@@ -4,6 +4,12 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A `»` at the top of the task panel docked beside a terminal collapses it
+  to a strip at the frame's right edge, and a click on the strip expands it
+  to the width it had, as the sidebar's `«` does for the sidebar. `M-x
+  roost-task-panel-collapse` does either. The docked panel has a line at
+  its top for the button. Nothing to do when upgrading.
+
 - A `«` at the top of the sidebar collapses it to a strip at the frame's
   edge, and a click on the strip expands it to the width it had: the one
   you dragged it to, else `roost-sidebar-width`. `M-x

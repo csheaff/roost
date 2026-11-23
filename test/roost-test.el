@@ -4370,6 +4370,86 @@ BODY gets the window and the last task's key."
   "Make side WINDOW WIDTH columns wide, as a drag or a saved layout would."
   (window-resize window (- width (window-total-width window)) t 'preserved))
 
+;; The panel's » collapses it to a strip, the strip's « brings it back at
+;; the width you dragged it to, and a narrow frame keeps the strip.
+(ert-deftest roost-task-panel-collapses-and-comes-back-as-wide ()
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (set-frame-parameter nil 'roost-side-widths nil)
+     (let ((task (roost--cache-task "dev" (roost-test--task)))
+           (roost-workspace nil) (roost-task-panel-width 44) (roost-task-panel-mode t)
+           (roost-sidebar-mode nil) (roost--panel-collapsed nil) (roost--side-widths nil)
+           (room 160))
+       (set-frame-parameter nil 'roost-task (roost--key task))
+       (cl-letf (((symbol-function 'roost--refresh-host) #'ignore)
+                 ((symbol-function 'frame-width) (lambda (&rest _) 200))
+                 ((symbol-function 'roost--task-panel-fits-p) (lambda (&rest _) (>= room 124)))
+                 ((symbol-function 'roost--side-workspace) (lambda () "one")))
+         (unwind-protect
+             (cl-flet ((button (window)
+                         ;; The command of the button in WINDOW's header line.
+                         (let* ((header (or (window-parameter window 'header-line-format)
+                                            (buffer-local-value 'header-line-format
+                                                                (window-buffer window))))
+                                (part (seq-find (lambda (part) (get-text-property 0 'local-map part))
+                                                header)))
+                           (should part)
+                           (list (substring-no-properties part)
+                                 (keymap-lookup (get-text-property 0 'local-map part)
+                                                "<header-line> <mouse-1>")))))
+               (roost--sync-side-windows)
+               (let ((panel (roost--task-panel-window)))
+                 (should (eq (window-buffer panel) (roost--task-info-buffer task)))
+                 (should (equal (button panel) '("»" roost-task-panel-collapse)))
+                 (roost-test--resize-side panel 50)
+                 (roost--sync-side-windows)
+                 (should (= (roost--side-width 'right) 50))
+                 ;; Collapsed from inside it: a strip of two columns, which
+                 ;; says nothing of the task, and you are out of it.
+                 (select-window panel)
+                 (roost-task-panel-collapse)
+                 (setq panel (roost--task-panel-window))
+                 (should panel)
+                 (should-not (eq (selected-window) panel))
+                 (should (= (window-body-width panel) 2))
+                 (should (equal (with-current-buffer (window-buffer panel) (buffer-string)) ""))
+                 (should (equal (button panel) '("«" roost-task-panel-collapse)))
+                 (with-current-buffer (window-buffer panel)
+                   (should (eq (keymap-lookup (current-local-map) "<mouse-1>") 'roost-task-panel-collapse))
+                   (should (eq (keymap-lookup (current-local-map) "RET") 'roost-task-panel-collapse)))
+                 ;; The task's own panel is as it was, for a window elsewhere.
+                 (should (string-search (roost--field task 'name)
+                                        (with-current-buffer (roost--task-info-buffer task) (buffer-string))))
+                 ;; The width it had is kept, whatever becomes of the strip,
+                 ;; and a frame too narrow for the panel keeps the strip.
+                 (roost-test--resize-side panel 12)
+                 (setq room 100)
+                 (roost--sync-side-windows)
+                 (should (eq (roost--task-panel-window) panel))
+                 (should (= (window-body-width panel) 2))
+                 (should (= (roost--side-width 'right) 50))
+                 ;; Nor does a drag that expanding it is the first to see.
+                 (setq room 160)
+                 (roost-test--resize-side panel 12)
+                 (roost-task-panel-collapse)
+                 (setq panel (roost--task-panel-window))
+                 (should (eq (window-buffer panel) (roost--task-info-buffer task)))
+                 (should (= (window-total-width panel) 50))
+                 (should (= (roost--side-width 'right) 50))
+                 (should (equal (button panel) '("»" roost-task-panel-collapse)))
+                 ;; Turned off and on, it is whole.
+                 (roost-task-panel-collapse)
+                 (should roost--panel-collapsed)
+                 (roost-task-panel-mode -1)
+                 (should-not (roost--task-panel-window))
+                 (should-error (roost-task-panel-collapse) :type 'user-error)
+                 (roost-task-panel-mode 1)
+                 (should-not roost--panel-collapsed)
+                 (should (eq (window-buffer (roost--task-panel-window)) (roost--task-info-buffer task)))))
+           (when (get-buffer roost--panel-strip-buffer) (kill-buffer roost--panel-strip-buffer))
+           (set-frame-parameter nil 'roost-side-widths nil)))))))
+
 (ert-deftest roost-task-panel-docks-beside-the-terminal-when-there-is-room ()
   (roost-test--isolated
    (save-window-excursion

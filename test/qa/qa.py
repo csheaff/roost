@@ -423,6 +423,12 @@ class Run:
             raise Stuck("No %r on screen to click, in a %s" % (what, how))
         self.settle()
 
+    def click_header(self, label, mode):
+        """Click on LABEL in the header line of a window in MODE."""
+        if self.emacs.eval("(qa-click-header %s %s)" % (lisp(label), lisp(mode))) != "t":
+            raise Stuck("No %r on screen to click, in a header of %s" % (label, mode))
+        self.settle()
+
     def answer_popups(self, *labels):
         """Choose LABELS, one each, in the popup menus and dialogs to come:
         the system's own, which no keys or clicks of ours reach."""
@@ -2144,7 +2150,7 @@ def collapse_sidebar(qa, repo):
     sidebar = lambda s: qa.window(s, "roost-sidebar-list-mode")
     wide = sidebar(qa.screen())["total"]
     try:
-        qa.click_in("header", "«")
+        qa.click_header("«", "roost-sidebar-list-mode")
         qa.step("« collapses the sidebar", expect=[
             ("it is a strip", lambda s: s["sidebar-collapsed"] and sidebar(s)["total"] < 8),
             ("with a » to expand it", lambda s: sidebar(s)["header"].strip() == "»"),
@@ -2153,13 +2159,44 @@ def collapse_sidebar(qa, repo):
              lambda s: s["echo"] == "Sidebar collapsed; a click on it shows it again"),
             ("you are in the terminal", lambda s: not sidebar(s)["selected"]),
             ("which stays", lambda s: terminals(s))])
-        qa.click_in("header", "»")
+        qa.click_header("»", "roost-sidebar-list-mode")
         qa.step("» expands it", expect=[
             ("as wide as it was", lambda s: not s["sidebar-collapsed"] and sidebar(s)["total"] == wide),
             ("with its tasks", lambda s: name in sidebar_rows(s)),
             ("the echo area says so", lambda s: s["echo"] == "Sidebar expanded")])
     finally:
         qa.emacs.eval("(progn (when roost--sidebar-collapsed (roost-sidebar-collapse)) t)")
+
+
+@journey("The task panel, collapsed and expanded")
+def collapse_panel(qa, repo):
+    """The » at the top of the task panel collapses it to a strip, which gives
+    the terminal its columns, and a click on the strip's « expands it to the
+    width it had."""
+    name = start_task(qa, "Give the terminal the room")
+    open_task(qa, name)
+    panel = lambda s: next((w for w in s["windows"] if w.get("side") == "right"), None)
+    qa.wait("the panel beside it", lambda s: panel(s) and panel(s)["mode"] == "roost-task-info-mode")
+    before = qa.screen()
+    wide = panel(before)["total"]
+    columns = terminals(before)[0]["columns"]
+    try:
+        qa.click_header("»", "roost-task-info-mode")
+        qa.step("» collapses the task panel", expect=[
+            ("it is a strip", lambda s: s["panel-collapsed"] and panel(s) and panel(s)["total"] < 8),
+            ("with a « to expand it", lambda s: panel(s)["header"].strip() == "«"),
+            ("and nothing of the task", lambda s: not panel(s)["text"].strip()),
+            ("the echo area says how to have it back",
+             lambda s: s["echo"] == "Task panel collapsed; a click on it shows it again"),
+            ("you are in the terminal", lambda s: not panel(s)["selected"]),
+            ("which has the panel's columns", lambda s: terminals(s) and terminals(s)[0]["columns"] > columns)])
+        qa.click_header("«", "roost-panel-strip-mode")
+        qa.step("« expands it", expect=[
+            ("as wide as it was", lambda s: not s["panel-collapsed"] and panel(s) and panel(s)["total"] == wide),
+            ("with the task", lambda s: name in panel_text(qa, s)),
+            ("the echo area says so", lambda s: s["echo"] == "Task panel expanded")])
+    finally:
+        qa.emacs.eval("(progn (when roost--panel-collapsed (roost-task-panel-collapse)) t)")
 
 
 @journey("Stop and resume an agent")
@@ -4645,7 +4682,7 @@ def page_as_written(qa, repo):
 
 
 JOURNEYS = [sweep, answer, next_waiting, fold, resize, merge, review, notes, since_looked, panes, window_buffers, reconnect_away, shell,
-            dashboard, panel_keys, collapse_sidebar, stop_resume, retire, discard, teardown, send, attach, update, conflicts, restart,
+            dashboard, panel_keys, collapse_sidebar, collapse_panel, stop_resume, retire, discard, teardown, send, attach, update, conflicts, restart,
             search, workload, question_left,
             walk_away,
             frames, draft_frames, org, drafts, draft_fields, by_clicks, conversation, clicks, overlap, region, tabs,

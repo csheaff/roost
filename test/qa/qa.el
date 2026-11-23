@@ -339,12 +339,17 @@ screen."
         (setq start (1+ start))))
     (or found (string-search label string))))
 
-(defun qa-click-header (label)
+(defun qa-click-header (label &optional mode)
   "Click with the mouse on LABEL in the header line of a window on screen.
-Return nil when no header line shows it."
+One whose buffer is in MODE, a string, if given.  Return nil when no
+header line shows it."
   (seq-some
    (lambda (window)
-     (let ((height (window-header-line-height window))
+     (let ((height (if (or (not mode)
+                           (eq (buffer-local-value 'major-mode (window-buffer window))
+                               (intern mode)))
+                       (window-header-line-height window)
+                     0))
            ;; Under a tab line, as `global-tab-line-mode' gives windows.
            (top (window-tab-line-height window))
            (step (max 1 (/ (frame-char-width (window-frame window)) 2))))
@@ -1139,6 +1144,7 @@ question from another of the same prompt asked after it."
                              (roost--strip-width window)
                            roost-sidebar-width))
        (sidebar-collapsed . ,(if roost--sidebar-collapsed t :json-false))
+       (panel-collapsed . ,(if roost--panel-collapsed t :json-false))
        ;; Every row of the sidebar, as drawn, those scrolled out of sight
        ;; too: a whole run starts more tasks than its window has lines for.
        (sidebar-rows . ,(when-let* ((sidebar (get-buffer roost--sidebar-buffer)))
