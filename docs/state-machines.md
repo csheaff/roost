@@ -3784,6 +3784,12 @@ Invariants:
   a frame too narrow for it may, until the width they share changes.
   (`roost--keep-side-width`, which tells a drag by the window, workspace and
   frame width it last saw, in the frame parameter `roost-side-widths`.)
+- I5. The sidebar collapsed is a strip in every frame, whatever it is dragged
+  to, and the width of I4 is as it was when it expands. Turning the sidebar
+  on shows it whole. (`roost--sidebar-collapsed`.) The same holds of the
+  panel (`roost--panel-collapsed`), whose strip shows beside a task's
+  terminal however narrow the frame, and says nothing of the task: its
+  window shows a buffer of its own, and the task's panel buffer is as it was.
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|
@@ -3793,6 +3799,13 @@ Invariants:
 | (in sync) | side window wider or narrower | same window, workspace, frame width | | width shared from now on; other frames synced again | `roost--keep-side-width` |
 | (in sync) | any | same window and workspace, shared width unchanged | | left as it is, as after the frame resized it | same |
 | (in sync) | any | otherwise | | resized to the shared width, as far as it fits | same |
+| (in sync) | `«`, or `roost-sidebar-collapse` | sidebar on, whole | | collapsed: a strip in every frame, no tasks listed; you leave it | `roost-sidebar-collapse` |
+| (in sync) | click or `RET` on the strip, or `roost-sidebar-collapse` | collapsed | | whole, at the shared width | same |
+| (in sync) | any | collapsed | | resized to the strip; the shared width unchanged | `roost--keep-side-width` |
+| (in sync) | `»`, or `roost-task-panel-collapse` | panel mode on, whole | | collapsed: a strip beside each task's terminal; you leave it | `roost-task-panel-collapse` |
+| (in sync) | click or `RET` on the strip, or `roost-task-panel-collapse` | collapsed | | whole, at the shared width, where it fits | same |
+| any | sidebar mode on or off | | | whole | `roost-sidebar-mode` |
+| any | panel mode on or off | | | whole | `roost-task-panel-mode` |
 | any | mode off | | Idle | windows close | modes |
 | any | panel `q` | docked | mode off | | `roost-task-info-quit` |
 

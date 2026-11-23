@@ -310,13 +310,64 @@ Larger, or undecided.
   with no tmux. The draft
   [#78](https://github.com/csheaff/roost/pull/78) tried it on 2026-10-20:
   links, Shift+Enter and program status worked without patches, and remote
-  terminals shared one SSH connection, but zmx 0.8.1 isn't ready. It used
-  Speed is not the reason: zmx's own readiness is what decides it. Look again
-  once a zmx release keeps the whole scrollback when you reattach
-  ([zmx#296](https://github.com/neurosnap/zmx/pull/296)) and shows a task
-  started with nothing attached (fixed on zmx's main), and once an upgrade
-  leaves running sessions reachable, or at least fails fast: today `kill`
-  and `attach` hang against a daemon of another version.
+  terminals shared one SSH connection, but zmx 0.8.1 isn't ready.
+  Speed is not the reason: zmx's own readiness is what decides it.
+  Run again on 2026-11-22 with zmx 1.0.1 and Ghostel 0.65.0 on a Mac,
+  in batch Emacs at 79×23 with 60 lines of output and two OSC 8 links,
+  one scrolled into scrollback and one on screen; zmx 0.8.1 beside it
+  for comparison. Each check passed in each of three runs:
+  - A reattach keeps the whole scrollback, 60 of 60 lines; 0.8.1 kept
+    38, losing a screenful.
+  - A task started with nothing attached shows in full on the first
+    attach; 0.8.1 showed a blank screen.
+  - Both links still open after a reattach; 0.8.1 kept their colour
+    but not the links.
+
+  Two gaps are left:
+  - A client of another version: against a 0.8.1 session, 1.0.1's
+    `list` says "unreachable" at once and `send` fails with an error,
+    but `kill` hangs and `history` waits 5 s and prints nothing. 1.0
+    freezes the protocol, so this should matter only across the 1.0
+    line; the helper would still check versions before a kill.
+  - Each session that ends on macOS leaves a crash report, all twelve
+    of the run's from 1.0.1, the abort in
+    [zmx#294](https://github.com/neurosnap/zmx/issues/294), though 1.0.1
+    has that issue's proposed fix. Sessions worked regardless.
+
+  A real Claude (2.1.330, Haiku) did the same, in four turns, each
+  typed with `zmx send`. Started with nothing attached, it showed on the
+  first attach, and both replies and their link came back after a
+  reattach with no second banner. It reported no status, since zmx
+  answers its probe while nothing is attached, so Roost's relay would
+  still be needed. Attached at the start, it reported idle, working and
+  done to Ghostel, and kept reporting after a reattach.
+
+  On a Linux host (x86_64), shown on the Mac through `ssh -t`, the same
+  checks passed in each of three runs, each attach drawing in under
+  half a second. A session started over an ssh with no terminal
+  outlived that ssh. After a `kill -9` of the ssh under a terminal,
+  Ghostel closed the buffer, as in #78, and a reattach brought back the
+  whole scrollback and both links. Typing through ssh reached a shell
+  session. The host's daemons shut down cleanly, with no crash, so the
+  crash reports are the Mac's alone.
+
+  Resizing, tried the same day on the Mac and on the Linux host, with
+  the same results on both. Narrowing a window from 79 to 34 columns
+  and widening it back reached the program each time, and a 150-column
+  line reflowed whole. A reattach in a narrower window gave the session
+  that width. A real Claude redrew its screen at 34 columns and back at
+  79, answered a turn while narrow, and kept every reply through a
+  reattach at 33. Narrowing left one more copy of its banner in the
+  scrollback, as in #78; widening and reattaching left none.
+
+  Two clients at different widths share one size: the one that last
+  typed sets it, and it stays after that client leaves. A 48-column
+  client drew a 29-column session narrow but whole; a 29-column client
+  wrapped a 48-column session. With tmux, Roost takes the size back for
+  the window you are looking at; under zmx it would need a way to do
+  that without typing into the agent, and zmx has no command for it.
+
+  Look again once a release leaves no crash reports on macOS.
 - **herdr-core in place of tmux.** [herdr-core](https://github.com/herdrdev/herdr-core)
   (`hc`), split out of herdr on 2026-10-16, keeps each task's terminal in
   a background process with a documented API, answers the agent's status

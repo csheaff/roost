@@ -1,6 +1,12 @@
 ;;; roost-test.el --- Task protocol and UI tests -*- lexical-binding: t; -*-
 (require 'ert)
 (require 'roost)
+;; Tests start with the task panel off, as they were written, and turn it
+;; on where they mean to: turning it off later would start the layout watch.
+;; Not in the Emacs `make qa' drives, which loads this file for its sweep
+;; and shows the panel as a new user's Emacs does.
+(when noninteractive
+  (setq roost-task-panel-mode nil))
 (defvar persp-mode nil)
 (defvar persp-modestring-short nil)
 (defvar persp-modestring-dividers nil)
@@ -133,6 +139,10 @@ ghostel-tmux, the default, choose it themselves."
          (roost--side-widths nil)
          (roost--perspectives (make-hash-table :test 'equal)))
      (set-frame-parameter nil 'roost-task nil)
+     ;; Watching the layout, as Roost is once it has shown a terminal or a
+     ;; side window, whichever test ran before: one that unloads Roost
+     ;; stops the watch.
+     (roost--watch-layout)
      ;; Seeing an agent is recorded on its host too, and so is what of its
      ;; pull request or work waits on you; tests that check it say so.
      (cl-letf (((symbol-function 'roost--record-seen) #'ignore)
@@ -143,6 +153,10 @@ ghostel-tmux, the default, choose it themselves."
        (unwind-protect (prog1 (progn ,@body) (roost-test--check-programs))
          ;; Held notifications would go a minute later, in another test.
          (when (timerp roost--notice-timer) (cancel-timer roost--notice-timer))
+         ;; So would the side windows change, for this test's layout.
+         (when (timerp roost--layout-timer)
+           (cancel-timer roost--layout-timer)
+           (setq roost--layout-timer nil))
          ;; So would a sweep a closed tab asked for, in another test's question.
          (when (and (boundp 'roost-ghostel-tmux--sweep-timer)
                     (timerp roost-ghostel-tmux--sweep-timer))
@@ -4227,6 +4241,77 @@ BODY gets the window and the last task's key."
                   (lambda (_frame parameter) (eq parameter 'unsplittable))))
          (should-not (roost--side-frame-p)))))))
 
+;; The « in its header collapses the sidebar to a strip, and a click on the
+;; strip expands it to the width it had, dragged or not.
+(ert-deftest roost-sidebar-collapses-and-comes-back-as-wide ()
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (set-frame-parameter nil 'roost-side-widths nil)
+     (let ((roost-sidebar-mode t) (roost-task-panel-mode nil) (roost-sidebar-width 30)
+           (roost--sidebar-collapsed nil))
+       (cl-letf (((symbol-function 'frame-width) (lambda (&rest _) 200))
+                 ((symbol-function 'roost--sidebar-wanted-p) (lambda () t))
+                 ((symbol-function 'roost--side-workspace) (lambda () "one")))
+         (unwind-protect
+             (progn
+               (roost--sync-side-windows)
+               (let* ((sidebar (get-buffer-window roost--sidebar-buffer))
+                      (header (lambda ()
+                                (with-current-buffer roost--sidebar-buffer
+                                  (mapconcat #'substring-no-properties header-line-format))))
+                      (click (lambda (label)
+                               ;; The command of the header's button so labelled.
+                               (with-current-buffer roost--sidebar-buffer
+                                 (let ((part (seq-find (lambda (part) (equal (substring-no-properties part) label))
+                                                       header-line-format)))
+                                   (should part)
+                                   (call-interactively
+                                    (keymap-lookup (get-text-property 0 'local-map part)
+                                                   "<header-line> <mouse-1>")))))))
+                 (roost-test--resize-side sidebar 34)
+                 (roost--sync-side-windows)
+                 (should (= (roost--side-width 'left) 34))
+                 (should (string-search "Roost" (funcall header)))
+                 ;; Dragged again, and collapsed before anything saw it.
+                 (roost-test--resize-side sidebar 36)
+                 ;; Collapsed: a strip of two columns, with no tasks or title.
+                 (funcall click "«")
+                 (should roost--sidebar-collapsed)
+                 (should (= (window-body-width sidebar) 2))
+                 (should-not (string-search "Roost" (funcall header)))
+                 (should (equal (with-current-buffer roost--sidebar-buffer (buffer-string)) ""))
+                 ;; The width it had is kept, whatever becomes of the strip.
+                 (should (= (roost--side-width 'left) 36))
+                 (roost-test--resize-side sidebar 12)
+                 (roost--sync-side-windows)
+                 (should (= (window-body-width sidebar) 2))
+                 (should (= (roost--side-width 'left) 36))
+                 ;; Nor does a drag that expanding it is the first to see.
+                 (roost-test--resize-side sidebar 12)
+                 ;; A click anywhere on the strip, or RET there, expands it.
+                 (with-current-buffer roost--sidebar-buffer
+                   (should (eq (keymap-lookup (current-local-map) "<mouse-1>") 'roost-sidebar-collapse))
+                   (should (eq (keymap-lookup (current-local-map) "RET") 'roost-sidebar-collapse)))
+                 (funcall click "»")
+                 (should-not roost--sidebar-collapsed)
+                 (should (= (window-total-width sidebar) 36))
+                 (should (string-search "Roost" (funcall header)))
+                 ;; Whole, a click and RET are the rows' again.
+                 (with-current-buffer roost--sidebar-buffer
+                   (should-not (eq (keymap-lookup (current-local-map) "<mouse-1>") 'roost-sidebar-collapse))
+                   (should-not (eq (keymap-lookup (current-local-map) "RET") 'roost-sidebar-collapse)))
+                 ;; Turned off and on, it is whole.
+                 (roost-sidebar-collapse)
+                 (should roost--sidebar-collapsed)
+                 (cl-letf (((symbol-function 'roost-refresh) #'ignore)
+                           ((symbol-function 'roost-watch-mode) #'ignore))
+                   (roost-sidebar-mode -1)
+                   (roost-sidebar-mode 1))
+                 (should-not roost--sidebar-collapsed)
+                 (should (= (window-total-width (get-buffer-window roost--sidebar-buffer)) 36))))
+           (set-frame-parameter nil 'roost-side-widths nil)))))))
+
 ;; Each task's workspace saves its layout, sidebar and all, but the
 ;; sidebar is every task's: dragged in one, it is that wide in each.
 (ert-deftest roost-sidebar-keeps-one-width-across-workspaces ()
@@ -4303,6 +4388,107 @@ BODY gets the window and the last task's key."
 (defun roost-test--resize-side (window width)
   "Make side WINDOW WIDTH columns wide, as a drag or a saved layout would."
   (window-resize window (- width (window-total-width window)) t 'preserved))
+
+;; The panel is on unless you turn it off.
+(ert-deftest roost-task-panel-is-on-from-the-start ()
+  (should (eq (eval (car (get 'roost-task-panel-mode 'standard-value)) t) t)))
+
+;; The panel's » collapses it to a strip, the strip's « brings it back at
+;; the width you dragged it to, and a narrow frame keeps the strip.
+(ert-deftest roost-task-panel-collapses-and-comes-back-as-wide ()
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (set-frame-parameter nil 'roost-side-widths nil)
+     (let ((task (roost--cache-task "dev" (roost-test--task)))
+           (roost-workspace nil) (roost-task-panel-width 44) (roost-task-panel-mode t)
+           (roost-sidebar-mode nil) (roost--panel-collapsed nil) (roost--side-widths nil)
+           (room 160))
+       (set-frame-parameter nil 'roost-task (roost--key task))
+       (cl-letf (((symbol-function 'roost--refresh-host) #'ignore)
+                 ((symbol-function 'frame-width) (lambda (&rest _) 200))
+                 ((symbol-function 'roost--task-panel-fits-p) (lambda (&rest _) (>= room 124)))
+                 ((symbol-function 'roost--side-workspace) (lambda () "one")))
+         (unwind-protect
+             (cl-flet ((button (window)
+                         ;; The command of the button in WINDOW's header line.
+                         (with-current-buffer (window-buffer window)
+                           (if-let* ((header header-line-format)
+                                     (part (seq-find (lambda (part) (get-text-property 0 'local-map part))
+                                                     header)))
+                               (list (substring-no-properties part)
+                                     (keymap-lookup (get-text-property 0 'local-map part)
+                                                    "<header-line> <mouse-1>"))
+                             ;; Whole, it is the first thing in the panel,
+                             ;; before the task's name, on no line of its own.
+                             (list (buffer-substring-no-properties 1 2)
+                                   (keymap-lookup (get-text-property 1 'keymap) "<mouse-1>")
+                                   (buffer-substring-no-properties
+                                    3 (+ 3 (length (roost--field task 'name)))))))))
+               (roost--sync-side-windows)
+               (let ((panel (roost--task-panel-window)))
+                 (should (eq (window-buffer panel) (roost--task-info-buffer task)))
+                 (should (equal (button panel) (list "»" 'roost-task-panel-collapse (roost--field task 'name))))
+                 (roost-test--resize-side panel 48)
+                 (roost--sync-side-windows)
+                 (should (= (roost--side-width 'right) 48))
+                 ;; Dragged again, and collapsed before anything saw it.
+                 (roost-test--resize-side panel 50)
+                 ;; Collapsed from inside it: a strip of two columns, which
+                 ;; says nothing of the task, and you are out of it.
+                 (select-window panel)
+                 (roost-task-panel-collapse)
+                 (setq panel (roost--task-panel-window))
+                 (should panel)
+                 (should-not (eq (selected-window) panel))
+                 (should (= (window-body-width panel) 2))
+                 (should (equal (with-current-buffer (window-buffer panel) (buffer-string)) ""))
+                 (should (equal (button panel) '("«" roost-task-panel-collapse)))
+                 (with-current-buffer (window-buffer panel)
+                   (should (eq (keymap-lookup (current-local-map) "<mouse-1>") 'roost-task-panel-collapse))
+                   (should (eq (keymap-lookup (current-local-map) "RET") 'roost-task-panel-collapse)))
+                 ;; The task's own panel is as it was, for a window elsewhere.
+                 (should (string-search (roost--field task 'name)
+                                        (with-current-buffer (roost--task-info-buffer task) (buffer-string))))
+                 ;; The width it had is kept, whatever becomes of the strip,
+                 ;; and a frame too narrow for the panel keeps the strip.
+                 (roost-test--resize-side panel 12)
+                 (setq room 100)
+                 (roost--sync-side-windows)
+                 (should (eq (roost--task-panel-window) panel))
+                 (should (= (window-body-width panel) 2))
+                 (should (= (roost--side-width 'right) 50))
+                 ;; Expanded where it has no room, it says so, and waits.
+                 (let (said)
+                   (cl-letf (((symbol-function 'message)
+                              (lambda (format &rest arguments)
+                                (setq said (and format (apply #'format format arguments))))))
+                     (roost-task-panel-collapse))
+                   (should (string-search "once the terminal has room" said)))
+                 (should-not (roost--task-panel-window))
+                 (roost-task-panel-collapse)
+                 (setq panel (roost--task-panel-window))
+                 (should (= (window-body-width panel) 2))
+                 ;; Nor does a drag that expanding it is the first to see.
+                 (setq room 160)
+                 (roost-test--resize-side panel 12)
+                 (roost-task-panel-collapse)
+                 (setq panel (roost--task-panel-window))
+                 (should (eq (window-buffer panel) (roost--task-info-buffer task)))
+                 (should (= (window-total-width panel) 50))
+                 (should (= (roost--side-width 'right) 50))
+                 (should (equal (button panel) (list "»" 'roost-task-panel-collapse (roost--field task 'name))))
+                 ;; Turned off and on, it is whole.
+                 (roost-task-panel-collapse)
+                 (should roost--panel-collapsed)
+                 (roost-task-panel-mode -1)
+                 (should-not (roost--task-panel-window))
+                 (should-error (roost-task-panel-collapse) :type 'user-error)
+                 (roost-task-panel-mode 1)
+                 (should-not roost--panel-collapsed)
+                 (should (eq (window-buffer (roost--task-panel-window)) (roost--task-info-buffer task)))))
+           (when (get-buffer roost--panel-strip-buffer) (kill-buffer roost--panel-strip-buffer))
+           (set-frame-parameter nil 'roost-side-widths nil)))))))
 
 (ert-deftest roost-task-panel-docks-beside-the-terminal-when-there-is-room ()
   (roost-test--isolated
@@ -5898,12 +6084,14 @@ the stubbed requests, `roost--display-task' and `dired' were asked."
   ;; Y's panel.
   (roost-test--isolated
    (let* ((roost-workspace 'tab-bar)
+          ;; The sidebar is one Roost shows: one it does not want goes at
+          ;; the reply's redraw, which leaves you where you asked from.
+          (roost-sidebar-mode t) (roost-task-panel-mode nil) (roost-sidebar-width 20)
           (x (roost--cache-task "dev" (roost-test--task "1111111111111111")))
           (y (roost--cache-task "dev" (append '((name . "other") (session . "roost-other") (windowId . "@10"))
                                               (roost-test--task "2222222222222222"))))
           (terminal (generate-new-buffer "x's terminal"))
           (code (generate-new-buffer "x's code.py"))
-          (sidebar (get-buffer-create roost--sidebar-buffer))
           (original-tab-bar-mode tab-bar-mode)
           (shows-terminal (lambda () (get-buffer-window terminal)))
           reply displayed opened)
@@ -5915,7 +6103,8 @@ the stubbed requests, `roost--display-task' and `dired' were asked."
           (cl-letf (((symbol-function 'roost--request)
                      (lambda (_host _action _params success &optional _failure) (setq reply success)))
                     ((symbol-function 'roost--display-task) (lambda (&rest _) (setq displayed t)))
-                    ((symbol-function 'dired) (lambda (&rest _) (setq opened t))))
+                    ((symbol-function 'dired) (lambda (&rest _) (setq opened t)))
+                    ((symbol-function 'frame-width) (lambda (&rest _) 200)))
             (delete-other-windows)
             (roost--activate-workspace x)
             (switch-to-buffer code)
@@ -5925,16 +6114,21 @@ the stubbed requests, `roost--display-task' and `dired' were asked."
             (should (equal (roost--current-workspace) "dev/other"))
             (should reply)
             (should-not (funcall shows-terminal))
-            ;; You go to the sidebar before the host replies: nothing opens.
-            (select-window (display-buffer-in-side-window sidebar '((side . left) (window-width . 20))))
-            (funcall reply (copy-tree y))
+            ;; You go to the sidebar, which the new tab has by now, before
+            ;; the host replies: nothing opens, and you stay there.
+            (roost--sync-side-windows)
+            (let ((sidebar (get-buffer-window roost--sidebar-buffer)))
+              (should (eq (window-parameter sidebar 'window-side) 'left))
+              (select-window sidebar)
+              (funcall reply (copy-tree y))
+              (should (eq (selected-window) sidebar)))
             (should-not displayed)
             (should-not opened)
             (should (equal (roost--current-workspace) "dev/other"))
             (should-not (funcall shows-terminal))))
        (while (cdr (roost--tabs)) (tab-bar-close-tab))
        (unless original-tab-bar-mode (tab-bar-mode -1))
-       (mapc #'kill-buffer (list terminal code sidebar))))))
+       (mapc #'kill-buffer (delq nil (list terminal code (get-buffer roost--sidebar-buffer))))))))
 
 (ert-deftest roost-request-wait-returns-results-and-signals-failures ()
   (cl-letf (((symbol-function 'roost--request)
@@ -12875,6 +13069,57 @@ nil), it is discarded."
        (kill-buffer controller)
        (kill-buffer pane)))))
 
+(ert-deftest roost-ghostel-tmux-pane-starts-in-its-tasks-worktree ()
+  ;; `find-file' from a task's terminal starts in its worktree, as with
+  ;; tmux-control, rather than where the attach ran.
+  (roost-test--isolated
+   (roost-test--ghostel-backend)
+   (let* ((worktree (make-temp-file "roost-worktree" t))
+          (controller (generate-new-buffer " controller"))
+          (pane (generate-new-buffer " pane"))
+          (far (generate-new-buffer " far pane"))
+          (place '(nil "main" "roost-123456")))
+     (unwind-protect
+         (cl-letf (((symbol-function 'ghostel-tmux-controller)
+                    (lambda (&optional buffer)
+                      (and (memq (or buffer (current-buffer)) (list pane far)) controller)))
+                   ((symbol-function 'ghostel-tmux-session-name) (lambda (&rest _) (nth 2 place))))
+           (roost--cache-task nil (cons (cons 'worktree worktree) (roost-test--task)))
+           (roost--cache-task "far" (roost-test--task "fedcba9876543210"))
+           (with-current-buffer controller
+             (setq roost-ghostel-tmux--place place))
+           (with-current-buffer pane
+             (setq default-directory (expand-file-name "~/"))
+             (setq-local ghostel-tmux-pane-mode t)
+             (roost-ghostel-tmux--pane-made)
+             (should (equal default-directory (file-name-as-directory worktree))))
+           ;; A remote task's, through TRAMP, without reaching its host.
+           (with-current-buffer controller
+             (setq roost-ghostel-tmux--place '("far" "main" "roost-123456")))
+           (setq place '("far" "main" "roost-123456"))
+           (with-current-buffer far
+             (setq-local ghostel-tmux-pane-mode t)
+             (roost-ghostel-tmux--pane-made)
+             (should (equal default-directory "/ssh:far:/home/user/work/fix auth/")))
+           ;; Nor does a task with no worktree recorded.
+           (roost--cache-task "far" (assq-delete-all 'worktree (roost-test--task "fedcba9876543210")))
+           (with-current-buffer far
+             (setq default-directory (expand-file-name "~/"))
+             (roost-ghostel-tmux--pane-made)
+             (should (equal default-directory (expand-file-name "~/"))))
+           ;; A pane of no task's keeps the directory it had.
+           (with-current-buffer controller
+             (setq roost-ghostel-tmux--place '(nil "main" "someone-else")))
+           (setq place '(nil "main" "someone-else"))
+           (with-current-buffer pane
+             (setq default-directory (expand-file-name "~/"))
+             (roost-ghostel-tmux--pane-made)
+             (should (equal default-directory (expand-file-name "~/")))))
+       (kill-buffer controller)
+       (kill-buffer pane)
+       (kill-buffer far)
+       (delete-directory worktree t)))))
+
 (ert-deftest roost-ghostel-tmux-reaches-a-session-from-a-pane-it-left ()
   ;; Opening a task from a pane its last connection left attaches it, and
   ;; Roost sends the session commands from that pane at once.
@@ -17262,9 +17507,13 @@ it of the same ID's, or nil for the first."
        (should (memq 'roost-status-permission
                      (ensure-list (get-text-property (1- (length astray)) 'face astray)))))
      (should (string-suffix-p " detached" (funcall row 30 "stopped" '(worktreeBranch . "HEAD"))))
-     ;; A long branch is cut, and a narrow sidebar keeps the name and a mark.
-     (should (string-suffix-p " on feature/long-…"
-                              (funcall row 40 "stopped" '(worktreeBranch . "feature/long-branch-name"))))
+     ;; A long branch is whole where the name leaves it room and a gap,
+     ;; and cut where it doesn't; a narrow sidebar keeps the name and a mark.
+     (should (equal (substring-no-properties
+                     (funcall row 40 "stopped" '(worktreeBranch . "feature/long-branch-name")))
+                    " fix auth    on feature/long-branch-name"))
+     (should (string-suffix-p "  on feature/long-b…"
+                              (funcall row 30 "stopped" '(worktreeBranch . "feature/long-branch-name"))))
      (should (string-suffix-p " !" (funcall row 16 "stopped" '(worktreeBranch . "feat"))))
      ;; On its own branch, at work, or with the worktree gone, as before.
      (should (string-suffix-p " stopped" (funcall row 30 "stopped")))

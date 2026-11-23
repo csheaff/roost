@@ -13,6 +13,35 @@ What each release changes, and what to do when upgrading. Newest first.
   set per project in `.dir-locals.el`, so a project you take more care
   over keeps the last look. A merge GitHub refuses waits on you. On GitHub
   only. Nothing to do when upgrading.
+
+- The task panel is on from the start: opening a task docks its panel
+  beside the terminal, where the frame has room, without
+  `(roost-task-panel-mode 1)` in your configuration. When upgrading, that
+  line can go, though it does no harm. To go without the panel, press `q`
+  in it or `I`, or add `(roost-task-panel-mode -1)` to your configuration;
+  the `»` before the task's name collapses it to a strip instead.
+
+- A `»` before the task's name in the panel docked beside a terminal collapses it
+  to a strip at the frame's right edge, and a click on the strip expands it
+  to the width it had, as the sidebar's `«` does for the sidebar. `M-x
+  roost-task-panel-collapse` does either. Nothing to do when upgrading.
+
+- A task's terminal is in its worktree again, as it was before ghostel-tmux
+  became the default: `find-file` and other commands that read a file
+  name from it start there, rather than in your home directory. Nothing to
+  do when upgrading.
+
+- A `«` at the top of the sidebar collapses it to a strip at the frame's
+  edge, and a click on the strip expands it to the width it had: the one
+  you dragged it to, else `roost-sidebar-width`. `M-x
+  roost-sidebar-collapse` does either. Nothing to do when upgrading.
+
+- The sidebar rules a hairline under each project's heading and under
+  "Start a task in", as the dashboard does under its headings, and a task
+  whose worktree is on another branch names as much of that branch as its
+  row has room for, rather than 14 columns of it. Nothing to do when
+  upgrading; `roost-decorate` set to nil draws no hairlines.
+
 - A new task's worktree, when none was made ahead for it, is now made in
   the task's terminal, where you see Git check out its files, rather than
   before Emacs hears back. In a 37,000-file project Emacs hears back in

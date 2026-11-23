@@ -296,7 +296,7 @@ class Run:
 (roost--remember-project %(project)s)
 (roost-watch-mode 1)
 (roost-sidebar-mode 1)
-(roost-task-panel-mode 1)
+;; The task panel is on from the start.
 (keymap-global-set "C-c r" #'roost-dispatch)
 (with-current-buffer "*scratch*" (setq default-directory %(project)s))
 """ % dict(elpa=lisp(str(self.work / "elpa")),
@@ -421,6 +421,12 @@ class Run:
         button, the margin beside a line, or a review note."""
         if self.emacs.eval("(qa-click-%s %s)" % (how, lisp(what))) != "t":
             raise Stuck("No %r on screen to click, in a %s" % (what, how))
+        self.settle()
+
+    def click_header(self, label, mode):
+        """Click on LABEL in the header line of a window in MODE."""
+        if self.emacs.eval("(qa-click-header %s %s)" % (lisp(label), lisp(mode))) != "t":
+            raise Stuck("No %r on screen to click, in a header of %s" % (label, mode))
         self.settle()
 
     def answer_popups(self, *labels):
@@ -623,7 +629,9 @@ class Run:
         frames = screen.get("frames") or {}
         # By key: tasks can share a name.  The sidebar, one for every frame,
         # marks the task opened last, so with one frame, that frame's.
-        if task and len(frames) == 1 and qa_sidebar(screen) and screen.get("marked") != task["key"]:
+        # Collapsed, it lists no task to mark.
+        if (task and len(frames) == 1 and qa_sidebar(screen) and not screen.get("sidebar-collapsed")
+                and screen.get("marked") != task["key"]):
             problems.append("The sidebar marks %s, not %s, the frame's task (%s)"
                             % (screen.get("marked"), task["key"], task["name"]))
         docked = {(window.get("frame"), window["buffer"]) for window in screen["windows"] if window.get("side")}
@@ -1033,7 +1041,7 @@ def merge(qa, repo):
     qa.wait("its terminal", lambda s: any(w["mode"].startswith("tmux-control") and w["selected"]
                                           for w in s["windows"]))
     qa.step("n goes to the task that asks", expect=[
-        ("its panel is beside the terminal", lambda s: qa.window(s, "roost-task-info-mode")["text"].startswith(name))])
+        ("its panel is beside the terminal", lambda s: panel_text(qa, s).startswith(name))])
     qa.type("yes\r")
     qa.status(name, "ready", "idle")
     # Listed under Committed: before, it can show between the agent's add and commit.
@@ -1374,7 +1382,9 @@ def panel_text(qa, screen):
     """The docked panel's text, or else that of the first task panel on screen."""
     docked = next((w for w in screen["windows"]
                    if w["mode"] == "roost-task-info-mode" and w.get("side") == "right"), None)
-    return (docked or qa.window(screen, "roost-task-info-mode") or {}).get("text", "")
+    text = (docked or qa.window(screen, "roost-task-info-mode") or {}).get("text", "")
+    # Docked, the button that collapses it comes before the task's name.
+    return text[2:] if text.startswith("» ") else text
 
 
 def terminals(screen, terminal=None):
@@ -1923,7 +1933,7 @@ def panes(qa, repo):
     qa.step("The other task", expect=[
         ("only its own terminal", lambda s: terminals(s)
          and all(w["terminal"] == s["task"]["terminal"] for w in terminals(s))),
-        ("its panel beside it", lambda s: (qa.window(s, "roost-task-info-mode") or {}).get("text", "").startswith(second))])
+        ("its panel beside it", lambda s: panel_text(qa, s).startswith(second))])
     qa.keys("C-c C-s")
     qa.wait("the session prompt", lambda s: s["prompt"])
     # Showing the session chosen, as vertico chooses the first at once.
@@ -2130,6 +2140,65 @@ def panel_keys(qa, repo):
             ("the echo area says so", lambda s: s["echo"] == "Sidebar on")])
     finally:
         qa.emacs.eval("(progn (roost-task-panel-mode 1) (roost-sidebar-mode 1) t)")
+
+
+@journey("The sidebar, collapsed and expanded")
+def collapse_sidebar(qa, repo):
+    """The « at the top of the sidebar collapses it to a strip, which keeps
+    the terminal beside it, and a click on the strip's » expands it to the
+    width it had."""
+    name = start_task(qa, "Show me the whole terminal")
+    open_task(qa, name)
+    sidebar = lambda s: qa.window(s, "roost-sidebar-list-mode")
+    wide = sidebar(qa.screen())["total"]
+    try:
+        qa.click_header("«", "roost-sidebar-list-mode")
+        qa.step("« collapses the sidebar", expect=[
+            ("it is a strip", lambda s: s["sidebar-collapsed"] and sidebar(s)["total"] < 8),
+            ("with a » to expand it", lambda s: sidebar(s)["header"].strip() == "»"),
+            ("and no tasks", lambda s: not sidebar(s)["text"].strip()),
+            ("the echo area says how to have it back",
+             lambda s: s["echo"] == "Sidebar collapsed; a click on it shows it again"),
+            ("you are in the terminal", lambda s: not sidebar(s)["selected"]),
+            ("which stays", lambda s: terminals(s))])
+        qa.click_header("»", "roost-sidebar-list-mode")
+        qa.step("» expands it", expect=[
+            ("as wide as it was", lambda s: not s["sidebar-collapsed"] and sidebar(s)["total"] == wide),
+            ("with its tasks", lambda s: name in sidebar_rows(s)),
+            ("the echo area says so", lambda s: s["echo"] == "Sidebar expanded")])
+    finally:
+        qa.emacs.eval("(progn (when roost--sidebar-collapsed (roost-sidebar-collapse)) t)")
+
+
+@journey("The task panel, collapsed and expanded")
+def collapse_panel(qa, repo):
+    """The » before the task's name in its panel collapses it to a strip, which gives
+    the terminal its columns, and a click on the strip's « expands it to the
+    width it had."""
+    name = start_task(qa, "Give the terminal the room")
+    open_task(qa, name)
+    panel = lambda s: next((w for w in s["windows"] if w.get("side") == "right"), None)
+    qa.wait("the panel beside it", lambda s: panel(s) and panel(s)["mode"] == "roost-task-info-mode")
+    before = qa.screen()
+    wide = panel(before)["total"]
+    columns = terminals(before)[0]["columns"]
+    try:
+        qa.click_text("»", "roost-task-info-mode")
+        qa.step("» collapses the task panel", expect=[
+            ("it is a strip", lambda s: s["panel-collapsed"] and panel(s) and panel(s)["total"] < 8),
+            ("with a « to expand it", lambda s: panel(s)["header"].strip() == "«"),
+            ("and nothing of the task", lambda s: not panel(s)["text"].strip()),
+            ("the echo area says how to have it back",
+             lambda s: s["echo"] == "Task panel collapsed; a click on it shows it again"),
+            ("you are in the terminal", lambda s: not panel(s)["selected"]),
+            ("which has the panel's columns", lambda s: terminals(s) and terminals(s)[0]["columns"] > columns)])
+        qa.click_header("«", "roost-panel-strip-mode")
+        qa.step("« expands it", expect=[
+            ("as wide as it was", lambda s: not s["panel-collapsed"] and panel(s) and panel(s)["total"] == wide),
+            ("with the task", lambda s: name in panel_text(qa, s)),
+            ("the echo area says so", lambda s: s["echo"] == "Task panel expanded")])
+    finally:
+        qa.emacs.eval("(progn (when roost--panel-collapsed (roost-task-panel-collapse)) t)")
 
 
 @journey("Stop and resume an agent")
@@ -4615,7 +4684,7 @@ def page_as_written(qa, repo):
 
 
 JOURNEYS = [sweep, answer, next_waiting, fold, resize, merge, review, notes, since_looked, panes, window_buffers, reconnect_away, shell,
-            dashboard, panel_keys, stop_resume, retire, discard, teardown, send, attach, update, conflicts, restart,
+            dashboard, panel_keys, collapse_sidebar, collapse_panel, stop_resume, retire, discard, teardown, send, attach, update, conflicts, restart,
             search, workload, question_left,
             walk_away,
             frames, draft_frames, org, drafts, draft_fields, by_clicks, conversation, clicks, overlap, region, tabs,
