@@ -342,8 +342,17 @@ Larger, or undecided.
   still be needed. Attached at the start, it reported idle, working and
   done to Ghostel, and kept reporting after a reattach.
 
-  Not tried: a remote host, resizing. Look again once a release leaves
-  no crash reports.
+  On a Linux host (x86_64), shown on the Mac through `ssh -t`, the same
+  checks passed in each of three runs, each attach drawing in under
+  half a second. A session started over an ssh with no terminal
+  outlived that ssh. After a `kill -9` of the ssh under a terminal,
+  Ghostel closed the buffer, as in #78, and a reattach brought back the
+  whole scrollback and both links. Typing through ssh reached a shell
+  session. The host's daemons shut down cleanly, with no crash, so the
+  crash reports are the Mac's alone.
+
+  Not tried: resizing. Look again once a release leaves no crash
+  reports on macOS.
 - **herdr-core in place of tmux.** [herdr-core](https://github.com/herdrdev/herdr-core)
   (`hc`), split out of herdr on 2026-10-16, keeps each task's terminal in
   a background process with a documented API, answers the agent's status
