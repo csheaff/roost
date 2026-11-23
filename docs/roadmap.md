@@ -334,9 +334,16 @@ Larger, or undecided.
     [zmx#294](https://github.com/neurosnap/zmx/issues/294), though 1.0.1
     has that issue's proposed fix. Sessions worked regardless.
 
-  Not tried: a real agent, a remote host, resizing. Look again once a
-  release leaves no crash reports; then try a real agent through #78's
-  other checks.
+  A real Claude (2.1.330, Haiku) did the same, in four turns, each
+  typed with `zmx send`. Started with nothing attached, it showed on the
+  first attach, and both replies and their link came back after a
+  reattach with no second banner. It reported no status, since zmx
+  answers its probe while nothing is attached, so Roost's relay would
+  still be needed. Attached at the start, it reported idle, working and
+  done to Ghostel, and kept reporting after a reattach.
+
+  Not tried: a remote host, resizing. Look again once a release leaves
+  no crash reports.
 - **herdr-core in place of tmux.** [herdr-core](https://github.com/herdrdev/herdr-core)
   (`hc`), split out of herdr on 2026-10-16, keeps each task's terminal in
   a background process with a documented API, answers the agent's status
