@@ -9,6 +9,7 @@ What each release changes, and what to do when upgrading. Newest first.
   every buffer once for each task, and starting a task took four to ten
   seconds; it takes two to five now, the rest being Emacs drawing and
   collecting garbage. Nothing to do when upgrading.
+
 - The task panel is on from the start: opening a task docks its panel
   beside the terminal, where the frame has room, without
   `(roost-task-panel-mode 1)` in your configuration. When upgrading, that
