@@ -4420,7 +4420,9 @@ def fleet(qa, repo):
     shows its own output, and Emacs keeps answering throughout."""
     labels = ("one", "two", "three", "four")
     # The label first: a task's name comes from the prompt's first words.
-    names = [new_task(qa, "stream %s 300 0.05" % label) for label in labels]
+    # Long enough that the first still prints when the fourth is listed,
+    # late in a whole run, where starting a task takes seconds.
+    names = [new_task(qa, "stream %s 900 0.05" % label) for label in labels]
     for name in names:
         qa.status(name, "running")
     for label, name in zip(labels, names):
