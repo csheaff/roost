@@ -4252,10 +4252,12 @@ BODY gets the window and the last task's key."
                                    (call-interactively
                                     (keymap-lookup (get-text-property 0 'local-map part)
                                                    "<header-line> <mouse-1>")))))))
-                 (roost-test--resize-side sidebar 36)
+                 (roost-test--resize-side sidebar 34)
                  (roost--sync-side-windows)
-                 (should (= (roost--side-width 'left) 36))
+                 (should (= (roost--side-width 'left) 34))
                  (should (string-search "Roost" (funcall header)))
+                 ;; Dragged again, and collapsed before anything saw it.
+                 (roost-test--resize-side sidebar 36)
                  ;; Collapsed: a strip of two columns, with no tasks or title.
                  (funcall click "«")
                  (should roost--sidebar-collapsed)
@@ -4402,9 +4404,11 @@ BODY gets the window and the last task's key."
                (let ((panel (roost--task-panel-window)))
                  (should (eq (window-buffer panel) (roost--task-info-buffer task)))
                  (should (equal (button panel) '("»" roost-task-panel-collapse)))
-                 (roost-test--resize-side panel 50)
+                 (roost-test--resize-side panel 48)
                  (roost--sync-side-windows)
-                 (should (= (roost--side-width 'right) 50))
+                 (should (= (roost--side-width 'right) 48))
+                 ;; Dragged again, and collapsed before anything saw it.
+                 (roost-test--resize-side panel 50)
                  ;; Collapsed from inside it: a strip of two columns, which
                  ;; says nothing of the task, and you are out of it.
                  (select-window panel)

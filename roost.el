@@ -15726,6 +15726,8 @@ counts those waiting for you."
   (interactive)
   (unless roost-sidebar-mode
     (user-error "The sidebar is off; M-x roost-sidebar-mode turns it on"))
+  ;; A width you just dragged it to is its width, though no sync saw it yet.
+  (unless roost--sidebar-collapsed (roost--sync-all-frames))
   (setq roost--sidebar-collapsed (not roost--sidebar-collapsed))
   ;; A strip is nowhere to be.
   (when (and roost--sidebar-collapsed
@@ -15779,6 +15781,8 @@ sidebar and the mode line still say which tasks wait for you."
   (interactive)
   (unless roost-task-panel-mode
     (user-error "The task panel is off; M-x roost-task-panel-mode turns it on"))
+  ;; A width you just dragged it to is its width, though no sync saw it yet.
+  (unless roost--panel-collapsed (roost--sync-all-frames))
   (setq roost--panel-collapsed (not roost--panel-collapsed))
   ;; A strip is nowhere to be.
   (when (and roost--panel-collapsed
