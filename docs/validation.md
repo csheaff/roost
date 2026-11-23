@@ -35,6 +35,51 @@ happened in a section below:
 8. Narrow and widen the frame, and open a second one: the sidebar and panel
    follow.
 
+## Roost merging a pull request on GitHub — 2026-11-22
+
+The helper of `who-merges`, driven as Emacs drives it, against a private
+scratch repository on GitHub with one check (a workflow that runs `true` on
+each pull request) and `gh` 2.88.1. Two tasks made with `mergePr` `squash`,
+each with a commit, pushed and opened with the helper's `pr`. Emacs's side
+was `roost--cache-task` in batch on each task as its host listed it, with
+what it asked the host captured and sent on unchanged. The agent was the
+tests' stand-in, which pushes nothing by itself; no GUI Emacs took part.
+
+- **A pull request that is ready merges.** #1's check passed 22 s after
+  the task started. Listed then, Emacs asked for nothing: GitHub had been
+  asked less than 30 s after the agent's last event. Listed again, it
+  read `to merge`, the row showed no word, the panel said "Roost merges
+  it", and Emacs asked for #1 at its head, into `main`. The helper's one
+  `gh pr merge` took 2.9 s. GitHub shows a squash, "Add first (#1)", with
+  one parent. The next list said `MERGED` and `landed`.
+- **A push since is not merged with it.** #2 read `to merge` and Emacs
+  asked for its head. A second commit was pushed before the helper had
+  the request. GitHub refused: "Head branch was modified. Review and try
+  the merge again." The record kept that as the merge's `error`, and the
+  pull request stayed open.
+- **Once for each head.** The same request again was answered
+  `alreadyAsked` in no time, with GitHub not asked.
+- **The new head merges when its own check has passed.** Listed right
+  after the push, GitHub had no check for the new head yet: Emacs asked
+  for nothing. Once the check passed, it asked for the new head, and the
+  helper merged it in 2.7 s: "Add second (#2)".
+- **A task that merges elsewhere by now is refused**, before GitHub is
+  asked: "The task no longer merges into the branch its pull request is
+  into".
+- **A merged pull request is refused**: "The pull request is merged".
+- **Nothing here is touched.** The primary checkout stayed clean on its
+  first commit: the call names the pull request by its URL and runs in no
+  repository.
+
+Seen on the way, and as on `main`: listed right after that push, with no
+check yet for the new head, the row read `to merge` for you. With a real
+agent the push comes in its turn, and Roost waits 30 s after the turn ends
+before it goes by GitHub's word, which is what hides this. Roost's own
+merge wants a check that passed, so it did not ask.
+
+Not tried: a real agent, a GUI Emacs, a branch rule that blocks the merge,
+a merge queue, a remote host, and `merge` or `rebase`.
+
 ## Before 0.13.0 — 2026-11-17
 
 - **`make test compile`** on the release commit, on macOS 27.2 with Emacs

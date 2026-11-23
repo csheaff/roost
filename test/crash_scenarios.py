@@ -345,6 +345,39 @@ class Tell(KeepsTask):
             problems.append("said told, and its record says %r" % told)
 
 
+class MergePr(KeepsTask):
+    """A pull request Roost merges: asked again after the helper stopped,
+    the forge is asked to merge one head once at most, and the record
+    says what was asked."""
+
+    action = "merge-pr"
+    args = dict(number=12, head="a" * 40, base="main")
+
+    def arrange(self, box):
+        box.origin()
+        super().arrange(box)
+
+    def prepare(self, box):
+        super().prepare(box)
+        path = box.state / "tasks" / (self.task["id"] + ".json")
+        record = json.loads(path.read_text())
+        record.update(prMerge="squash", pr=dict(number=12, url="https://github.com/octo/repo/pull/12",
+                                                state="OPEN", head="a" * 40))
+        path.write_text(json.dumps(record))
+
+    def holds(self, box, problems):
+        super().holds(box, problems)
+        asked = (box.record(self.task["id"]) or {}).get("prMergeAsked")
+        merges = box.merges()
+        if len(merges) > 1:
+            problems.append("asked the forge to merge it %d times" % len(merges))
+        if merges and merges[0] != "https://github.com/octo/repo/pull/12 --squash --match-head-commit " + "a" * 40:
+            problems.append("asked the forge for %r" % merges[0])
+        if (merges or self.final and self.final.get("ok")) and not (
+                isinstance(asked, dict) and (asked.get("number"), asked.get("head")) == (12, "a" * 40)):
+            problems.append("the forge was asked, and its record says %r" % (asked,))
+
+
 class Shell(KeepsTask):
     action = "shell"
 
@@ -750,6 +783,6 @@ ALL = [Merge, MergeSquash, MergeAway, SquashAway, MergeTeardown, MergeSubmodule,
        RetireDead, RetireSquashedOnGitHub, Update, UpdateConflict, Discard, DiscardDirty, DiscardTeardown, DiscardWritingPage,
        Forget, Rename,
        Retarget,
-       Stop, Resume, Seen, Turn, Send, Leave, Tell, Shell, Attach, Inspect, Look, PullRequest, PullRequestPush, Create, CreateFromRemote,
+       Stop, Resume, Seen, Turn, Send, Leave, Tell, MergePr, Shell, Attach, Inspect, Look, PullRequest, PullRequestPush, Create, CreateFromRemote,
        Propose, Show, ShowSeveral, ShowPage, TakeOffer, CreateFromOffer, CreateFromOfferFailing, CreateFork, CreateConversation,
        CreateFromReady, CreateInTerminal]

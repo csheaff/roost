@@ -4,6 +4,16 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- `roost-merge-pull-requests` says who merges a new task's pull request.
+  Nil, the default, leaves it to you as before. `squash`, `merge` or
+  `rebase` has Roost merge it that way, with one `gh pr merge`, at the
+  moment it would read `to merge`: every check passed, no review still
+  asked for, no thread open, and nothing on GitHub in the way. Not while
+  you are at the task's terminal or writing its agent a prompt. It can be
+  set per project in `.dir-locals.el`, so a project you take more care
+  over keeps the last look. A merge GitHub refuses waits on you. On GitHub
+  only. Nothing to do when upgrading.
+
 - The task panel is on from the start: opening a task docks its panel
   beside the terminal, where the frame has room, without
   `(roost-task-panel-mode 1)` in your configuration. When upgrading, that

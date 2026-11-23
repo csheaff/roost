@@ -527,8 +527,11 @@ Larger, or undecided.
   accounts of their own work are often wrong: claiming a success that
   didn't happen was nearly a quarter of the misbehaviour found in 20,574
   sessions ([How Coding Agents Fail Their Users](https://arxiv.org/abs/2605.29442)).
-- **A "safe to merge" verdict, or merging on green.** Roost shows what a
-  merge would rest on and leaves the decision, and the merge, to you. Aids
+- **A "safe to merge" verdict, or merging on green unasked.** Roost shows
+  what a merge would rest on and leaves the decision to you. The merge is
+  yours too, unless you set `roost-merge-pull-requests` for a project: you
+  then decided, once and for that project, that what GitHub requires there
+  is enough. Roost adds no judgement of its own to it. Aids
   that choose an action cost most when they're wrong, more than aids that
   only inform
   ([Onnasch et al. 2014](https://depositonce.tu-berlin.de/items/7df9879f-d77b-4f2b-8760-f0e3d174ca67/full)),
