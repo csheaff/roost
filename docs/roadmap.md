@@ -310,13 +310,22 @@ Larger, or undecided.
   with no tmux. The draft
   [#78](https://github.com/csheaff/roost/pull/78) tried it on 2026-10-20:
   links, Shift+Enter and program status worked without patches, and remote
-  terminals shared one SSH connection, but zmx 0.8.1 isn't ready. It used
-  Speed is not the reason: zmx's own readiness is what decides it. Look again
-  once a zmx release keeps the whole scrollback when you reattach
-  ([zmx#296](https://github.com/neurosnap/zmx/pull/296)) and shows a task
-  started with nothing attached (fixed on zmx's main), and once an upgrade
-  leaves running sessions reachable, or at least fails fast: today `kill`
-  and `attach` hang against a daemon of another version.
+  terminals shared one SSH connection, but zmx 0.8.1 isn't ready.
+  Speed is not the reason: zmx's own readiness is what decides it.
+  Checked again on 2026-11-22 against zmx 1.0.1, from its changelog,
+  issues and source, not run. A task started with nothing attached now
+  shows on the first attach. 1.0 freezes the protocol between client and
+  daemon, so later 1.x upgrades should leave sessions reachable, but a
+  client of another version still gets no error: the daemon drops its
+  messages, so the helper would have to check the version itself. Still
+  open: a reattach loses the last screenful of scrollback
+  ([zmx#296](https://github.com/neurosnap/zmx/pull/296), no answer from
+  its maintainer since 2026-10-21), and it turns links back into plain
+  text, which zmx won't fix since Ghostty's engine drops them when it
+  saves a screen ([zmx#97](https://github.com/neurosnap/zmx/issues/97)).
+  New: each session that ends on macOS leaves a crash report
+  ([zmx#294](https://github.com/neurosnap/zmx/issues/294)). Look again
+  once a reattach keeps the whole scrollback and its links.
 - **herdr-core in place of tmux.** [herdr-core](https://github.com/herdrdev/herdr-core)
   (`hc`), split out of herdr on 2026-10-16, keeps each task's terminal in
   a background process with a documented API, answers the agent's status
