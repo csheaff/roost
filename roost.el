@@ -15754,10 +15754,13 @@ the agent's replies to its terminal.
 It docks while the terminal keeps at least 80 columns, and steps aside
 when a split or a narrower frame would squeeze it.  With workspaces, it
 shows the task whose workspace is current.  \\<roost-dashboard-mode-map>\\[roost-task-panel-mode] in the dashboard or sidebar
-turns it on, and \\<roost-task-info-mode-map>\\[roost-task-info-quit] in the panel turns it off.  It is off until
-you turn it on, since it claims a column beside every task; to have it
-from the start, add `(roost-task-panel-mode 1)' to your configuration."
+turns it on, and \\<roost-task-info-mode-map>\\[roost-task-info-quit] in the panel turns it off.  It is on until
+you turn it off, and the » before the task's name collapses it to a strip
+(`roost-task-panel-collapse'); to go without it from the start, add
+`(roost-task-panel-mode -1)' to your configuration."
   :global t
+  ;; On from the start: opening a task docks its panel.
+  :init-value t
   ;; Turned on, it is whole.
   (setq roost--panel-collapsed nil)
   (roost--watch-layout)
