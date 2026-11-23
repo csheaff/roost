@@ -4,6 +4,11 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A `«` at the top of the sidebar collapses it to a strip at the frame's
+  edge, and a click on the strip expands it to the width it had: the one
+  you dragged it to, else `roost-sidebar-width`. `M-x
+  roost-sidebar-collapse` does either. Nothing to do when upgrading.
+
 - The sidebar rules a hairline under each project's heading and under
   "Start a task in", as the dashboard does under its headings, and a task
   whose worktree is on another branch names as much of that branch as its

@@ -782,6 +782,8 @@ buffer wherever it isn't on screen, such as a workspace of your own.")
 
 (defvar roost-sidebar-mode)
 (defvar roost-task-panel-mode)
+(defvar roost--sidebar-collapsed nil
+  "Whether the sidebar is collapsed to a strip; see `roost-sidebar-collapse'.")
 (defvar roost-watch-mode)
 
 (defvar roost--current-task nil
@@ -13330,7 +13332,8 @@ finish with it.  The others act on the task it sits under."
 
 (defconst roost--clicked-commands
   '(roost-dashboard-mouse-open roost-dashboard-mouse-menu roost-compose-open-task
-    roost-sidebar-new-task roost-sidebar-project-menu roost-compose-submit roost-compose-cancel
+    roost-sidebar-new-task roost-sidebar-project-menu roost-sidebar-collapse
+    roost-compose-submit roost-compose-cancel
     roost-compose-dismiss-offer roost-open-offer roost-offer-mouse-menu
     roost-click-key roost-send-submit roost-send-cancel roost-send-attach
     roost-pr-submit roost-pr-submit-draft roost-pr-cancel)
@@ -14837,7 +14840,12 @@ Hosts send a message's first 1,500 characters."
   :doc "Keys in the task sidebar."
   :parent roost-dashboard-mode-map
   "S" #'roost-dashboard
-  "q" #'roost-sidebar-mode)
+  "q" #'roost-sidebar-mode
+  ;; Collapsed, it has no rows: a click anywhere on it, or RET, expands it.
+  "<mouse-1>" '(menu-item "" roost-sidebar-collapse
+                          :filter (lambda (command) (and roost--sidebar-collapsed command)))
+  "RET" '(menu-item "" roost-sidebar-collapse
+                    :filter (lambda (command) (and roost--sidebar-collapsed command))))
 
 (define-derived-mode roost-sidebar-list-mode roost-dashboard-mode "Roost Sidebar"
   "A compact list of tasks, kept at the left of each frame.
@@ -15072,8 +15080,32 @@ for any other directory, which asks for a host and a folder first."
             ;; Without `mouse-face', so each row lights up alone.
             (apply #'propertize "\n" row))))
 
+(defun roost--sidebar-button (label help)
+  "LABEL as a button in the sidebar's header line that collapses or expands it.
+HELP says which, on hover."
+  (propertize label 'mouse-face 'highlight 'help-echo help
+              'local-map (define-keymap "<header-line> <mouse-1>" #'roost-sidebar-collapse)))
+
 (defun roost--render-sidebar ()
-  "Render the task sidebar from cached state, keeping point on its row."
+  "Render the task sidebar from cached state, keeping point on its row.
+Collapsed, it is a strip with a button to expand it; see
+`roost-sidebar-collapse'."
+  (if roost--sidebar-collapsed
+      (let ((inhibit-read-only t))
+        (roost--light-margins t)
+        (roost--lights-forget 'sidebar nil)
+        (erase-buffer)
+        (setq header-line-format
+              (let ((rule (when-let* ((colour (roost--hairline)))
+                            (list :underline (list :color colour :position t)))))
+                (list (propertize " " 'display '(space :align-to 0) 'face rule)
+                      (propertize (roost--sidebar-button "»" "mouse-1: show the sidebar") 'face rule)
+                      ;; Ruled to the window's edge, as when whole.
+                      (propertize " " 'display '(space :align-to right) 'face rule)))))
+    (roost--render-sidebar-tasks)))
+
+(defun roost--render-sidebar-tasks ()
+  "Render the task sidebar, not collapsed, keeping point on its row."
   ;; A sidebar drawn before Roost was loaded again may have lights, and a
   ;; margin for them, which it has no more.
   (roost--light-margins t)
@@ -15107,14 +15139,21 @@ for any other directory, which asks for a host and a folder first."
                           (if-let* ((summary (roost--sidebar-summary tasks))) (concat "  " summary) "")
                           ;; A space after, which pads the count's tint.
                           (if roost-watch-mode " " (propertize "  paused" 'face 'roost-dim)))))))
+    ;; At its right end, a button that collapses it to a strip.
+    (setq header-line-format
+          (list (car header-line-format)
+                (propertize " " 'display '(space :align-to (- right 2)))
+                (roost--sidebar-button "«" "mouse-1: collapse the sidebar")
+                (propertize " " 'display '(space :align-to right))))
     ;; Ruled off from the tasks under it, to the window's edge.
     (when-let* ((colour (roost--hairline)))
       (let ((rule (list :underline (list :color colour :position t))))
         (setq header-line-format
-              (list (let ((title (copy-sequence (car header-line-format))))
-                      (add-face-text-property 0 (length title) rule t title)
-                      title)
-                    (propertize " " 'display '(space :align-to right) 'face rule)))))
+              (mapcar (lambda (part)
+                        (let ((part (copy-sequence part)))
+                          (add-face-text-property 0 (length part) rule t part)
+                          part))
+                      header-line-format))))
     (roost--insert-unreachable-hosts tasks width t)
     (if (null tasks)
         (insert "\n" (propertize (substitute-command-keys
@@ -15459,12 +15498,19 @@ at these widths, though a workspace saved each one's layout.")
   (or (alist-get side roost--side-widths)
       (if (eq side 'left) roost-sidebar-width roost-task-panel-width)))
 
+(defun roost--strip-width (window)
+  "Columns WINDOW, the sidebar's, takes when collapsed: two for its button.
+And those its fringes, scroll bar and divider take."
+  (+ 2 (- (window-total-width window) (window-body-width window))))
+
 (defun roost--keep-side-width (side window)
   "Keep WINDOW, the side window on SIDE, at the width every task shares.
 A change of width in the window last seen there, in the same workspace
 and frame size, is yours, as by dragging its edge: it becomes the width
 every task shares.  One with the frame resized is the frame's, and stays.
-Any other, as from a workspace's saved layout coming back, is undone."
+Any other, as from a workspace's saved layout coming back, is undone.
+The sidebar collapsed is a strip in every frame, whatever you drag it
+to, and the width every task shares waits for it to expand."
   (let ((seen (frame-parameter nil 'roost-side-widths)))
     (if (not window)
         (setf (alist-get side seen nil t) nil)
@@ -15472,26 +15518,35 @@ Any other, as from a workspace's saved layout coming back, is undone."
              (place (list window (roost--side-workspace)))
              (width (window-total-width window))
              (same (equal (car before) place))
-             (changed (and same (/= width (nth 2 before)))))
-        (cond ((and changed (= (frame-width) (nth 1 before)))
+             (changed (and same (/= width (nth 2 before))))
+             (strip (and (eq side 'left) roost--sidebar-collapsed))
+             (wanted (if strip (roost--strip-width window) (roost--side-width side)))
+             ;; Narrower than Emacs lets a window you resize get.
+             (ignore (if strip window 'preserved)))
+        (cond ((and changed (not strip)
+                    ;; A drag of the strip, expanded before it was seen,
+                    ;; is no width for the sidebar.
+                    (not (eq (nth 3 before) 'strip))
+                    (= (frame-width) (nth 1 before)))
                (setf (alist-get side roost--side-widths) width)
                ;; Frames synced before this one have the old width.
                (when (cdr (frame-list))
                  (roost--layout-changed)))
               ;; Resized with the frame, or as it was since: left be, while
               ;; no drag elsewhere changed the width they share.
-              ((and same (= (nth 3 before) (roost--side-width side))))
-              ((/= width (roost--side-width side))
-               (let ((delta (window-resizable window (- (roost--side-width side) width)
-                                              t 'preserved)))
+              ((and same (not strip) (eql (nth 3 before) wanted)))
+              ((/= width wanted)
+               (let ((delta (window-resizable window (- wanted width) t ignore)))
                  (unless (zerop delta)
-                   (window-resize window delta t 'preserved)
+                   (window-resize window delta t ignore)
                    (setq width (window-total-width window))))))
         ;; Preserved at its width now, so that other windows' changes
         ;; leave it be, and aren't taken for yours.
         (window-preserve-size window t t)
         (setf (alist-get side seen)
-              (list place (frame-width) width (roost--side-width side)))))
+              ;; Expanded again, it is no longer the width seen last, and
+              ;; so goes back to the one every task shares.
+              (list place (frame-width) width (if strip 'strip wanted)))))
     (set-frame-parameter nil 'roost-side-widths seen)))
 
 (defun roost--side-workspace ()
@@ -15583,6 +15638,8 @@ act on the task at point.  Turning the mode on starts
 `roost-watch-mode'.  Frames narrower than `roost-sidebar-width' plus 80
 columns go without."
   :global t
+  ;; Turned on, it is whole.
+  (setq roost--sidebar-collapsed nil)
   (roost--watch-layout)
   (when roost-sidebar-mode (roost-watch-mode 1))
   (roost--sync-all-frames)
@@ -15597,6 +15654,27 @@ columns go without."
                               (+ (roost--side-width 'left) 80)))))))
 
 (defalias 'roost-sidebar #'roost-sidebar-mode)
+
+(defun roost-sidebar-collapse ()
+  "Collapse the sidebar to a strip at the frame's edge, or expand it again.
+The « at the top of the sidebar does this, and so does a click on the
+strip.  It expands to the width it had: the last you dragged it to, else
+`roost-sidebar-width'.  Collapsed, it lists no tasks; the mode line still
+counts those waiting for you."
+  (interactive)
+  (unless roost-sidebar-mode
+    (user-error "The sidebar is off; M-x roost-sidebar-mode turns it on"))
+  (setq roost--sidebar-collapsed (not roost--sidebar-collapsed))
+  ;; A strip is nowhere to be.
+  (when (and roost--sidebar-collapsed
+             (eq (window-buffer) (get-buffer roost--sidebar-buffer)))
+    (roost--leave-side-window))
+  (roost--sync-all-frames)
+  (when-let* ((buffer (get-buffer roost--sidebar-buffer)))
+    (with-current-buffer buffer (roost--render-sidebar)))
+  (message (if roost--sidebar-collapsed
+               "Sidebar collapsed; a click on it shows it again"
+             "Sidebar expanded")))
 
 ;;;###autoload
 (define-minor-mode roost-task-panel-mode

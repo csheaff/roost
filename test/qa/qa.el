@@ -1133,7 +1133,12 @@ question from another of the same prompt asked after it."
                           (overflow . ,(qa--overflow window)))))
                     (qa--windows))))
        ;; The main frame's, though a child frame such as a note box is selected.
-       (sidebar-width . ,roost-sidebar-width)
+       ;; Collapsed, the strip's.
+       (sidebar-width . ,(if-let* ((roost--sidebar-collapsed)
+                                   (window (get-buffer-window roost--sidebar-buffer frame)))
+                             (roost--strip-width window)
+                           roost-sidebar-width))
+       (sidebar-collapsed . ,(if roost--sidebar-collapsed t :json-false))
        ;; Every row of the sidebar, as drawn, those scrolled out of sight
        ;; too: a whole run starts more tasks than its window has lines for.
        (sidebar-rows . ,(when-let* ((sidebar (get-buffer roost--sidebar-buffer)))

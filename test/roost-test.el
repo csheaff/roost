@@ -4224,6 +4224,75 @@ BODY gets the window and the last task's key."
                   (lambda (_frame parameter) (eq parameter 'unsplittable))))
          (should-not (roost--side-frame-p)))))))
 
+;; The « in its header collapses the sidebar to a strip, and a click on the
+;; strip expands it to the width it had, dragged or not.
+(ert-deftest roost-sidebar-collapses-and-comes-back-as-wide ()
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (set-frame-parameter nil 'roost-side-widths nil)
+     (let ((roost-sidebar-mode t) (roost-task-panel-mode nil) (roost-sidebar-width 30)
+           (roost--sidebar-collapsed nil))
+       (cl-letf (((symbol-function 'frame-width) (lambda (&rest _) 200))
+                 ((symbol-function 'roost--sidebar-wanted-p) (lambda () t))
+                 ((symbol-function 'roost--side-workspace) (lambda () "one")))
+         (unwind-protect
+             (progn
+               (roost--sync-side-windows)
+               (let* ((sidebar (get-buffer-window roost--sidebar-buffer))
+                      (header (lambda ()
+                                (with-current-buffer roost--sidebar-buffer
+                                  (mapconcat #'substring-no-properties header-line-format))))
+                      (click (lambda (label)
+                               ;; The command of the header's button so labelled.
+                               (with-current-buffer roost--sidebar-buffer
+                                 (let ((part (seq-find (lambda (part) (equal (substring-no-properties part) label))
+                                                       header-line-format)))
+                                   (should part)
+                                   (call-interactively
+                                    (keymap-lookup (get-text-property 0 'local-map part)
+                                                   "<header-line> <mouse-1>")))))))
+                 (roost-test--resize-side sidebar 36)
+                 (roost--sync-side-windows)
+                 (should (= (roost--side-width 'left) 36))
+                 (should (string-search "Roost" (funcall header)))
+                 ;; Collapsed: a strip of two columns, with no tasks or title.
+                 (funcall click "«")
+                 (should roost--sidebar-collapsed)
+                 (should (= (window-body-width sidebar) 2))
+                 (should-not (string-search "Roost" (funcall header)))
+                 (should (equal (with-current-buffer roost--sidebar-buffer (buffer-string)) ""))
+                 ;; The width it had is kept, whatever becomes of the strip.
+                 (should (= (roost--side-width 'left) 36))
+                 (roost-test--resize-side sidebar 12)
+                 (roost--sync-side-windows)
+                 (should (= (window-body-width sidebar) 2))
+                 (should (= (roost--side-width 'left) 36))
+                 ;; Nor does a drag that expanding it is the first to see.
+                 (roost-test--resize-side sidebar 12)
+                 ;; A click anywhere on the strip, or RET there, expands it.
+                 (with-current-buffer roost--sidebar-buffer
+                   (should (eq (keymap-lookup (current-local-map) "<mouse-1>") 'roost-sidebar-collapse))
+                   (should (eq (keymap-lookup (current-local-map) "RET") 'roost-sidebar-collapse)))
+                 (funcall click "»")
+                 (should-not roost--sidebar-collapsed)
+                 (should (= (window-total-width sidebar) 36))
+                 (should (string-search "Roost" (funcall header)))
+                 ;; Whole, a click and RET are the rows' again.
+                 (with-current-buffer roost--sidebar-buffer
+                   (should-not (eq (keymap-lookup (current-local-map) "<mouse-1>") 'roost-sidebar-collapse))
+                   (should-not (eq (keymap-lookup (current-local-map) "RET") 'roost-sidebar-collapse)))
+                 ;; Turned off and on, it is whole.
+                 (roost-sidebar-collapse)
+                 (should roost--sidebar-collapsed)
+                 (cl-letf (((symbol-function 'roost-refresh) #'ignore)
+                           ((symbol-function 'roost-watch-mode) #'ignore))
+                   (roost-sidebar-mode -1)
+                   (roost-sidebar-mode 1))
+                 (should-not roost--sidebar-collapsed)
+                 (should (= (window-total-width (get-buffer-window roost--sidebar-buffer)) 36))))
+           (set-frame-parameter nil 'roost-side-widths nil)))))))
+
 ;; Each task's workspace saves its layout, sidebar and all, but the
 ;; sidebar is every task's: dragged in one, it is that wide in each.
 (ert-deftest roost-sidebar-keeps-one-width-across-workspaces ()

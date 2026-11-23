@@ -364,6 +364,11 @@ and closing a menu left open. Each project's heading ends with a `+` that
 drafts a task there. With perspectives or tabs and no task yet, there is no
 sidebar to click: start the first with `M-x roost-new-task`.
 
+The `«` at the top of the sidebar, or `M-x roost-sidebar-collapse`, collapses
+it to a strip at the frame's edge, in every task. A click on the strip, or
+`RET` there, expands it to the width it had. Collapsed, it lists no tasks;
+the mode line still counts those waiting for you.
+
 **Talk first.** Below the sidebar's tasks, "New conversation" opens an agent's
 terminal at once, in no project of yours, with nothing to write first: you
 say what you want in its terminal. A conversation is a task like the others,
@@ -1094,6 +1099,7 @@ header line. A failed creation keeps the draft.
 - `roost-sidebar-width` (30), `roost-task-panel-width` (44): the sidebar and
   the panel docked beside a task's terminal. Drag either's edge to change it
   for every task, until Emacs exits; a task's workspace doesn't keep its own.
+  The sidebar collapsed to a strip comes back at that width.
 - `roost-sidebar-recent-projects` (3): how many projects with no tasks the
   sidebar lists on each host for a new task; 0 lists none, nor "Other
   directory…".
