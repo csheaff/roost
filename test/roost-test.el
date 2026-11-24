@@ -16981,7 +16981,7 @@ it of the same ID's, or nil for the first."
        (should (string-match-p "V Read" (funcall label)))
        (switch-to-buffer reading)
        (setq-local roost--reading (roost--key task))
-       (should (string-match-p "V Terminal" (funcall label)))
+       (should (string-match-p "V Back" (funcall label)))
        (with-temp-buffer
          (roost-read-conversation task))
        (should (eq (window-buffer) terminal))
