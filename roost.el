@@ -12520,6 +12520,9 @@ A page its view shows already is left as you have it."
             (page roost--shown-page))
         (roost--drop-page)
         (roost-shown-page-mode)
+        ;; Numbers, as a global mode can turn on, would push the view right.
+        (when (bound-and-true-p display-line-numbers-mode)
+          (display-line-numbers-mode -1))
         (set-buffer-multibyte t)
         (erase-buffer)
         ;; Its bytes as they came, whatever this Emacs would write text as.
@@ -12558,7 +12561,14 @@ No larger: on macOS a view larger than its window draws outside it."
           (dolist (other (get-buffer-window-list buffer nil t))
             (unless (eq other window)
               (ignore-errors (delete-window other))))
-          (xwidget-resize view (max 40 (window-body-width window t))
+          ;; Less whatever comes before it on its line, as line numbers
+          ;; turned on since: the view starts there, and would reach past
+          ;; the window's edge, over the window beside it.
+          (xwidget-resize view (max 40 (- (window-body-width window t)
+                                          (with-selected-window window
+                                            (if (bound-and-true-p display-line-numbers)
+                                                (line-number-display-width t)
+                                              0))))
                           (max 40 (window-body-height window t))))))))
 
 (defconst roost--page-draft-pause 3
