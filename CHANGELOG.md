@@ -4,6 +4,10 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A page, the conversation you read with `V` or one an agent shows, keeps
+  to its window with line numbers on, as a global mode can turn them on:
+  it drew over the task panel beside it. Nothing to do when upgrading.
+
 - `V` reads a task's conversation as a page in place of its terminal:
   what you sent and the agent's last words for each turn, set in a serif
   for reading, with what it wrote on the way folded under them. *Read* in

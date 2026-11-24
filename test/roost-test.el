@@ -17036,6 +17036,26 @@ it of the same ID's, or nil for the first."
        (should (eq (window-buffer) terminal))
        (should (eq (window-dedicated-p) t))))))
 
+(ert-deftest roost-a-page-keeps-to-its-window-beside-line-numbers ()
+  ;; A page's view starts after any line numbers, so it is narrower by
+  ;; them: as wide as the window, it drew over the task panel beside it.
+  (roost-test--isolated
+   (save-window-excursion
+     (delete-other-windows)
+     (with-temp-buffer
+       (switch-to-buffer (current-buffer))
+       (let (sized)
+         (cl-letf (((symbol-function 'roost--page-view) (lambda () 'view))
+                   ((symbol-function 'window-body-width) (lambda (&rest _) 800))
+                   ((symbol-function 'window-body-height) (lambda (&rest _) 600))
+                   ((symbol-function 'line-number-display-width) (lambda (&rest _) 36))
+                   ((symbol-function 'xwidget-resize) (lambda (_view width height) (setq sized (list width height)))))
+           (roost--fit-page (selected-window))
+           (should (equal sized '(800 600)))
+           (setq-local display-line-numbers t)
+           (roost--fit-page (selected-window))
+           (should (equal sized '(764 600)))))))))
+
 (provide 'roost-test)
 
 (ert-deftest roost-terminal-size-is-the-window-the-task-opens-in ()
