@@ -13942,6 +13942,9 @@ class ReadConversation(unittest.TestCase):
         self.assertIn("<ol>\n<li>one\n<ul>\n<li>inner", page)
         self.assertIn('<a href="https://example.com">site</a>', page)
         self.assertNotIn("javascript:", page.replace("<span class=path>js</span>", ""))
+        # Indented, a heading is still one, and every line is taken once.
+        self.assertEqual(roost.page_markdown("  ## Indented\ntext"), "<h3>Indented</h3>\n<p>text</p>")
+        self.assertEqual(roost.page_markdown("#nospace\n>"), "<p>#nospace</p>\n<blockquote></blockquote>")
 
 
 class LastMessage(unittest.TestCase):

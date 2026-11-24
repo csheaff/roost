@@ -12657,6 +12657,11 @@ is decided once the question is done, as the task may have gone by then."
   "The key of the task whose conversation this buffer shows to read.")
 (put 'roost--reading 'permanent-local t)
 
+(defvar-local roost--reading-asked 0
+  "How many times this conversation was asked for: a reply to an earlier
+ask, which can come after a later one's, is older, and left unshown.")
+(put 'roost--reading-asked 'permanent-local t)
+
 (defvar-keymap roost-reading-mode-map
   :doc "Keys for a task's conversation set to read."
   "q" #'roost-read-conversation
@@ -12744,10 +12749,12 @@ own HTML renderer sets the page."
   (interactive)
   (if-let* ((key roost--reading)
             (task (gethash key roost--tasks)))
-    (let ((buffer (current-buffer)))
+    (let ((buffer (current-buffer))
+          (asked (cl-incf roost--reading-asked)))
       (roost--request (roost--field task 'host) "read" (list (cons 'id (roost--field task 'id)))
                       (lambda (result)
-                        (when (buffer-live-p buffer)
+                        (when (and (buffer-live-p buffer)
+                                   (= asked (buffer-local-value 'roost--reading-asked buffer)))
                           (roost--fill-reading buffer key result)))
                       (lambda (error)
                         (message "Roost: can't read %s's conversation: %s"
@@ -12766,8 +12773,14 @@ the main window you are in."
   "Show RESULT, the page of the conversation of the task with KEY."
   (when-let* ((task (gethash key roost--tasks))
               ((stringp (alist-get 'page result))))
-    (let ((buffer (get-buffer-create (format "*%s: conversation*" (roost--task-label task))))
+    (let ((buffer (or (seq-find (lambda (buffer) (equal (buffer-local-value 'roost--reading buffer) key))
+                                (buffer-list))
+                      ;; By the task, not its name, which a rename changes
+                      ;; and another task may take.
+                      (generate-new-buffer (format "*%s: conversation*" (roost--task-label task)))))
           (window (roost--reading-window task)))
+      (with-current-buffer buffer
+        (cl-incf roost--reading-asked))
       (select-window window)
       ;; Borrowed: a window kept for its terminal, as some setups keep
       ;; one, takes the page too, and gets its terminal back after.

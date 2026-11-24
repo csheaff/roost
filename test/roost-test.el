@@ -16988,6 +16988,25 @@ it of the same ID's, or nil for the first."
        (should-not (buffer-live-p reading))
        (should (string-match-p "V Read" (funcall label)))))))
 
+(ert-deftest roost-a-conversation-read-again-shows-the-newest-reply ()
+  ;; Two reads at once: the earlier's reply, coming last, is left unshown.
+  (roost-test--isolated
+   (skip-unless (and (fboundp 'libxml-available-p) (libxml-available-p)))
+   (let* (replies
+          (task (roost--cache-task "dev" (append '((name . "budget"))
+                                                 (roost-test--task "1111111111111111" "ready"))))
+          (page (lambda (words) `((page . ,(format "<section id=last><p>%s</p></section>" words))))))
+     (with-temp-buffer
+       (setq-local roost--reading (roost--key task))
+       (cl-letf (((symbol-function 'roost--request)
+                  (lambda (_host _action _parameters success &rest _) (push success replies))))
+         (roost-read-again)
+         (roost-read-again))
+       (funcall (car replies) (funcall page "newer"))
+       (funcall (cadr replies) (funcall page "older"))
+       (should (string-search "newer" (buffer-string)))
+       (should-not (string-search "older" (buffer-string)))))))
+
 (provide 'roost-test)
 
 (ert-deftest roost-terminal-size-is-the-window-the-task-opens-in ()

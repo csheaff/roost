@@ -8706,9 +8706,10 @@ def page_markdown(words):
             out.append("<pre><code>%s</code></pre>" % html.escape("\n".join(body)))
         elif not line.strip():
             i += 1
-        elif re.match(r"^#{1,6}\s", line):
-            level = min(len(line) - len(line.lstrip("#")) + 1, 6)
-            out.append("<h%d>%s</h%d>" % (level, page_inline(line.lstrip("#").strip()), level))
+        elif re.match(r"^\s*#{1,6}\s", line):
+            heading = line.strip()
+            level = min(len(heading) - len(heading.lstrip("#")) + 1, 6)
+            out.append("<h%d>%s</h%d>" % (level, page_inline(heading.lstrip("#").strip()), level))
             i += 1
         elif re.match(r"^\s*([-*_])\s*(\1\s*){2,}$", line):
             out.append("<hr>")
@@ -8731,7 +8732,9 @@ def page_markdown(words):
         elif PAGE_LIST.match(line):
             i = page_list(lines, i, out)
         else:
-            body = []
+            # Its first line whatever it starts with, so that each turn of
+            # the loop takes at least a line.
+            body, i = [lines[i].strip()], i + 1
             while (i < len(lines) and lines[i].strip() and not PAGE_LIST.match(lines[i])
                    and not re.match(r"^\s*(```|~~~|#{1,6}\s|>)", lines[i])):
                 body.append(lines[i].strip())

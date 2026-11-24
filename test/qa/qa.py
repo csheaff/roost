@@ -4509,7 +4509,7 @@ def crashed(qa, repo):
             for name in (first, second)))])
 
 
-@journey("A page an agent shows")
+@journey("A conversation read as a page")
 def read_conversation(qa, repo):
     """A task's conversation, read as a page in place of its terminal: a
     click on Read in its panel sets it, at the newest turn, where Read then
@@ -4546,6 +4546,7 @@ def read_conversation(qa, repo):
         ("you are in the terminal", lambda s: selected_terminal(s) is not None)])
 
 
+@journey("A page an agent shows")
 def show_page(qa, repo):
     """An agent shows a page it wrote, which opens beside its terminal as
     an image does. What its button asks to send comes to a draft, which
