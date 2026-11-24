@@ -22,8 +22,8 @@ needs you, and you review and merge their work with Magit.
 
 2. **Go where you're needed.** `C-c r n` takes you to the next agent waiting
    for you. Answer it in its own terminal.
-3. **Read what it said.** `V` sets the conversation as a page in place of
-   the terminal, and `V` again brings the terminal back.
+3. **Read what it said.** `C-c r V`, or Read in the task's panel, sets the
+   conversation as a page in place of the terminal. Back brings it back.
 
    ![The same three columns, with the task's terminal swapped for its conversation set as a page: your question in a quiet bubble, then the agent's answer in a serif, a table of spending by category with each one's share, and a short list of what stands out; the panel's row of views ends in V Back](docs/images/roost-read.png)
 
