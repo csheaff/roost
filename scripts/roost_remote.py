@@ -8598,8 +8598,10 @@ READ_MESSAGE_LIMIT = 64 * 1024
 READ_NOTES_LIMIT = 12
 
 # What programs send in your name, which a page folds: Claude Code's notes,
-# and an app's or a hook's events, each in a tag of its own around it all.
-SENT_FOR_YOU = re.compile(r"\s*<([a-z][\w-]*)(?:\s[^>]*)?>.*</\1>\s*\Z", re.S)
+# and an app's or a hook's events, each in a tag of its own around it all,
+# of a name those programs use: not a tag of yours, as an HTML example.
+SENT_FOR_YOU = re.compile(r"\s*<((?:command|local-command|bash)-[a-z-]+|task-notification|system-reminder"
+                          r"|user-prompt-submit-hook|[a-z]+(?:-[a-z]+)*-event)(?:\s[^>]*)?>.*</\1>\s*\Z", re.S)
 
 
 def conversation_turns(adapter, path, deadline):
@@ -8662,10 +8664,10 @@ def read_conversation(store, task):
         if len(turns) > 1:
             turns, cut = turns[max(1, len(turns) // 4):], True
         else:
-            # One turn too large: without its notes, and its words cut to a
-            # size whose page fits, however escaping and encoding grow it.
-            most = READ_PAGE_LIMIT // 16
+            # One turn too large: without its notes, and its words cut by
+            # half each time, until its page fits.
             turn = turns[0]
+            most = max(len(turn["you"] or ""), len(turn["reply"] or "")) // 2
             turns, cut = [dict(turn, notes=[], you=turn["you"] and turn["you"][:most],
                                reply=turn["reply"] and turn["reply"][:most])], True
 
@@ -8888,9 +8890,22 @@ READ_PAGE_TAIL = """<button id=latest>Latest reply ↓</button>
 function roostMode(mode) { document.documentElement.dataset.mode = mode; }
 document.querySelectorAll('.you').forEach(function (you) {
   if (you.scrollHeight > 200) {
+    var open = function () {
+      you.classList.remove('long');
+      you.removeAttribute('title');
+      you.removeAttribute('role');
+      you.removeAttribute('tabindex');
+      you.setAttribute('aria-expanded', 'true');
+    };
     you.classList.add('long');
     you.title = 'Show all of it';
-    you.addEventListener('click', function () { you.classList.remove('long'); you.title = ''; });
+    you.setAttribute('role', 'button');
+    you.setAttribute('tabindex', '0');
+    you.setAttribute('aria-expanded', 'false');
+    you.addEventListener('click', open);
+    you.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+    });
   }
 });
 var turns = document.querySelectorAll('.turn'), last = turns[turns.length - 1];

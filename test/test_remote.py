@@ -13896,6 +13896,9 @@ class ReadConversation(unittest.TestCase):
         page = self.read("0a1b2c3d4e5f6a7b")["page"]
         self.assertIn("<summary>Sent for you: ci monitor event</summary>", page)
         self.assertIn("<div class=you><p>&lt;div&gt; is misaligned in the header</p></div>", page)
+        # A prompt wholly in a tag of yours is yours.
+        self.assertFalse(roost.SENT_FOR_YOU.match("<b>Fix CSV quoting</b>"))
+        self.assertTrue(roost.SENT_FOR_YOU.match("<task-notification>done</task-notification>"))
 
     def test_a_long_turn_keeps_its_newest_notes_and_a_missing_file_is_said(self):
         worktree = self.task("claude", agentSession="s1", lastPrompt="Count", lastReply="Counted.")
@@ -13937,6 +13940,12 @@ class ReadConversation(unittest.TestCase):
             result = self.read("0a1b2c3d4e5f6a7b")
         self.assertLessEqual(len(result["page"].encode()), 200000)
         self.assertTrue(result["cut"])
+        # Words that grow most as markup still come to fit.
+        grows = ">>>>>>>>\nx\n" * 5800
+        self.conversation(worktree, "s1", [self.said("user", grows, 0),
+                                           self.said("assistant", [{"type": "text", "text": grows}], 1)])
+        with patch.object(roost, "READ_PAGE_LIMIT", 100000):
+            self.assertLessEqual(len(self.read("0a1b2c3d4e5f6a7b")["page"].encode()), 100000)
 
     def test_markdown_is_set_as_agents_write_it(self):
         page = roost.page_markdown("# Title\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n> quoted\n\n"

@@ -12708,6 +12708,8 @@ own HTML renderer sets the page."
   (interactive)
   (if roost--reading
       (roost--leave-reading)
+    ;; A question left open would hold the page back until it is answered.
+    (roost--quit-questions-here (lambda () (roost-read-conversation task)))
     (let* ((task (or task (roost--reading-task) (roost--read-task "Read the conversation of task: ")))
            (key (roost--key task))
            (shown (roost--reading-shown key))
@@ -12807,6 +12809,7 @@ the main window you are in."
 (defvar shr-max-width)
 (declare-function dom-remove-node "dom" (dom node))
 (declare-function dom-by-tag "dom" (dom tag))
+(declare-function dom-attr "dom" (node attr))
 (declare-function text-property-search-backward "text-property-search" (property &optional value predicate not-current))
 (declare-function prop-match-beginning "text-property-search" (cl-x))
 
@@ -12836,8 +12839,11 @@ renderer sets it, without what the agent wrote on the way."
                   (shr-use-fonts t)
                   ;; A measure to read at, in a wide window too.
                   (shr-max-width 72))
-              (dolist (node (append (dom-by-tag dom 'details) (dom-by-tag dom 'script)
-                                    (dom-by-tag dom 'button)))
+              ;; The agent's notes on the way, folded in a web view; a
+              ;; message sent for you stays, as a renderer can't fold it.
+              (dolist (node (append (seq-filter (lambda (node) (equal (dom-attr node 'class) "behind"))
+                                                (dom-by-tag dom 'details))
+                                    (dom-by-tag dom 'script) (dom-by-tag dom 'button)))
                 (dom-remove-node dom node))
               (shr-insert-document dom)))
           (require 'text-property-search)
