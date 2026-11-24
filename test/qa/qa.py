@@ -4513,7 +4513,7 @@ def crashed(qa, repo):
 def read_conversation(qa, repo):
     """A task's conversation, read as a page in place of its terminal: a
     click on Read in its panel sets it, at the newest turn, where Read then
-    reads Terminal, and a click on that takes you back; so does q. In a web
+    reads Back, and a click on that takes you back; so does q. In a web
     view where this Emacs has one, else as Emacs's own HTML renderer sets it."""
     task = new_task(qa, "read the ledger report")
     qa.status(task, "ready", "idle")
@@ -4528,14 +4528,14 @@ def read_conversation(qa, repo):
         ("no terminal of the task shows", lambda s: not terminals(s)),
         ("it is the window you are in", lambda s: reading(s)["selected"]),
         ("the panel still shows beside it", lambda s: qa.window(s, "roost-task-info-mode")),
-        ("the panel offers the way back", lambda s: "V Terminal" in qa.window(s, "roost-task-info-mode")["text"]),
+        ("the panel offers the way back", lambda s: "V Back" in qa.window(s, "roost-task-info-mode")["text"]),
         ("what you sent reads in it" if not web else "a web view draws it",
          lambda s: ("read the ledger report" in reading(s)["text"]) if not web
          else qa.emacs.eval("(with-current-buffer %s (and (roost--page-view) t))" % lisp(name)) == "t")])
-    if qa.emacs.eval("(qa-click-text \"V Terminal\" \"roost-task-info-mode\")") != "t":
-        raise Stuck("No V Terminal in the panel to click")
+    if qa.emacs.eval("(qa-click-text \"V Back\" \"roost-task-info-mode\")") != "t":
+        raise Stuck("No V Back in the panel to click")
     qa.wait("the terminal again", lambda s: terminals(s) and not reading(s))
-    qa.step("A click on Terminal brings the agent's terminal back", expect=[
+    qa.step("A click on Back brings the agent's terminal back", expect=[
         ("the terminal is where the page was", lambda s: terminals(s)),
         ("the panel offers to read it again", lambda s: "V Read" in qa.window(s, "roost-task-info-mode")["text"])])
     qa.emacs.eval("(qa-click-text \"V Read\" \"roost-task-info-mode\")")

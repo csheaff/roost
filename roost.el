@@ -12666,7 +12666,7 @@ is decided once the question is done, as the task may have gone by then."
 ;; The host's helper reads the conversation, whichever agent keeps it, and
 ;; sets the page; Emacs draws it as it draws an agent's page, or, without
 ;; a web view, sets it with its own HTML renderer.  The task panel's Read
-;; reads Terminal while the page shows, and goes back.
+;; reads Back while the page shows, and goes back.
 
 (defvar-local roost--reading nil
   "The key of the task whose conversation this buffer shows to read.")
@@ -13459,7 +13459,7 @@ ready means, and the menu's key."
                                                        '((roost-review . "Magit") (roost-files . "Files")
                                                          (roost-shell . "Shell")))
                                            (list (cons 'roost-read-conversation
-                                                       (if (roost--reading-shown (roost--key task)) "Terminal" "Read")))
+                                                       (if (roost--reading-shown (roost--key task)) "Back" "Read")))
                                            '((roost-dispatch . "More")))
                                    "  "))
               (concat "Ready means the agent is waiting for you, not that the work is reviewed.\n"

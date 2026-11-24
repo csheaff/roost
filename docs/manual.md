@@ -312,7 +312,7 @@ Press `V` in a task's panel or the dashboard, or click *Read* in the
 panel, and the conversation is set as a page in the terminal's place: each turn is what
 you sent and the agent's last words, in a serif at a measure for reading,
 with what the agent wrote on the way folded under them. It opens at the
-newest turn. *Read* in the panel then reads *Terminal*, and a click on it,
+newest turn. *Read* in the panel then reads *Back*, and a click on it,
 or `q` or `V` in the page, take you back; `g` reads it again. The page follows your theme's background and whether it is
 dark. In an Emacs built with xwidgets it is a web view; elsewhere, Emacs's
 own HTML renderer sets it, without the folded notes. The host reads the

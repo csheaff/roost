@@ -28,6 +28,7 @@ The title bar was cropped from each capture.
 | `roost-new-task.png` | `plans.org` beside the draft that `C-c r c` made from its heading |
 | `roost-review.png` | `spending-chart`'s terminal above the diff of `ledger.py`, with a review note under a line |
 | `roost-dashboard.png` | The dashboard of the same nine tasks, with `budget-alerts` asking |
+| `roost-read.png` | `spending-summary`'s conversation set as a page with `V`, in place of its terminal, beside the sidebar and its panel |
 | `roost-show-images.gif` | `vectorise-signals`' terminal alone, then beside the two images its agent shows together: the signals a line of detectors records, and the reconstruction |
 | `roost-show-page.gif` | `replay-reconstruction`'s terminal alone, then beside the page its agent wrote, as it plays a filtered back projection one projection at a time |
 | `roost-show-as-written.gif` | `explain-back-projection`'s terminal alone, then beside the page Pi draws, as the model writes it |
@@ -61,6 +62,16 @@ GitHub shows the README: 172 columns by 38 lines for the hero, 132 by 20 for
 the draft and 132 by 18 for the dashboard, with the sidebar and panel off,
 and 156 by 36 for the review, with the sidebar off. The disposable projects,
 tasks and capture state were removed afterwards.
+
+## The conversation as a page
+
+`roost-read.png` was taken on 2026-11-24 in the same capture Emacs at 172
+columns by 38 lines, with only the local `ledger` project. Its one task,
+`spending-summary`, was a Claude Code session (`--model sonnet`, with
+`--permission-mode acceptEdits`) asked to add a `summary` command with a
+test, and then to run it on `sample-export.csv` and say what stands out;
+its two requests to run commands were approved. The shot is of the page
+`V` set from that conversation, at its newest turn.
 
 ## What an agent shows
 
