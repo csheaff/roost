@@ -604,6 +604,21 @@ It waits, as for a task whose terminal is off screen."
            `((data . ,(funcall bytes shown))))))
     (or (gethash key roost--shown-waiting) (error "%s shows nothing" state))))
 
+(defconst roost-sweep--reading-page
+  (concat "<!doctype html><body><section class=turn id=last><div class=you><p>Make the report add up</p></div>"
+          "<div class=reply><p>It adds up now.</p></div></section></body>")
+  "The page of a conversation to read, as a host sets it.")
+
+(defun roost-sweep--reading-make (state)
+  "The buffer of STATE's task's conversation set to read."
+  (let ((buffer (get-buffer-create "*sweep: conversation*")))
+    (roost--fill-reading buffer (roost-sweep--key state) `((page . ,roost-sweep--reading-page)))
+    buffer))
+
+(defun roost-sweep--reading-render ()
+  "Set the current buffer's conversation again."
+  (roost--fill-reading (current-buffer) roost--reading `((page . ,roost-sweep--reading-page))))
+
 (defun roost-sweep--shown-render ()
   "Draw again what the current buffer shows of its task's agent's."
   (roost--draw-shown (current-buffer) (get-buffer-window)))
@@ -684,7 +699,11 @@ their order: an image that fills the frame changes only those."
           :layouts (beside none) :sized t :states ("shows a page")
           :goes (roost-sweep--task-goes roost-sweep--buffer-killed)
           :also ((key [?z] . roost-enlarge-image))
-          :keys (roost-quit-image)))
+          :keys (roost-quit-image))
+    ;; A conversation set to read, as Emacs's HTML renderer sets it.
+    (conversation :make roost-sweep--reading-make :render roost-sweep--reading-render
+                  :layouts (selected none) :sized t
+                  :keys (roost-read-conversation roost-read-again)))
   "Roost's views, each (NAME . PLIST).
 :mode makes the buffer, :setup gives it what it shows for a state,
 :render draws it, :point finds the state's task in it, and :buffer names

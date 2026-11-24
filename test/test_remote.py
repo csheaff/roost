@@ -13795,6 +13795,129 @@ class Search(unittest.TestCase):
         self.assertEqual((result["tasks"], result["incomplete"]), ([], True))
 
 
+class ReadConversation(unittest.TestCase):
+    """A task's conversation set as a page to read, from each agent's own record of it."""
+
+    # Conversations as each agent writes them, as for search.
+    setUp = Search.setUp
+    conversation = Search.conversation
+    said = staticmethod(Search.said)
+    stamp = staticmethod(Search.stamp)
+    rollout = Search.rollout
+    codex_said = Search.codex_said
+    pi_session = Search.pi_session
+    pi_said = Search.pi_said
+
+    def read(self, task_id):
+        reply = roost.rpc(dict(root=str(self.state), action="read", id=task_id))
+        self.assertTrue(reply["ok"], reply)
+        return reply["result"]
+
+    def task(self, agent, **fields):
+        worktree = self.state / "worktrees" / self.repo_hash / "fix-csv-quoting-0a1b2c"
+        self.store.save(dict(dict(id="0a1b2c3d4e5f6a7b", name="fix CSV quoting", repo=self.repo, agent=agent,
+                                  worktree=str(worktree), branch="roost/fix-csv-quoting-0a1b2c",
+                                  status="ready", baseCommit="0" * 40, socket="roost"), **fields))
+        return worktree
+
+    def test_claude_turns_are_what_you_sent_and_its_last_words(self):
+        worktree = self.task("claude", agentSession="s1")
+        self.conversation(worktree, "s1", [
+            self.said("user", "Quote CSV fields that contain commas", 1),
+            self.said("assistant", [{"type": "text", "text": "Looking at the **writer**."}], 2),
+            self.said("assistant", [{"type": "tool_use", "name": "Bash", "input": {"command": "rm -rf x"}}], 3),
+            self.said("user", [{"type": "tool_result", "content": "tool output, not a turn"}], 4),
+            self.said("assistant", [{"type": "text", "text": "Done:\n\n- quotes commas\n- `csv.py` changed"}], 5),
+            self.said("user", "<task-notification>a note of Claude's own</task-notification>", 6),
+            self.said("user", "And <script>alert(1)</script> the header?", 7),
+        ])
+        result = self.read("0a1b2c3d4e5f6a7b")
+        page = result["page"]
+        self.assertEqual((result["turns"], result["whole"], result["cut"]), (2, True, False))
+        self.assertIn("<div class=you><p>Quote CSV fields that contain commas</p></div>", page)
+        # Its last words are the reply, set; what came on the way is folded.
+        self.assertIn("<li><code>csv.py</code> changed", page)
+        self.assertIn("<summary>On the way: 1 note</summary><div class=said><p>Looking at the "
+                      "<strong>writer</strong>.</p></div>", page)
+        self.assertNotIn("rm -rf", page)
+        self.assertNotIn("tool output", page)
+        self.assertNotIn("a note of Claude's own", page)
+        # What anyone wrote is text, never markup.
+        self.assertIn("And &lt;script&gt;alert(1)&lt;/script&gt; the header?", page)
+        self.assertNotIn("<script>alert", page)
+        self.assertIn("<p class=working>No reply yet.</p>", page)
+        self.assertIn("<section class=turn id=last>", page)
+
+    def test_codex_and_pi_are_read_from_their_own_records(self):
+        worktree = self.task("codex", agentSession="abc-123")
+        self.rollout("abc-123", worktree, [
+            self.codex_said("user", "Quote CSV fields", 1, kinds=["user.text"]),
+            self.codex_said("user", "<environment_context>cwd</environment_context>", 1, kinds=["environment"]),
+            self.codex_said("assistant", "Quoted them.", 2),
+        ])
+        page = self.read("0a1b2c3d4e5f6a7b")["page"]
+        self.assertIn("<p>Quote CSV fields</p>", page)
+        self.assertIn("<p>Quoted them.</p>", page)
+        self.assertNotIn("environment_context", page)
+
+        session = self.pi_session("0a1b2c3d4e5f6a7b", "s1", worktree, [
+            self.pi_said("user", [dict(type="text", text="Quote CSV fields for Pi")], 1),
+            self.pi_said("assistant", [dict(type="text", text="Pi quoted them.")], 2, stopReason="stop"),
+        ])
+        self.task("pi", agentSession=str(session))
+        page = self.read("0a1b2c3d4e5f6a7b")["page"]
+        self.assertIn("<p>Quote CSV fields for Pi</p>", page)
+        self.assertIn("<p>Pi quoted them.</p>", page)
+        # A session a hook named outside the folder Roost gives Pi is not read.
+        elsewhere = self.home / "other.jsonl"
+        elsewhere.parent.mkdir(parents=True, exist_ok=True)
+        elsewhere.write_text(json.dumps(self.pi_said("user", [dict(type="text", text="not the task's")], 1)) + "\n")
+        self.task("pi", agentSession=str(elsewhere), lastPrompt="the prompt it was sent")
+        result = self.read("0a1b2c3d4e5f6a7b")
+        self.assertNotIn("not the task's", result["page"])
+        self.assertFalse(result["whole"])
+
+    def test_an_agent_whose_conversation_roost_cant_read_shows_the_latest(self):
+        self.task("opencode", lastPrompt="Quote CSV fields", lastReply="Quoted them.")
+        result = self.read("0a1b2c3d4e5f6a7b")
+        self.assertEqual((result["turns"], result["whole"]), (1, False))
+        self.assertIn("<p>Quote CSV fields</p>", result["page"])
+        self.assertIn("<p>Quoted them.</p>", result["page"])
+        self.assertIn("Roost can't read this agent's conversation", result["page"])
+
+    def test_a_transcript_outside_claudes_projects_is_not_read(self):
+        secret = self.home / "secret.jsonl"
+        secret.parent.mkdir(parents=True, exist_ok=True)
+        secret.write_text(json.dumps(self.said("user", "a file a hook named", 1)) + "\n")
+        self.task("claude", transcript=str(secret))
+        self.assertNotIn("a file a hook named", self.read("0a1b2c3d4e5f6a7b")["page"])
+
+    def test_a_long_conversation_keeps_its_newest_turns(self):
+        worktree = self.task("claude", agentSession="s1")
+        self.conversation(worktree, "s1", [entry for minute in range(40) for entry in (
+            self.said("user", "question %d" % minute, minute),
+            self.said("assistant", [{"type": "text", "text": "answer %d " % minute + "x" * 2000}], minute))])
+        with patch.object(roost, "READ_PAGE_LIMIT", 30000):
+            result = self.read("0a1b2c3d4e5f6a7b")
+        self.assertTrue(result["cut"])
+        self.assertLess(len(result["page"].encode()), 30000)
+        self.assertIn("question 39", result["page"])
+        self.assertNotIn("question 0<", result["page"])
+        self.assertIn("Older turns are left out.", result["page"])
+
+    def test_markdown_is_set_as_agents_write_it(self):
+        page = roost.page_markdown("# Title\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n> quoted\n\n"
+                                   "```\n<b>code</b>\n```\n\n1. one\n   - inner\n2. two\n\n"
+                                   "[site](https://example.com) and [js](javascript:alert(1))")
+        self.assertIn("<h2>Title</h2>", page)
+        self.assertIn("<td>1</td><td>2</td>", page)
+        self.assertIn("<blockquote><p>quoted</p></blockquote>", page)
+        self.assertIn("<pre><code>&lt;b&gt;code&lt;/b&gt;</code></pre>", page)
+        self.assertIn("<ol>\n<li>one\n<ul>\n<li>inner", page)
+        self.assertIn('<a href="https://example.com">site</a>', page)
+        self.assertNotIn("javascript:", page.replace("<span class=path>js</span>", ""))
+
+
 class LastMessage(unittest.TestCase):
     """Adapters read the end of each agent's own transcript, from a fake HOME."""
 

@@ -307,6 +307,20 @@ rests on the model. This is an experiment: it may change or go.
 - A Codex older than 0.163.0 that does not know a server's
   `default_tools_approval_mode` asks before each of the tools.
 
+**Read a conversation as a page.** Terminal text is hard on tired eyes.
+Press `V` in a task's panel or the dashboard, click *Read* in the panel, or
+click *Read* in the mode line under the agent's terminal, and the
+conversation is set as a page in the terminal's place: each turn is what
+you sent and the agent's last words, in a serif at a measure for reading,
+with what the agent wrote on the way folded under them. It opens at the
+newest turn. `q`, `V` or *Terminal* in the mode line take you back, and `g`
+reads it again. The page follows your theme's background and whether it is
+dark. In an Emacs built with xwidgets it is a web view; elsewhere, Emacs's
+own HTML renderer sets it, without the folded notes. The host reads the
+conversation Claude Code, Codex or Pi keeps there, so it works on a remote
+host too; for OpenCode, whose conversation Roost can't read, the page shows
+what you last sent and its latest reply.
+
 **See an image an agent shows.** Most agents send no images to their
 terminal, so ask the agent to show you one, such as a screenshot or a chart
 it made: it opens in a window beside the task's terminal, and you stay where
@@ -776,6 +790,7 @@ redraws the panel and `q` closes it:
 | `C` | `roost-new-conversation` | Open an agent's terminal in no project, with nothing to write first (`C-u` asks which host) |
 | `n` | `roost-next-waiting` | Next task waiting for you, permission requests first, saying why it waits; once none does, again goes back to where you started |
 | `t` | `roost-shell` | Shell beside the agent, in the worktree (reused) |
+| `V` | `roost-read-conversation` | Read the task's conversation as a page in place of its terminal, at the newest turn; `q` or `V` there goes back, `g` reads it again ([above](#a-day-with-roost)) |
 | `f` | `roost-files` | Dired in the worktree |
 | `r` | `roost-review` | Magit in the worktree, showing what changed since you last looked |
 | `D` | `roost-diff` | Diff the task's own changes, including uncommitted ones; with no new file left out, that counts as looking at it |

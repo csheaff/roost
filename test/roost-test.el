@@ -560,7 +560,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
                  (should-not (string-match-p "Waiting for your answer\\|Agent's latest reply\\|Fixed the" text))
                  ;; What the task is for, which the terminal shows, is one
                  ;; line under the keys.
-                 (should (string-match-p "^r Magit  f Files  t Shell  \\? More\n▸ fix authentication\n▸ Details\n\\'"
+                 (should (string-match-p "^r Magit  f Files  t Shell  V Read  \\? More\n▸ fix authentication\n▸ Details\n\\'"
                                          text))
                  (should-not (string-match-p "^Prompt$" text))
                  ;; The labels say what is uncommitted.  Where notes are
@@ -763,7 +763,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
                                                   (lastPrompt . "Now the logout.\n\nAnd its test.")
                                                   (error . "boom") (baseRef . "main"))
                                                 (roost-test--task))))
-         (keys "^r Magit  f Files  t Shell  \\? More\n")
+         (keys "^r Magit  f Files  t Shell  V Read  \\? More\n")
          (press (lambda (label)
                   (goto-char (point-min))
                   (search-forward label)
@@ -3473,7 +3473,8 @@ terminal's, on a pty.  Skips the test where it can't be made."
          (progn
            (roost-watch-mode 1)
            (roost-watch-mode 1)
-           (should (equal global-mode-string (list "" 'display-time-string roost--mode-line-entry)))
+           (should (equal global-mode-string (list "" 'display-time-string roost--read-button-entry
+                                                 roost--mode-line-entry)))
            ;; Shown only while `roost-mode-line-count' is on.
            (should (eq (car roost--mode-line-entry) 'roost-mode-line-count))
            (should (equal (substring-no-properties (eval (cadr (cadr roost--mode-line-entry)) t))
@@ -4845,7 +4846,7 @@ BODY gets the window and the last task's key."
        (cl-letf (((symbol-function 'roost--task-info-width) (lambda () 44)))
          (roost--render-task-info))
        (should (string-match-p " X forgets it\n\ntypo also changes notes\\.py\n\nNo CI results: no pull request$" (buffer-string)))
-       (should (string-match-p "\n\n\\? More\n▸ fix authentication\n▸ Details\n\\'" (buffer-string))))
+       (should (string-match-p "\n\nV Read  \\? More\n▸ fix authentication\n▸ Details\n\\'" (buffer-string))))
      ;; A pull request's thread on the whole file says so too.
      (should (string-search "worktree is gone"
                             (cadr (should-error (roost--visit-review-thread task '((path . "notes.py")))
@@ -9260,7 +9261,7 @@ NewTaskDraft.what-misses-a-field.cfg."
        ;; What came of it stands under the title, and the prompt is one
        ;; line under the keys, cut to fit.
        (should (string-match-p "\\`[^\n]+\n[^\n]+\n\n1 file \\+1 −0\n" narrow))
-       (should (string-match-p (concat "^r Magit  f Files  t Shell  \\? More\n"
+       (should (string-match-p (concat "^r Magit  f Files  t Shell  V Read  \\? More\n"
                                        "▸ Detail 1 of what the report should do\\. D…\n▸ Details\n\\'")
                                narrow))
        (should-not (string-match-p "^Prompt$\\|Show the whole prompt" narrow))
@@ -16919,6 +16920,60 @@ it of the same ID's, or nil for the first."
          (puthash (roost--key (car (roost-tasks))) nil roost--turns-sent)
          (funcall (pop replies) (cons '(turn . "conflicts") (roost-test--task)))
          (should (equal (gethash (roost--key (car (roost-tasks))) roost--turns-sent 'none) nil)))))))
+
+;;;; Reading a task's conversation
+
+(ert-deftest roost-a-conversation-reads-in-place-of-its-terminal-and-goes-back ()
+  ;; V sets the conversation in the terminal's window, at its newest turn;
+  ;; V or q there brings back what the window showed.
+  (roost-test--isolated
+   (skip-unless (and (fboundp 'libxml-available-p) (libxml-available-p)))
+   (save-window-excursion
+     (delete-other-windows)
+     (let* (asked
+            (terminal (get-buffer-create "*fake terminal*"))
+            (task (roost--cache-task "dev" (append '((name . "budget"))
+                                                   (roost-test--task "1111111111111111" "ready"))))
+            (page (concat "<!doctype html><body><section class=turn><div class=you><p>First ask</p></div>"
+                          "<div class=reply><p>First answer</p></div></section>"
+                          (make-string 3 ?\n)
+                          "<section class=turn id=last><div class=you><p>Second ask</p></div>"
+                          "<div class=reply><p>Second answer</p></div>"
+                          "<details class=behind><summary>On the way: 1 note</summary>"
+                          "<div class=said><p>Looking</p></div></details></section></body>")))
+       (switch-to-buffer terminal)
+       (cl-letf (((symbol-function 'roost--request)
+                  (lambda (host action parameters success &rest _)
+                    (push (list host action parameters) asked)
+                    (funcall success `((page . ,page) (turns . 2)))))
+                 ((symbol-function 'roost--task-terminal-window) (lambda (_task) (selected-window))))
+         (roost-read-conversation task)
+         (should (equal asked '(("dev" "read" ((id . "1111111111111111"))))))
+         (let ((reading (window-buffer)))
+           (should (equal (buffer-name reading) "*budget: conversation*"))
+           (with-current-buffer reading
+             (should (equal roost--reading '("dev" "1111111111111111")))
+             (should roost-reading-mode)
+             ;; As wide as the window lets it be, which a batch Emacs's is not.
+             (should (string-search "First answer" (string-replace "\n" " " (buffer-string))))
+             ;; What the agent wrote on the way is the web view's to fold.
+             (should-not (string-search "Looking" (buffer-string)))
+             (should (looking-at-p "Second\\s-+ask"))
+             (should (equal (substring-no-properties (roost--read-button)) " Terminal "))
+             (should (eq (keymap-lookup roost-reading-mode-map "V") #'roost-read-conversation))
+             (roost-read-conversation))
+           (should (eq (window-buffer) terminal))
+           (should-not (buffer-live-p reading))))))))
+
+(ert-deftest roost-the-read-button-shows-only-in-an-agents-terminal ()
+  (roost-test--isolated
+   (with-temp-buffer
+     (cl-letf (((symbol-function 'roost--in-terminal) (lambda (command) command)))
+       (should (equal (substring-no-properties (roost--read-button)) " Read ")))
+     ;; Asked again after a while, not at each redisplay.
+     (setq roost--read-button-cache nil)
+     (cl-letf (((symbol-function 'roost--in-terminal) #'ignore))
+       (should-not (roost--read-button))))))
 
 (provide 'roost-test)
 
