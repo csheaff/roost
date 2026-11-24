@@ -308,52 +308,78 @@ def picture(source):
 
 
 STYLE = """
-:root { color-scheme: light dark; --ink:#1d1b19; --paper:#fbf9f5; --quiet:#7a746c; --rule:#e4dfd6;
-        --box:#f1ede5; --you:#efe9dd; --link:#2b5c8a; }
+:root { color-scheme: light dark; --ink:#2b2824; --paper:#f8f5ef; --quiet:#8a8378; --rule:#e6e0d5;
+        --box:#efebe3; --you:#ece6da; --link:#2f5f8c; --shadow:rgba(60,50,30,.12); }
 @media (prefers-color-scheme: dark) {
-  :root { --ink:#e6e1d8; --paper:#1b1a1d; --quiet:#8f897f; --rule:#34323a; --box:#26242b;
-          --you:#2b2933; --link:#9cc3e8; } }
-html { background: var(--paper); }
-body { color: var(--ink); font: 17px/1.55 Charter, "Iowan Old Style", Georgia, serif;
-       max-width: 41em; margin: 0 auto; padding: 2em 1.5em 6em; }
-p, li { text-align: justify; hyphens: auto; -webkit-hyphens: auto; }
-p { margin: .7em 0; }
-h2, h3, h4, h5 { font-size: 1em; margin: 1.4em 0 .3em; }
-h2 { font-size: 1.15em; }
-a { color: var(--link); }
-code, pre { font: .82em/1.45 "SF Mono", Menlo, monospace; }
-code { background: var(--box); padding: .08em .3em; border-radius: 3px; }
-pre { background: var(--box); padding: .8em 1em; border-radius: 6px; overflow-x: auto; }
-pre code { background: none; padding: 0; font-size: 1em; }
-table { border-collapse: collapse; font-size: .9em; margin: 1em 0; }
-th, td { border-bottom: 1px solid var(--rule); padding: .35em .8em .35em 0; text-align: left;
+  :root { --ink:#dad4c9; --paper:#1d1c1f; --quiet:#857f76; --rule:#302e35; --box:#26252a;
+          --you:#2a2830; --link:#9dbfe0; --shadow:rgba(0,0,0,.4); } }
+html { background: var(--paper); scroll-behavior: smooth; }
+body { color: var(--ink); font: 18.5px/1.62 Charter, "Iowan Old Style", Georgia, serif;
+       max-width: 36em; margin: 0 auto; padding: 3em 1.6em 40vh;
+       -webkit-font-smoothing: antialiased; font-kerning: normal;
+       font-variant-numeric: oldstyle-nums proportional-nums; }
+p, li { hyphens: auto; -webkit-hyphens: auto; }
+@media (min-width: 640px) { p, li { text-align: justify; } }
+p { margin: 0 0 .85em; }
+ul, ol { padding-left: 1.3em; margin: 0 0 .85em; }
+li { margin: .25em 0; }
+li::marker { color: var(--quiet); }
+h1, h2, h3, h4, h5 { font-size: 1em; font-weight: 700; margin: 1.5em 0 .35em; line-height: 1.3; }
+h1, h2 { font-size: 1.12em; }
+strong, b { font-weight: 700; }
+a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+code, pre { font: .8em/1.5 "SF Mono", Menlo, monospace; font-variant-numeric: normal; }
+code { background: var(--box); padding: .05em .22em; border-radius: 4px; white-space: nowrap; }
+pre { background: var(--box); padding: .9em 1.1em; border-radius: 8px; margin: 0 0 1em;
+      white-space: pre-wrap; overflow-wrap: anywhere; }
+pre code { background: none; padding: 0; font-size: 1em; white-space: inherit; }
+table { border-collapse: collapse; font-size: .88em; margin: 1em 0; width: 100%; }
+th, td { border-bottom: 1px solid var(--rule); padding: .4em .8em .4em 0; text-align: left;
          vertical-align: top; }
-blockquote { border-left: 3px solid var(--rule); margin: 1em 0; padding-left: 1em; color: var(--quiet); }
-hr { border: 0; border-top: 1px solid var(--rule); margin: 1.5em 0; }
-.turn { margin-top: 2.6em; }
-.you { background: var(--you); border-radius: 10px; padding: .5em 1em; margin-left: 4em;
-       font-family: -apple-system, "Helvetica Neue", sans-serif; font-size: .92em; }
-.you p { text-align: left; hyphens: manual; }
-details { margin: 1em 0; color: var(--quiet); font: .8em/1.5 -apple-system, sans-serif; }
-summary { cursor: pointer; }
-.event { text-align: right; }
-.event pre { text-align: left; white-space: pre-wrap; }
-details .said { color: var(--ink); opacity: .8; border-left: 2px solid var(--rule);
-                padding-left: 1em; margin: .6em 0; font: 1.1em/1.5 Charter, Georgia, serif; }
-.tool { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tool b { font-weight: 600; }
-.shots { display: flex; flex-wrap: wrap; gap: 8px; margin: 1em 0; }
-.thumb { height: 96px; border-radius: 6px; border: 1px solid var(--rule); cursor: zoom-in; }
+th { font-weight: 700; }
+blockquote { border-left: 2px solid var(--rule); margin: 1em 0; padding-left: 1em; color: var(--quiet); }
+hr { border: 0; border-top: 1px solid var(--rule); margin: 1.6em 0; }
+.turn { padding-top: 2.4em; margin-top: 2.4em; border-top: 1px solid var(--rule); }
+.turn:first-of-type { border-top: 0; margin-top: 0; padding-top: 0; }
+.you { background: var(--you); border-radius: 14px; padding: .7em 1.1em; margin: 0 0 1.4em 3em;
+       font: 15.5px/1.5 -apple-system, "Helvetica Neue", sans-serif; }
+.you p { text-align: left; margin: .3em 0; }
+.you .thumb { height: 56px; margin-top: .4em; }
+.turn.event-turn { border-top: 0; padding-top: .6em; margin-top: .6em; }
+details { color: var(--quiet); font: 13px/1.5 -apple-system, sans-serif; }
+summary { cursor: pointer; list-style: none; display: inline-block; padding: .2em .6em;
+          border-radius: 6px; margin-left: -.6em; }
+summary::-webkit-details-marker { display: none; }
+summary::before { content: "›"; display: inline-block; width: 1em; transition: transform .15s; }
+details[open] > summary::before { transform: rotate(90deg); }
+summary:hover { background: var(--box); color: var(--ink); }
+.event { text-align: center; }
+.event summary { margin: 0; }
+.event pre { text-align: left; margin-top: .6em; }
+.behind { margin-top: 1.2em; }
+.behind[open] { border-left: 2px solid var(--rule); padding-left: 1em; margin-left: -1em; }
+details .said { color: var(--ink); opacity: .85; margin: .7em 0; font: 16px/1.55 Charter, Georgia, serif; }
+.tool { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font: 12px/1.6 "SF Mono", Menlo, monospace; }
+.tool b { font-weight: 600; color: var(--ink); opacity: .7; }
+.shots { display: flex; flex-wrap: wrap; gap: 6px; margin: 1em 0 0; }
+.thumb { height: 64px; border-radius: 5px; border: 1px solid var(--rule); cursor: zoom-in;
+         opacity: .8; transition: opacity .15s; }
+.thumb:hover { opacity: 1; }
 .thumb.big { position: fixed; inset: 0; margin: auto; height: auto; max-height: 94vh; max-width: 96vw;
-             z-index: 2; cursor: zoom-out; box-shadow: 0 0 0 100vmax rgba(0,0,0,.7); }
+             z-index: 2; cursor: zoom-out; opacity: 1; box-shadow: 0 0 0 100vmax rgba(0,0,0,.75); }
 .widget { display: block; width: 100%; height: 120px; border: 1px solid var(--rule); border-radius: 12px;
           margin: 1em 0; background: transparent; }
 #sent { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); max-width: 34em;
         background: var(--ink); color: var(--paper); padding: .5em 1em; border-radius: 8px;
-        font: .8em -apple-system, sans-serif; opacity: 0; transition: opacity .2s; pointer-events: none; }
+        font: 13px -apple-system, sans-serif; opacity: 0; transition: opacity .2s; pointer-events: none; }
 #sent.on { opacity: .95; }
+#latest { position: fixed; right: 22px; bottom: 22px; border: 0; border-radius: 999px;
+          padding: .55em 1.1em; font: 13px -apple-system, sans-serif; cursor: pointer;
+          background: var(--ink); color: var(--paper); box-shadow: 0 2px 10px var(--shadow);
+          opacity: 0; pointer-events: none; transition: opacity .2s; }
+#latest.on { opacity: .82; pointer-events: auto; }
 .working { color: var(--quiet); font-style: italic; }
-.path { font: .82em "SF Mono", Menlo, monospace; }
+.path { font: .8em "SF Mono", Menlo, monospace; }
 """
 
 SCRIPT = """
@@ -377,9 +403,14 @@ window.addEventListener('message', function (e) {
     }
   }
 });
-window.scrollTo(0, document.body.scrollHeight);
-var last = document.querySelector('.turn:last-child');
-if (last) last.scrollIntoView();
+var turns = document.querySelectorAll('.turn:not(.event-turn)');
+var last = turns[turns.length - 1];
+if (last) last.scrollIntoView({behavior: 'instant'});
+var latest = document.getElementById('latest');
+latest.addEventListener('click', function () { last && last.scrollIntoView(); });
+addEventListener('scroll', function () {
+  latest.classList.toggle('on', !!last && last.getBoundingClientRect().top > innerHeight);
+}, {passive: true});
 """
 
 
@@ -388,30 +419,32 @@ def page(found, title):
            % (esc(title), STYLE)]
     for turn in found:
         if turn.get("event"):
-            out.append("<section class=turn><details class=event><summary>Sent by the app: %s</summary>"
+            out.append("<section class='turn event-turn'><details class=event><summary>Sent by the app: %s</summary>"
                        "<pre>%s</pre></details>" % (esc(turn["event"].replace("-", " ")), esc(turn["prompt"])))
         else:
             out.append("<section class=turn><div class=you>%s%s</div>" % (
                 markdown(turn["prompt"]), "".join(picture(s) for s in turn.get("attached", []))))
+        # The reply first: it is what you came to read.
+        out.extend(widget(code) for code in turn.get("widgets", []))
+        out.append("<div class=reply>%s</div>" % (
+            markdown(turn["reply"]) if turn["reply"] else "<p class=working>Still working…</p>"))
+        if turn["images"]:
+            out.append("<div class=shots>%s</div>" % "".join(picture(s) for s in turn["images"]))
         if turn["steps"]:
             tools = sum(1 for step in turn["steps"] if step[0] == "tool")
             notes = len(turn["steps"]) - tools
-            label = ", ".join(part for part in (
-                "%d tool call%s" % (tools, "" if tools == 1 else "s") if tools else "",
+            label = " · ".join(part for part in (
+                "%d step%s" % (tools, "" if tools == 1 else "s") if tools else "",
                 "%d note%s" % (notes, "" if notes == 1 else "s") if notes else "") if part)
-            out.append("<details><summary>%s</summary>" % label)
+            out.append("<details class=behind><summary>How it got there: %s</summary>" % label)
             for step in turn["steps"]:
                 if step[0] == "text":
                     out.append("<div class=said>%s</div>" % markdown(step[1]))
                 else:
                     out.append("<div class=tool><b>%s</b> %s</div>" % (esc(step[1]), esc(step[2])))
             out.append("</details>")
-        if turn["images"]:
-            out.append("<div class=shots>%s</div>" % "".join(picture(s) for s in turn["images"]))
-        out.extend(widget(code) for code in turn.get("widgets", []))
-        out.append("<div class=reply>%s</div></section>" % (
-            markdown(turn["reply"]) if turn["reply"] else "<p class=working>No reply yet.</p>"))
-    out.append("<div id=sent></div><script>%s</script></body></html>" % SCRIPT)
+        out.append("</section>")
+    out.append("<div id=sent></div><button id=latest>Latest reply ↓</button><script>%s</script></body></html>" % SCRIPT)
     return "\n".join(out)
 
 

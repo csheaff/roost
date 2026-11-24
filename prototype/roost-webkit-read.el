@@ -45,7 +45,7 @@
                                 temporary-file-directory)))
     (with-temp-buffer
       (unless (eq 0 (call-process "python3" nil t nil "-I"
-                                  roost-webkit-read--script log page))
+                                  roost-webkit-read--script (expand-file-name log) page))
         (error "Could not read %s: %s" log (string-trim (buffer-string)))))
     page))
 
@@ -95,6 +95,7 @@ here can be collected before the reply comes, and Emacs crashes on it."
 
 (defvar-keymap roost-webkit-read-mode-map
   "q" #'quit-window
+  "V" #'quit-window
   "g" #'roost-webkit-read-again)
 
 (define-minor-mode roost-webkit-read-mode
@@ -120,7 +121,11 @@ prefix argument, or when there is none, one you pick."
   (unless (display-graphic-p)
     (user-error "A WebKit view needs a graphical frame"))
   (let ((page (roost-webkit-read--page log)))
-    (xwidget-webkit-browse-url (concat "file://" page) t)
+    ;; Shown in the selected window, in place of what was there, so that
+    ;; `q' brings that back.
+    (save-window-excursion
+      (xwidget-webkit-browse-url (concat "file://" page) t))
+    (switch-to-buffer (xwidget-buffer (xwidget-webkit-last-session)))
     (with-current-buffer (xwidget-buffer (xwidget-webkit-last-session))
       (setq roost-webkit-read--log log)
       (roost-webkit-read-mode 1)
@@ -188,6 +193,88 @@ something is sent to it as your next prompt."
       (setq roost-webkit-read--timer
             (run-at-time 1 0.25 #'roost-webkit-show--follow (current-buffer)))
       (add-hook 'kill-buffer-hook #'roost-webkit-read--stop nil t))))
+
+;; In Roost -----------------------------------------------------------------
+
+(declare-function roost--task-here "roost" ())
+(declare-function roost--task-at-point "roost" ())
+(declare-function roost--choose "roost" (&optional task))
+(declare-function roost--field "roost" (task field))
+(declare-function roost--selected-main-window "roost" ())
+(defvar roost-task-info-mode-map)
+(defvar roost-dashboard-mode-map)
+
+(defun roost-webkit-read--task-log (task)
+  "The newest Claude session log of TASK on this machine, or nil."
+  (let ((worktree (roost--field task 'worktree)))
+    (and (stringp worktree) (not (file-remote-p worktree))
+         (file-directory-p worktree)
+         (roost-webkit-read--newest worktree))))
+
+;;;###autoload
+(defun roost-read-toggle (&optional task)
+  "Read TASK's conversation as a page, or go back to its terminal.
+From a page, go back to what the window showed before.  Elsewhere, show
+the conversation of the task where you are, or one you pick, in its
+place."
+  (interactive)
+  (if (bound-and-true-p roost-webkit-read-mode)
+      (quit-window)
+    (require 'roost)
+    (let* ((task (or task
+                     (ignore-errors (if (derived-mode-p 'roost-dashboard-mode)
+                                        (roost--task-at-point)
+                                      (roost--task-here)))
+                     (roost--choose)))
+           (log (or (roost-webkit-read--task-log task)
+                    (user-error "No Claude conversation on this machine for %s"
+                                (roost--field task 'name)))))
+      ;; From a side window, the page goes where the terminal is.
+      (when (and (window-parameter nil 'window-side)
+                 (fboundp 'roost--selected-main-window))
+        (select-window (roost--selected-main-window)))
+      (roost-webkit-read log))))
+
+(defvar-local roost-webkit-read--button-cache nil
+  "When this buffer last asked which task it is for, and the answer.")
+
+(defun roost-webkit-read--button-task ()
+  "The task of the current buffer, asked at most every two seconds."
+  (let ((cache roost-webkit-read--button-cache))
+    (if (and cache (< (- (float-time) (car cache)) 2))
+        (cdr cache)
+      (let ((task (and (featurep 'roost) (ignore-errors (roost--task-here)))))
+        (setq roost-webkit-read--button-cache (cons (float-time) task))
+        task))))
+
+(defvar roost-webkit-read--button-map
+  (define-keymap "<mode-line> <mouse-1>" #'roost-read-toggle)
+  "Keys of the Read and Terminal button in the mode line.")
+
+(defun roost-webkit-read--button ()
+  "The mode line's Read or Terminal button, where it applies."
+  (when (and (mode-line-window-selected-p)
+             (not (window-parameter nil 'window-side)))
+    (let ((label (cond ((bound-and-true-p roost-webkit-read-mode) " ◂ Terminal ")
+                       ((roost-webkit-read--button-task) " ¶ Read "))))
+      (when label
+        (propertize label 'mouse-face 'mode-line-highlight
+                    'help-echo (if (bound-and-true-p roost-webkit-read-mode)
+                                   "mouse-1: back to the terminal"
+                                 "mouse-1: read this conversation as a page")
+                    'local-map roost-webkit-read--button-map)))))
+
+(defconst roost-webkit-read--mode-line-entry '(:eval (roost-webkit-read--button))
+  "The mode line entry that draws the button.")
+
+(unless (member roost-webkit-read--mode-line-entry (default-value 'mode-line-misc-info))
+  (setq-default mode-line-misc-info
+                (cons roost-webkit-read--mode-line-entry
+                      (default-value 'mode-line-misc-info))))
+
+(with-eval-after-load 'roost
+  (keymap-set roost-task-info-mode-map "V" #'roost-read-toggle)
+  (keymap-set roost-dashboard-mode-map "V" #'roost-read-toggle))
 
 (provide 'roost-webkit-read)
 ;;; roost-webkit-read.el ends here
