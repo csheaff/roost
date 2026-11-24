@@ -12650,7 +12650,7 @@ is decided once the question is done, as the task may have gone by then."
 ;; agent's last words, with what it wrote on the way folded under them.
 ;; The host's helper reads the conversation, whichever agent keeps it, and
 ;; sets the page; Emacs draws it as it draws an agent's page, or, without
-;; a web view, hands it to your browser.  A button in the mode line of the
+;; a web view, sets it with its own HTML renderer.  A button in the mode line of the
 ;; window toggles the same way.
 
 (defvar-local roost--reading nil
@@ -12692,8 +12692,8 @@ its terminal, \\`g' reads it again."
 (defun roost-read-conversation (&optional task)
   "Read TASK's conversation as a page, in place of its terminal.
 Each turn is what you sent and the agent's last words.  From the page,
-go back to the window as it was.  Without a web view in this Emacs, the
-page opens in your browser."
+go back to the window as it was.  Without a web view in this Emacs, its
+own HTML renderer sets the page."
   (interactive)
   (if roost--reading
       (roost--leave-reading)
@@ -12722,8 +12722,8 @@ page opens in your browser."
 (defun roost-read-again ()
   "Read this conversation again, as it is now."
   (interactive)
-  (when-let* ((key roost--reading)
-              (task (gethash key roost--tasks)))
+  (if-let* ((key roost--reading)
+            (task (gethash key roost--tasks)))
     (let ((buffer (current-buffer)))
       (roost--request (roost--field task 'host) "read" (list (cons 'id (roost--field task 'id)))
                       (lambda (result)
@@ -12731,7 +12731,8 @@ page opens in your browser."
                           (roost--fill-reading buffer key result)))
                       (lambda (error)
                         (message "Roost: can't read %s's conversation: %s"
-                                 (roost--field task 'name) error))))))
+                                 (roost--field task 'name) error))))
+    (message "This task is gone; q goes back")))
 
 (defun roost--reading-window (task)
   "The window to read TASK's conversation in: where its terminal is, else
@@ -12745,8 +12746,12 @@ the main window you are in."
   "Show RESULT, the page of the conversation of the task with KEY."
   (when-let* ((task (gethash key roost--tasks))
               ((stringp (alist-get 'page result))))
-    (let ((buffer (get-buffer-create (format "*%s: conversation*" (roost--field task 'name)))))
-      (select-window (roost--reading-window task))
+    (let ((buffer (get-buffer-create (format "*%s: conversation*" (roost--task-label task))))
+          (window (roost--reading-window task)))
+      (select-window window)
+      ;; Borrowed: a window kept for its terminal, as some setups keep
+      ;; one, takes the page too, and gets its terminal back after.
+      (set-window-dedicated-p window nil)
       (switch-to-buffer buffer nil t)
       (roost--fill-reading buffer key result)
       (message nil))))

@@ -8595,6 +8595,11 @@ SEARCH_TEXT_LIMIT = 1500
 READ_SECONDS = 10
 READ_PAGE_LIMIT = 2 * 1024 * 1024
 READ_MESSAGE_LIMIT = 64 * 1024
+READ_NOTES_LIMIT = 12
+
+# What programs send in your name, which a page folds: Claude Code's notes,
+# and an app's or a hook's events, each in a tag of its own around it all.
+SENT_FOR_YOU = re.compile(r"\s*<([a-z][\w-]*)(?:\s[^>]*)?>.*</\1>\s*\Z", re.S)
 
 
 def conversation_turns(adapter, path, deadline):
@@ -8619,6 +8624,10 @@ def conversation_turns(adapter, path, deadline):
         turn = turns[-1]
         if turn["reply"] is not None:
             turn["notes"].append(turn["reply"])
+            # The newest of a long turn's notes, as a page keeps the newest turns.
+            if len(turn["notes"]) > READ_NOTES_LIMIT:
+                del turn["notes"][0]
+                turn["notesLeftOut"] = turn.get("notesLeftOut", 0) + 1
         turn["reply"] = words
     return turns
 
@@ -8633,16 +8642,15 @@ def read_conversation(store, task):
     path = find(store, task) if find else None
     deadline = time.monotonic() + READ_SECONDS
     cut = False
+    turns = []
     if path:
         try:
             turns = conversation_turns(adapter, path, deadline)
         except SearchTimeUp:
             raise RoostError("The conversation took too long to read")
         except OSError:
-            turns = []
-    else:
-        turns = []
-    whole = bool(path)
+            pass
+    whole = bool(turns)
     if not turns:
         you = text(task.get("lastPrompt")) or text(task.get("prompt"))
         reply = text(task.get("lastReply"))
@@ -8773,7 +8781,7 @@ def conversation_page(task, turns, cut, whole):
         out.append("<p class=note>Nothing has been said yet.</p>")
     for number, turn in enumerate(turns, 1):
         out.append("<section class=turn%s>" % (" id=last" if number == len(turns) else ""))
-        sender = re.match(r"\s*<([a-z][\w-]*)[ >]", turn["you"] or "")
+        sender = SENT_FOR_YOU.match(turn["you"] or "")
         if sender:
             # Sent in your name by a program, as an app's event or a hook's
             # note: one quiet line, which opens to the whole of it.
@@ -8785,8 +8793,9 @@ def conversation_page(task, turns, cut, whole):
                                                  else "<p class=working>No reply yet.</p>"))
         if turn["notes"]:
             count = len(turn["notes"])
-            out.append("<details class=behind><summary>On the way: %d note%s</summary>%s</details>"
+            out.append("<details class=behind><summary>On the way: %d note%s%s</summary>%s</details>"
                        % (count, "" if count == 1 else "s",
+                          ", the newest" if turn.get("notesLeftOut") else "",
                           "".join("<div class=said>%s</div>" % page_markdown(note) for note in turn["notes"])))
         out.append("</section>")
     out.append(READ_PAGE_TAIL)

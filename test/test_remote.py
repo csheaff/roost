@@ -13844,6 +13844,7 @@ class ReadConversation(unittest.TestCase):
         self.assertNotIn("a note of Claude's own", page)
         # What anyone wrote is text, never markup.
         self.assertIn("And &lt;script&gt;alert(1)&lt;/script&gt; the header?", page)
+        self.assertNotIn("Sent for you", page)
         self.assertNotIn("<script>alert", page)
         self.assertIn("<p class=working>No reply yet.</p>", page)
         self.assertIn("<section class=turn id=last>", page)
@@ -13883,6 +13884,31 @@ class ReadConversation(unittest.TestCase):
         self.assertEqual((result["turns"], result["whole"]), (1, False))
         self.assertIn("<p>Quote CSV fields</p>", result["page"])
         self.assertIn("<p>Quoted them.</p>", result["page"])
+        self.assertIn("Roost can't read this agent's conversation", result["page"])
+
+    def test_what_a_program_sent_in_your_name_is_folded_and_a_tag_of_yours_is_not(self):
+        worktree = self.task("claude", agentSession="s1")
+        self.conversation(worktree, "s1", [
+            self.said("user", "<ci-monitor-event>\nCI failed on #3\n</ci-monitor-event>", 1),
+            self.said("assistant", [{"type": "text", "text": "Fixed it."}], 2),
+            self.said("user", "<div> is misaligned in the header", 3),
+            self.said("assistant", [{"type": "text", "text": "Aligned."}], 4)])
+        page = self.read("0a1b2c3d4e5f6a7b")["page"]
+        self.assertIn("<summary>Sent for you: ci monitor event</summary>", page)
+        self.assertIn("<div class=you><p>&lt;div&gt; is misaligned in the header</p></div>", page)
+
+    def test_a_long_turn_keeps_its_newest_notes_and_a_missing_file_is_said(self):
+        worktree = self.task("claude", agentSession="s1", lastPrompt="Count", lastReply="Counted.")
+        self.conversation(worktree, "s1", [self.said("user", "Count", 0)] + [
+            self.said("assistant", [{"type": "text", "text": "note %d" % n}], n + 1) for n in range(20)])
+        page = self.read("0a1b2c3d4e5f6a7b")["page"]
+        self.assertIn("On the way: 12 notes, the newest", page)
+        self.assertNotIn("note 6<", page)
+        self.assertIn("note 7<", page)
+        self.assertIn("<p>note 19</p>", page)
+        (self.home / ".claude/projects" / roost.claude_project_folder(str(worktree)) / "s1.jsonl").unlink()
+        result = self.read("0a1b2c3d4e5f6a7b")
+        self.assertFalse(result["whole"])
         self.assertIn("Roost can't read this agent's conversation", result["page"])
 
     def test_a_transcript_outside_claudes_projects_is_not_read(self):
