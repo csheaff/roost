@@ -12650,8 +12650,8 @@ is decided once the question is done, as the task may have gone by then."
 ;; agent's last words, with what it wrote on the way folded under them.
 ;; The host's helper reads the conversation, whichever agent keeps it, and
 ;; sets the page; Emacs draws it as it draws an agent's page, or, without
-;; a web view, sets it with its own HTML renderer.  A button in the mode line of the
-;; window toggles the same way.
+;; a web view, sets it with its own HTML renderer.  The task panel's Read
+;; reads Terminal while the page shows, and goes back.
 
 (defvar-local roost--reading nil
   "The key of the task whose conversation this buffer shows to read.")
@@ -12699,25 +12699,45 @@ own HTML renderer sets the page."
       (roost--leave-reading)
     (let* ((task (or task (roost--reading-task) (roost--read-task "Read the conversation of task: ")))
            (key (roost--key task))
-           (stay (roost--while-you-stay task)))
-      (message "Reading %s's conversation..." (roost--field task 'name))
-      (roost--request (roost--field task 'host) "read" (list (cons 'id (roost--field task 'id)))
-                      (lambda (result)
-                        (funcall stay (lambda () (roost--show-reading key result))))
-                      (lambda (error)
-                        (message "Roost: can't read %s's conversation: %s"
-                                 (roost--field task 'name) error))))))
+           (shown (roost--reading-shown key))
+           (stay (unless shown (roost--while-you-stay task))))
+      (if shown
+          ;; From its panel, say: the page goes, and the terminal comes back.
+          (with-selected-window shown
+            (roost--leave-reading))
+        (message "Reading %s's conversation..." (roost--field task 'name))
+        (roost--request (roost--field task 'host) "read" (list (cons 'id (roost--field task 'id)))
+                        (lambda (result)
+                          (funcall stay (lambda () (roost--show-reading key result))))
+                        (lambda (error)
+                          (message "Roost: can't read %s's conversation: %s"
+                                   (roost--field task 'name) error)))))))
+
+(defun roost--reading-shown (key)
+  "The window of this frame where the task with KEY's conversation is read, or nil."
+  (seq-find (lambda (window)
+              (equal (buffer-local-value 'roost--reading (window-buffer window)) key))
+            (window-list nil 'no-minibuffer)))
+
+(defun roost--reading-changed (key)
+  "Redraw the panels of the task with KEY, whose Read now reads otherwise."
+  (dolist (window (window-list nil 'no-minibuffer))
+    (with-current-buffer (window-buffer window)
+      (when (and (derived-mode-p 'roost-task-info-mode) (equal roost--buffer-task-key key))
+        (roost--render-task-info)))))
 
 (defun roost--leave-reading ()
   "Show what the window showed before this conversation to read."
-  (let ((buffer (current-buffer)))
+  (let ((buffer (current-buffer))
+        (key roost--reading))
     (set-window-dedicated-p nil nil)
     (if (window-parameter nil 'window-side)
         (bury-buffer)
       (switch-to-prev-buffer nil 'bury))
     ;; A page there still would be a second view of nothing new.
     (unless (get-buffer-window buffer t)
-      (kill-buffer buffer))))
+      (kill-buffer buffer))
+    (roost--reading-changed key)))
 
 (defun roost-read-again ()
   "Read this conversation again, as it is now."
@@ -12754,6 +12774,7 @@ the main window you are in."
       (set-window-dedicated-p window nil)
       (switch-to-buffer buffer nil t)
       (roost--fill-reading buffer key result)
+      (roost--reading-changed key)
       (message nil))))
 
 (declare-function shr-insert-document "shr" (dom))
@@ -12804,40 +12825,6 @@ renderer sets it, without what the agent wrote on the way."
     (setq roost--reading key)
     ;; Setting the page sets the buffer's mode, which takes its minor modes.
     (roost-reading-mode 1)))
-
-(defvar-local roost--read-button-cache nil
-  "When this buffer last asked whether it is a task's terminal, and the answer.")
-
-(defun roost--read-button ()
-  "The mode line's button to read a terminal's conversation, or to go back.
-Only in the selected window, which is where you would click it."
-  (when (and (mode-line-window-selected-p)
-             (not (window-parameter (selected-window) 'window-side)))
-    (let ((label
-           (cond (roost--reading " Terminal ")
-                 ((let ((cache roost--read-button-cache))
-                    (if (and cache (< (- (float-time) (car cache)) 2))
-                        (cdr cache)
-                      (cdr (setq roost--read-button-cache
-                                 (cons (float-time)
-                                       (and (roost--in-terminal t) t))))))
-                  " Read "))))
-      (when label
-        (propertize label
-                    'help-echo (if roost--reading
-                                   "mouse-1: back to the agent's terminal"
-                                 "mouse-1: read this conversation as a page")
-                    'mouse-face 'mode-line-highlight
-                    'local-map (make-mode-line-mouse-map 'mouse-1 #'roost--read-clicked))))))
-
-(defun roost--read-clicked (event)
-  "Toggle the conversation of the window whose mode line EVENT clicked."
-  (interactive "e")
-  (with-selected-window (posn-window (event-start event))
-    (call-interactively #'roost-read-conversation)))
-
-(defconst roost--read-button-entry '(:eval (roost--read-button))
-  "The `global-mode-string' entry for the button that reads a conversation.")
 
 ;;;; A page as its agent writes it
 
@@ -13430,7 +13417,8 @@ ready means, and the menu's key."
                                    (append (seq-filter (lambda (view) (roost--action-applies-p task (car view)))
                                                        '((roost-review . "Magit") (roost-files . "Files")
                                                          (roost-shell . "Shell")))
-                                           '((roost-read-conversation . "Read"))
+                                           (list (cons 'roost-read-conversation
+                                                       (if (roost--reading-shown (roost--key task)) "Terminal" "Read")))
                                            '((roost-dispatch . "More")))
                                    "  "))
               (concat "Ready means the agent is waiting for you, not that the work is reviewed.\n"
@@ -16723,14 +16711,12 @@ leaves the sidebar marked paused."
   (when roost--watch-timer
     (cancel-timer roost--watch-timer)
     (setq roost--watch-timer nil))
-  (setq global-mode-string (delete roost--read-button-entry
-                                   (delete roost--mode-line-entry (ensure-list global-mode-string))))
+  (setq global-mode-string (delete roost--mode-line-entry (ensure-list global-mode-string)))
   ;; The mode line asks for its light again if it still shows it.
   (remhash '(mode-line . waiting) roost--lights)
   (remove-hook 'after-save-hook #'roost--file-saved)
   (when roost-watch-mode
-    (setq global-mode-string (append global-mode-string
-                                     (list roost--read-button-entry roost--mode-line-entry)))
+    (setq global-mode-string (append global-mode-string (list roost--mode-line-entry)))
     (add-hook 'after-save-hook #'roost--file-saved)
     ;; Magit on a task's worktree gets notes, keys and a task header.
     (with-eval-after-load 'magit (roost--magit-setup))

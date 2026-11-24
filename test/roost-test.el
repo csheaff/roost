@@ -3473,8 +3473,7 @@ terminal's, on a pty.  Skips the test where it can't be made."
          (progn
            (roost-watch-mode 1)
            (roost-watch-mode 1)
-           (should (equal global-mode-string (list "" 'display-time-string roost--read-button-entry
-                                                 roost--mode-line-entry)))
+           (should (equal global-mode-string (list "" 'display-time-string roost--mode-line-entry)))
            ;; Shown only while `roost-mode-line-count' is on.
            (should (eq (car roost--mode-line-entry) 'roost-mode-line-count))
            (should (equal (substring-no-properties (eval (cadr (cadr roost--mode-line-entry)) t))
@@ -16959,21 +16958,35 @@ it of the same ID's, or nil for the first."
              ;; What the agent wrote on the way is the web view's to fold.
              (should-not (string-search "Looking" (buffer-string)))
              (should (looking-at-p "Second\\s-+ask"))
-             (should (equal (substring-no-properties (roost--read-button)) " Terminal "))
              (should (eq (keymap-lookup roost-reading-mode-map "V") #'roost-read-conversation))
              (roost-read-conversation))
            (should (eq (window-buffer) terminal))
            (should-not (buffer-live-p reading))))))))
 
-(ert-deftest roost-the-read-button-shows-only-in-an-agents-terminal ()
+(ert-deftest roost-the-panels-read-goes-back-while-the-page-shows ()
+  ;; The panel's Read reads Terminal while the conversation is on screen,
+  ;; and from the panel takes you back to the terminal.
   (roost-test--isolated
-   (with-temp-buffer
-     (cl-letf (((symbol-function 'roost--in-terminal) (lambda (command) command)))
-       (should (equal (substring-no-properties (roost--read-button)) " Read ")))
-     ;; Asked again after a while, not at each redisplay.
-     (setq roost--read-button-cache nil)
-     (cl-letf (((symbol-function 'roost--in-terminal) #'ignore))
-       (should-not (roost--read-button))))))
+   (save-window-excursion
+     (delete-other-windows)
+     (let* ((terminal (get-buffer-create "*fake terminal*"))
+            (task (roost--cache-task "dev" (append '((name . "budget"))
+                                                   (roost-test--task "1111111111111111" "ready"))))
+            (label (lambda ()
+                     (with-temp-buffer
+                       (roost--insert-panel-keys task 40)
+                       (buffer-substring-no-properties (point-min) (point-max)))))
+            (reading (get-buffer-create "*budget: conversation*")))
+       (switch-to-buffer terminal)
+       (should (string-match-p "V Read" (funcall label)))
+       (switch-to-buffer reading)
+       (setq-local roost--reading (roost--key task))
+       (should (string-match-p "V Terminal" (funcall label)))
+       (with-temp-buffer
+         (roost-read-conversation task))
+       (should (eq (window-buffer) terminal))
+       (should-not (buffer-live-p reading))
+       (should (string-match-p "V Read" (funcall label)))))))
 
 (provide 'roost-test)
 

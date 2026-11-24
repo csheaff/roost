@@ -7,8 +7,8 @@ What each release changes, and what to do when upgrading. Newest first.
 - `V` reads a task's conversation as a page in place of its terminal:
   what you sent and the agent's last words for each turn, set in a serif
   for reading, with what it wrote on the way folded under them. *Read* in
-  the task panel and in the mode line under an agent's terminal does the
-  same, and *Terminal* there, `q` or `V` go back. It reads what Claude
+  the task panel does the same, and reads *Terminal* while the page shows:
+  a click on it, `q` or `V` go back. It reads what Claude
   Code, Codex and Pi keep, on remote hosts too; for OpenCode, the latest
   prompt and reply. Without xwidgets, Emacs's own HTML renderer sets it.
   Nothing to do when upgrading.
