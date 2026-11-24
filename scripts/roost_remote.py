@@ -1389,6 +1389,13 @@ class ClaudeAgent:
         """(ROLE, TEXT) of what you or Claude wrote in transcript ENTRY, or None."""
         return conversation_text(entry)
 
+    def conversation_file(self, store, task):
+        """TASK's conversation, for `read_conversation', or None: a file
+        among Claude's projects, wherever a hook said it was."""
+        path = self.transcript(task)
+        projects = os.path.realpath(Path.home() / ".claude" / "projects")
+        return path if path and os.path.realpath(path).startswith(projects + os.sep) else None
+
     def wrote_in(self, entry):
         """The directory and branch Claude recorded transcript ENTRY in. It
         says so with each, as it follows its shell from folder to folder."""
@@ -1634,6 +1641,14 @@ class CodexAgent:
             return None
         repo = payload.get("git") if isinstance(payload.get("git"), dict) else {}
         return payload.get("cwd"), text(repo.get("branch"))
+
+    def conversation_file(self, store, task):
+        """TASK's rollout, for `read_conversation', or None."""
+        session = task.get("agentSession")
+        if not isinstance(session, str) or not re.fullmatch(r"[\w.-]+", session):
+            return None
+        files = sorted((Path.home() / ".codex" / "sessions").glob("*/*/*/rollout-*-" + session + ".jsonl"))
+        return files[-1] if files else None
 
     def wrote(self, entry):
         """(ROLE, TEXT) of what you or Codex wrote in rollout ENTRY, or None:
@@ -1956,6 +1971,12 @@ class PiAgent:
         if not isinstance(first, dict) or first.get("type") != "session":
             return None
         return first.get("cwd"), None
+
+    def conversation_file(self, store, task):
+        """TASK's session file, for `read_conversation', or None: only one
+        in the folder Roost gave Pi for it."""
+        session = text(task.get("agentSession"))
+        return Path(session) if session and self.own_session(store, task, session) else None
 
     def wrote(self, entry):
         """(ROLE, TEXT) of what you or Pi wrote in session ENTRY, or None:
@@ -8567,6 +8588,342 @@ SEARCH_HITS_PER_TASK = 10
 SEARCH_SNIPPET = 160
 SEARCH_TEXT_LIMIT = 1500
 # Well within Emacs's wait for a reply, which a host does not notice.
+# Reading a task's conversation ------------------------------------------
+
+# A conversation is read for this long at most, and a page holds the
+# newest turns that fit in its size.
+READ_SECONDS = 10
+READ_PAGE_LIMIT = 2 * 1024 * 1024
+READ_MESSAGE_LIMIT = 64 * 1024
+READ_NOTES_LIMIT = 12
+
+# What programs send in your name, which a page folds: Claude Code's notes,
+# and an app's or a hook's events, each in a tag of its own around it all,
+# of a name those programs use: not a tag of yours, as an HTML example.
+SENT_FOR_YOU = re.compile(r"\s*<((?:command|local-command|bash)-[a-z-]+|task-notification|system-reminder"
+                          r"|user-prompt-submit-hook|[a-z]+(?:-[a-z]+)*-event)(?:\s[^>]*)?>.*</\1>\s*\Z", re.S)
+
+
+def conversation_turns(adapter, path, deadline):
+    """The turns of the conversation at PATH, which ADAPTER's agent keeps,
+    oldest first: each {"you", "notes", "reply", "at"}, what you sent, what
+    the agent wrote before its last words of the turn, and those. What the
+    agent wrote before your first message is a turn with no "you"."""
+    turns = []
+    for line in transcript_lines(path, deadline):
+        entry = json_line(line) if line else None
+        found = adapter.wrote(entry) if isinstance(entry, dict) else None
+        if not found:
+            continue
+        role, words = found
+        if len(words) > READ_MESSAGE_LIMIT:
+            words = words[:READ_MESSAGE_LIMIT].rstrip() + "…"
+        if role == "user" or not turns:
+            turns.append(dict(you=words if role == "user" else None, notes=[], reply=None,
+                              at=text(entry.get("timestamp"))))
+            if role == "user":
+                continue
+        turn = turns[-1]
+        if turn["reply"] is not None:
+            turn["notes"].append(turn["reply"])
+            # The newest of a long turn's notes, as a page keeps the newest turns.
+            if len(turn["notes"]) > READ_NOTES_LIMIT:
+                del turn["notes"][0]
+                turn["notesLeftOut"] = turn.get("notesLeftOut", 0) + 1
+        turn["reply"] = words
+    return turns
+
+
+def read_conversation(store, task):
+    """TASK's conversation as a page to read: its turns, newest at the
+    end, set as `conversation_page' has them. For an agent whose
+    conversation the helper can't read, as OpenCode's, what you last sent
+    and its latest reply."""
+    adapter = agent_for(task)
+    find = getattr(adapter, "conversation_file", None)
+    path = find(store, task) if find else None
+    deadline = time.monotonic() + READ_SECONDS
+    cut = False
+    turns = []
+    if path:
+        try:
+            turns = conversation_turns(adapter, path, deadline)
+        except SearchTimeUp:
+            raise RoostError("The conversation took too long to read")
+        except OSError:
+            pass
+    whole = bool(turns)
+    if not turns:
+        you = text(task.get("lastPrompt")) or text(task.get("prompt"))
+        reply = text(task.get("lastReply"))
+        turns = [dict(you=you, notes=[], reply=reply, at=None)] if you or reply else []
+    while True:
+        page = conversation_page(task, turns, cut, whole)
+        if len(page.encode()) <= READ_PAGE_LIMIT:
+            return {"page": page, "turns": len(turns), "cut": cut, "whole": whole}
+        if len(turns) > 1:
+            turns, cut = turns[max(1, len(turns) // 4):], True
+        else:
+            # One turn too large: without its notes, and its words cut by
+            # half each time, until its page fits.
+            turn = turns[0]
+            most = max(len(turn["you"] or ""), len(turn["reply"] or "")) // 2
+            turns, cut = [dict(turn, notes=[], you=turn["you"] and turn["you"][:most],
+                               reply=turn["reply"] and turn["reply"][:most])], True
+
+
+def page_inline(words):
+    """WORDS' inline Markdown as HTML: code, links, bold and italics."""
+    # Each piece of markup made is set aside as it is made, behind a mark
+    # no message holds, so that what comes after cannot reach into it.
+    spans = []
+
+    def keep(markup):
+        spans.append(markup)
+        return "\x00%d\x00" % (len(spans) - 1)
+
+    def link(url, label):
+        return keep('<a href="%s">%s</a>' % (html.escape(url), html.escape(label)))
+
+    part = re.sub(r"`([^`\n]+)`", lambda m: keep("<code>%s</code>" % html.escape(m.group(1))),
+                  words.replace("\x00", ""))
+    part = re.sub(r"\[([^\]\n\x00]+)\]\(([^)\s\x00]+)\)",
+                  lambda m: (link(m.group(2), m.group(1)) if re.match(r"https?://", m.group(2))
+                             else keep("<span class=path>%s</span>" % html.escape(m.group(1)))),
+                  part)
+    part = re.sub(r"(?<![\w/])https?://[^\s<>)\"'\x00]+", lambda m: link(m.group(0), m.group(0)), part)
+    part = html.escape(part)
+    part = re.sub(r"\*\*([^*\n]+)\*\*", r"<strong>\1</strong>", part)
+    part = re.sub(r"(?<![\w*])\*([^*\s][^*\n]*)\*(?!\w)", r"<em>\1</em>", part)
+    part = re.sub(r"(?<![\w_])_([^_\s][^_\n]*)_(?!\w)", r"<em>\1</em>", part)
+    return re.sub(r"\x00(\d+)\x00", lambda m: spans[int(m.group(1))], part)
+
+
+PAGE_LIST = re.compile(r"^(\s*)([-*+]|\d+[.)])\s+(.*)$")
+
+
+def page_cells(line):
+    return [cell.strip() for cell in line.strip().strip("|").split("|")]
+
+
+def page_markdown(words):
+    """WORDS' Markdown as HTML: paragraphs, headings, lists, code,
+    tables, quotes and rules. What agents write, not all of Markdown."""
+    lines = words.replace("\r\n", "\n").split("\n")
+    out, i = [], 0
+    while i < len(lines):
+        line = lines[i]
+        fence = re.match(r"^\s*(```+|~~~+)", line)
+        if fence:
+            body, i = [], i + 1
+            while i < len(lines) and not lines[i].strip().startswith(fence.group(1)):
+                body.append(lines[i])
+                i += 1
+            i += 1
+            out.append("<pre><code>%s</code></pre>" % html.escape("\n".join(body)))
+        elif not line.strip():
+            i += 1
+        elif re.match(r"^\s*#{1,6}\s", line):
+            heading = line.strip()
+            level = min(len(heading) - len(heading.lstrip("#")) + 1, 6)
+            out.append("<h%d>%s</h%d>" % (level, page_inline(heading.lstrip("#").strip()), level))
+            i += 1
+        elif re.match(r"^\s*([-*_])\s*(\1\s*){2,}$", line):
+            out.append("<hr>")
+            i += 1
+        elif "|" in line and i + 1 < len(lines) and re.match(r"^\s*\|?[\s:|-]*-[\s:|-]*$", lines[i + 1]):
+            head, rows, i = page_cells(line), [], i + 2
+            while i < len(lines) and "|" in lines[i] and lines[i].strip():
+                rows.append(page_cells(lines[i]))
+                i += 1
+            out.append("<table><thead><tr>%s</tr></thead><tbody>%s</tbody></table>" % (
+                "".join("<th>%s</th>" % page_inline(cell) for cell in head),
+                "".join("<tr>%s</tr>" % "".join("<td>%s</td>" % page_inline(cell) for cell in row)
+                        for row in rows)))
+        elif line.lstrip().startswith(">"):
+            body = []
+            while i < len(lines) and lines[i].lstrip().startswith(">"):
+                body.append(re.sub(r"^\s*>\s?", "", lines[i]))
+                i += 1
+            out.append("<blockquote>%s</blockquote>" % page_markdown("\n".join(body)))
+        elif PAGE_LIST.match(line):
+            i = page_list(lines, i, out)
+        else:
+            # Its first line whatever it starts with, so that each turn of
+            # the loop takes at least a line.
+            body, i = [lines[i].strip()], i + 1
+            while (i < len(lines) and lines[i].strip() and not PAGE_LIST.match(lines[i])
+                   and not re.match(r"^\s*(```|~~~|#{1,6}\s|>)", lines[i])):
+                body.append(lines[i].strip())
+                i += 1
+            out.append("<p>%s</p>" % page_inline(" ".join(body)))
+    return "\n".join(out)
+
+
+def page_list(lines, i, out):
+    """Set the list that starts at LINES[I] in OUT; the line after it."""
+    first = PAGE_LIST.match(lines[i])
+    indent, tag = len(first.group(1)), "ol" if first.group(2)[0].isdigit() else "ul"
+    out.append("<%s>" % tag)
+    while i < len(lines):
+        item = PAGE_LIST.match(lines[i])
+        if not item or len(item.group(1)) < indent:
+            break
+        if len(item.group(1)) > indent:
+            i = page_list(lines, i, out)
+            continue
+        words, i = [item.group(3)], i + 1
+        while (i < len(lines) and lines[i].strip() and not PAGE_LIST.match(lines[i])
+               and not re.match(r"^\s*(```|~~~)", lines[i])):
+            words.append(lines[i].strip())
+            i += 1
+        out.append("<li>%s" % page_inline(" ".join(words)))
+        while i < len(lines) and not lines[i].strip():
+            i += 1
+        deeper = PAGE_LIST.match(lines[i]) if i < len(lines) else None
+        if deeper and len(deeper.group(1)) > indent:
+            i = page_list(lines, i, out)
+        out.append("</li>")
+    out.append("</%s>" % tag)
+    return i
+
+
+def conversation_page(task, turns, cut, whole):
+    """The page of TASK's conversation, TURNS. With CUT, it says older
+    turns are left out; without WHOLE, that only the latest is known."""
+    out = [READ_PAGE_HEAD.replace("TITLE", html.escape(text(task.get("name")) or "Conversation"), 1)]
+    if cut:
+        out.append("<p class=note>Older turns are left out.</p>")
+    if not whole:
+        out.append("<p class=note>Roost can't read this agent's conversation, only what you last sent"
+                   " and its latest reply.</p>")
+    if not turns:
+        out.append("<p class=note>Nothing has been said yet.</p>")
+    for number, turn in enumerate(turns, 1):
+        out.append("<section class=turn%s>" % (" id=last" if number == len(turns) else ""))
+        sender = SENT_FOR_YOU.match(turn["you"] or "")
+        if sender:
+            # Sent in your name by a program, as an app's event or a hook's
+            # note: one quiet line, which opens to the whole of it.
+            out.append("<details class=event><summary>Sent for you: %s</summary><pre>%s</pre></details>"
+                       % (html.escape(sender.group(1).replace("-", " ")), html.escape(turn["you"])))
+        elif turn["you"]:
+            out.append("<div class=you>%s</div>" % page_markdown(turn["you"]))
+        out.append("<div class=reply>%s</div>" % (page_markdown(turn["reply"]) if turn["reply"]
+                                                 else "<p class=working>No reply yet.</p>"))
+        if turn["notes"]:
+            count = len(turn["notes"])
+            out.append("<details class=behind><summary>On the way: %d note%s%s</summary>%s</details>"
+                       % (count, "" if count == 1 else "s",
+                          ", the newest" if turn.get("notesLeftOut") else "",
+                          "".join("<div class=said>%s</div>" % page_markdown(note) for note in turn["notes"])))
+        out.append("</section>")
+    out.append(READ_PAGE_TAIL)
+    return "\n".join(out)
+
+
+READ_PAGE_HEAD = """<!doctype html><html lang=en><meta charset=utf-8>
+<meta http-equiv=Content-Security-Policy content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>TITLE</title>
+<style>
+:root { color-scheme: light dark; --ink:#2b2824; --quiet:#8a8378; --rule:rgba(120,110,95,.22);
+        --box:rgba(120,110,95,.1); --you:rgba(120,110,95,.13); --link:#2f5f8c; --shadow:rgba(60,50,30,.14);
+        --paper:#f8f5ef; }
+:root[data-mode=dark] { --ink:#dad4c9; --quiet:#8d877d; --rule:rgba(200,190,175,.16);
+        --box:rgba(200,190,175,.08); --you:rgba(200,190,175,.1); --link:#9dbfe0; --shadow:rgba(0,0,0,.45);
+        --paper:#1d1c1f; }
+@media (prefers-color-scheme: dark) { :root:not([data-mode=light]) { --ink:#dad4c9; --quiet:#8d877d;
+        --rule:rgba(200,190,175,.16); --box:rgba(200,190,175,.08); --you:rgba(200,190,175,.1);
+        --link:#9dbfe0; --shadow:rgba(0,0,0,.45); --paper:#1d1c1f; } }
+html { background: var(--paper); }
+body { color: var(--ink); font: 18.5px/1.62 Charter, "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+       max-width: 36em; margin: 0 auto; padding: 3em 1.6em 45vh;
+       -webkit-font-smoothing: antialiased; font-kerning: normal; }
+p, li { hyphens: auto; -webkit-hyphens: auto; overflow-wrap: break-word; }
+@media (min-width: 640px) { .reply p, .reply li { text-align: justify; } }
+p { margin: 0 0 .85em; }
+ul, ol { padding-left: 1.3em; margin: 0 0 .85em; }
+li { margin: .25em 0; }
+li::marker { color: var(--quiet); }
+h1, h2, h3, h4, h5, h6 { font-size: 1em; font-weight: 700; margin: 1.5em 0 .35em; line-height: 1.3; }
+h2 { font-size: 1.12em; }
+a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+code, pre { font: .8em/1.5 "SF Mono", Menlo, Consolas, monospace; }
+code { background: var(--box); padding: .05em .22em; border-radius: 4px; }
+pre { background: var(--box); padding: .9em 1.1em; border-radius: 8px; margin: 0 0 1em;
+      white-space: pre-wrap; overflow-wrap: anywhere; }
+pre code { background: none; padding: 0; font-size: 1em; }
+table { border-collapse: collapse; font-size: .88em; margin: 1em 0; width: 100%; }
+th, td { border-bottom: 1px solid var(--rule); padding: .4em .8em .4em 0; text-align: left; vertical-align: top; }
+blockquote { border-left: 2px solid var(--rule); margin: 1em 0; padding-left: 1em; color: var(--quiet); }
+hr { border: 0; border-top: 1px solid var(--rule); margin: 1.6em 0; }
+.turn { padding-top: 2.4em; margin-top: 2.4em; border-top: 1px solid var(--rule); }
+.turn:first-of-type { border-top: 0; margin-top: 0; padding-top: 0; }
+.you { background: var(--you); border-radius: 14px; padding: .7em 1.1em; margin: 0 0 1.4em 3em;
+       font: 15.5px/1.5 -apple-system, "Helvetica Neue", "Segoe UI", sans-serif; }
+.you p { margin: .3em 0; }
+.you.long { max-height: 9.5em; overflow: hidden; cursor: pointer; position: relative;
+            -webkit-mask-image: linear-gradient(#000 60%, transparent); }
+.event { margin: 0 0 1.2em; }
+.event pre { font-size: 11.5px; margin-top: .5em; }
+.you pre { font-size: .85em; }
+.note, .working { color: var(--quiet); font-style: italic; }
+details { color: var(--quiet); font: 13px/1.5 -apple-system, "Helvetica Neue", sans-serif; margin-top: 1.2em; }
+summary { cursor: pointer; list-style: none; display: inline-block; padding: .2em .6em; border-radius: 6px;
+          margin-left: -.6em; }
+summary::-webkit-details-marker { display: none; }
+summary::before { content: "\\203A"; display: inline-block; width: 1em; transition: transform .15s; }
+details[open] > summary::before { transform: rotate(90deg); }
+summary:hover { background: var(--box); color: var(--ink); }
+details[open] { border-left: 2px solid var(--rule); padding-left: 1em; margin-left: -1em; }
+.said { color: var(--ink); opacity: .85; margin: .7em 0; font: 16px/1.55 Charter, Georgia, serif; }
+.path { font: .8em "SF Mono", Menlo, monospace; }
+#latest { position: fixed; right: 22px; bottom: 22px; border: 0; border-radius: 999px; padding: .55em 1.1em;
+          font: 13px -apple-system, "Helvetica Neue", sans-serif; cursor: pointer; background: var(--ink);
+          color: var(--paper); box-shadow: 0 2px 10px var(--shadow); opacity: 0; pointer-events: none;
+          transition: opacity .2s; }
+#latest.on { opacity: .82; pointer-events: auto; }
+</style><body>"""
+
+READ_PAGE_TAIL = """<button id=latest>Latest reply ↓</button>
+<script>
+function roostMode(mode) { document.documentElement.dataset.mode = mode; }
+document.querySelectorAll('.you').forEach(function (you) {
+  if (you.scrollHeight > 200) {
+    var open = function () {
+      you.classList.remove('long');
+      you.removeAttribute('title');
+      you.removeAttribute('role');
+      you.removeAttribute('tabindex');
+      you.setAttribute('aria-expanded', 'true');
+    };
+    you.classList.add('long');
+    you.title = 'Show all of it';
+    you.setAttribute('role', 'button');
+    you.setAttribute('tabindex', '0');
+    you.setAttribute('aria-expanded', 'false');
+    you.addEventListener('click', open);
+    you.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+    });
+  }
+});
+var turns = document.querySelectorAll('.turn'), last = turns[turns.length - 1];
+if (last) last.scrollIntoView();
+var latest = document.getElementById('latest');
+latest.addEventListener('click', function () { last.scrollIntoView({behavior: 'smooth'}); });
+addEventListener('scroll', function () {
+  latest.classList.toggle('on', !!last && last.getBoundingClientRect().top > innerHeight);
+}, {passive: true});
+document.addEventListener('click', function (e) {
+  var link = e.target.closest && e.target.closest('a[href]');
+  if (!link) return;
+  e.preventDefault();
+  (window.roostOutbox = window.roostOutbox || []).push({kind: 'link', text: link.href});
+});
+</script></body></html>"""
+
+
 SEARCH_SECONDS = 20
 
 
@@ -10840,6 +11197,11 @@ def answer(request):
             return {"ok": True, "result": jira_issue(request)}
         if action == "history":
             return {"ok": True, "result": history(store, request)}
+        if action == "read":
+            with store.locked():
+                task = store.read_to_act_on(request["id"])
+            # Long conversations take a while: not under the registry lock.
+            return {"ok": True, "result": read_conversation(store, task)}
         if action == "search":
             # Records are written whole, and reading transcripts takes a
             # while: hooks must not wait on the registry lock meanwhile.

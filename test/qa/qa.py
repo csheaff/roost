@@ -4509,6 +4509,43 @@ def crashed(qa, repo):
             for name in (first, second)))])
 
 
+@journey("A conversation read as a page")
+def read_conversation(qa, repo):
+    """A task's conversation, read as a page in place of its terminal: a
+    click on Read in its panel sets it, at the newest turn, where Read then
+    reads Terminal, and a click on that takes you back; so does q. In a web
+    view where this Emacs has one, else as Emacs's own HTML renderer sets it."""
+    task = new_task(qa, "read the ledger report")
+    qa.status(task, "ready", "idle")
+    open_task(qa, task)
+    name = "*%s: conversation*" % task
+    reading = lambda s: next((w for w in s["windows"] if w["buffer"] == name), None)
+    web = qa.emacs.eval("(and (roost--pages-p) t)") == "t"
+    if qa.emacs.eval("(qa-click-text \"V Read\" \"roost-task-info-mode\")") != "t":
+        raise Stuck("No V Read in the panel to click")
+    qa.wait("the conversation", reading, timeout=30)
+    qa.step("A click on Read sets the conversation where its terminal was", expect=[
+        ("no terminal of the task shows", lambda s: not terminals(s)),
+        ("it is the window you are in", lambda s: reading(s)["selected"]),
+        ("the panel still shows beside it", lambda s: qa.window(s, "roost-task-info-mode")),
+        ("the panel offers the way back", lambda s: "V Terminal" in qa.window(s, "roost-task-info-mode")["text"]),
+        ("what you sent reads in it" if not web else "a web view draws it",
+         lambda s: ("read the ledger report" in reading(s)["text"]) if not web
+         else qa.emacs.eval("(with-current-buffer %s (and (roost--page-view) t))" % lisp(name)) == "t")])
+    if qa.emacs.eval("(qa-click-text \"V Terminal\" \"roost-task-info-mode\")") != "t":
+        raise Stuck("No V Terminal in the panel to click")
+    qa.wait("the terminal again", lambda s: terminals(s) and not reading(s))
+    qa.step("A click on Terminal brings the agent's terminal back", expect=[
+        ("the terminal is where the page was", lambda s: terminals(s)),
+        ("the panel offers to read it again", lambda s: "V Read" in qa.window(s, "roost-task-info-mode")["text"])])
+    qa.emacs.eval("(qa-click-text \"V Read\" \"roost-task-info-mode\")")
+    qa.wait("the conversation again", reading, timeout=30)
+    qa.keys("q")
+    qa.wait("the terminal once more", lambda s: selected_terminal(s) is not None and not reading(s))
+    qa.step("q there goes back too", expect=[
+        ("you are in the terminal", lambda s: selected_terminal(s) is not None)])
+
+
 @journey("A page an agent shows")
 def show_page(qa, repo):
     """An agent shows a page it wrote, which opens beside its terminal as
@@ -4694,7 +4731,7 @@ JOURNEYS = [sweep, answer, next_waiting, fold, resize, merge, review, notes, sin
             walk_away,
             frames, draft_frames, org, drafts, draft_fields, by_clicks, conversation, clicks, overlap, region, tabs,
             own_workspace,
-            forget, rename, fork, offer, left_pull_request, show, show_page, page_as_written, other_branch, switched_branch, merged, large, pull_request, merge_request, exits,
+            forget, rename, fork, offer, left_pull_request, show, read_conversation, show_page, page_as_written, other_branch, switched_branch, merged, large, pull_request, merge_request, exits,
             include, slow_create,
             unreachable,
             doctor, scrollback,

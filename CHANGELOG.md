@@ -4,6 +4,15 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- `V` reads a task's conversation as a page in place of its terminal:
+  what you sent and the agent's last words for each turn, set in a serif
+  for reading, with what it wrote on the way folded under them. *Read* in
+  the task panel does the same, and reads *Terminal* while the page shows:
+  a click on it, `q` or `V` go back. It reads what Claude
+  Code, Codex and Pi keep, on remote hosts too; for OpenCode, the latest
+  prompt and reply. Without xwidgets, Emacs's own HTML renderer sets it.
+  Nothing to do when upgrading.
+
 - Roost stays quick with many task terminals open. With about fifty,
   each command that asked which task a terminal shows looked through
   every buffer once for each task, and starting a task took four to ten

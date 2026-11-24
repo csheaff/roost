@@ -167,6 +167,9 @@ what its host said when it read it.")
                       (cons '(alreadyMade . t) (copy-tree (cdr made)))
                     (roost-sweep-late--record "cccccc0000000000" "made" `(createId . ,asked)))))
       ("attach" (if record '((paths "/home/user/.roost/attachments/a.png")) gone))
+      ("read" (if record '((page . "<!doctype html><section class=turn id=last><p>Hi</p></section>") (turns . 1)
+                           (whole . t) (cut . :false))
+                gone))
       ("shown" (if record '((id . "0a1b2c3d") (name . "shot.png") (kind . "png") (data . "iVBORw0KGgo=")) gone))
       ((guard (null record)) gone)
       ("stop" (roost-sweep-late--became record "stopped"))
@@ -989,6 +992,10 @@ dashboard the command starts from."
      :origin dashboard :fields ((offers ,roost-sweep-late--offer))
      :start ,(lambda () (roost-sweep-late--at-offer) (roost-offer-dismiss))
      :action "take-offer" :refusals ((,roost-sweep-late--retired)))
+    (read-conversation
+     :start ,(lambda () (roost-read-conversation (roost-sweep-late--mine)))
+     :action "read" :opens t :shows "*mine: conversation*"
+     :refusals (("The conversation took too long to read")))
     (show-image
      :fields ((shown (id . "0a1b2c3d") (name . "shot.png") (kind . "png") (at . "2026-11-01T10:00:00+00:00")))
      :start ,(lambda () (roost-show-image (roost-sweep-late--mine)))
