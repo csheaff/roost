@@ -823,6 +823,7 @@ watching from the start of each session.")
   "Incremented by each navigation, so slower earlier replies are ignored.")
 (defvar-local roost--buffer-task-key nil
   "Task key a task panel buffer belongs to.")
+(defvar roost--reading)
 
 ;;;; Task records and hosts
 
@@ -2590,6 +2591,10 @@ A folder there can be named ~, which isn't your home."
     (roost--dashboard-task))
    (roost--buffer-task-key
     (or (gethash roost--buffer-task-key roost--tasks)
+        (user-error "This task has been retired or is unavailable")))
+   ;; Its conversation, set to read.
+   (roost--reading
+    (or (gethash roost--reading roost--tasks)
         (user-error "This task has been retired or is unavailable")))
    (t
     (let ((tasks (roost-tasks))
@@ -12689,7 +12694,8 @@ its terminal, \\`g' reads it again."
 
 (defun roost--reading-task ()
   "The task whose conversation to read from where you are, or nil."
-  (if (derived-mode-p 'roost-dashboard-mode 'roost-search-mode)
+  (if (or (derived-mode-p 'roost-dashboard-mode 'roost-search-mode) roost--buffer-task-key)
+      ;; A row, or a panel's own task, not the main window's.
       (ignore-errors (roost--task-at-point))
     (roost--task-here)))
 
@@ -12739,6 +12745,9 @@ own HTML renderer sets the page."
     (if (window-parameter nil 'window-side)
         (bury-buffer)
       (switch-to-prev-buffer nil 'bury))
+    (when-let* ((kept (window-parameter nil 'roost-reading-dedicated)))
+      (set-window-parameter nil 'roost-reading-dedicated nil)
+      (set-window-dedicated-p nil (car kept)))
     ;; A page there still would be a second view of nothing new.
     (unless (get-buffer-window buffer t)
       (kill-buffer buffer))
@@ -12783,7 +12792,10 @@ the main window you are in."
         (cl-incf roost--reading-asked))
       (select-window window)
       ;; Borrowed: a window kept for its terminal, as some setups keep
-      ;; one, takes the page too, and gets its terminal back after.
+      ;; one, takes the page too, and is kept so again after.
+      (unless (window-parameter window 'roost-reading-dedicated)
+        (set-window-parameter window 'roost-reading-dedicated
+                              (list (window-dedicated-p window))))
       (set-window-dedicated-p window nil)
       (switch-to-buffer buffer nil t)
       (roost--fill-reading buffer key result)

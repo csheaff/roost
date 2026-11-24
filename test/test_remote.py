@@ -13930,6 +13930,13 @@ class ReadConversation(unittest.TestCase):
         self.assertIn("question 39", result["page"])
         self.assertNotIn("question 0<", result["page"])
         self.assertIn("Older turns are left out.", result["page"])
+        # One turn larger than the page alone is cut to fit.
+        self.conversation(worktree, "s1", [self.said("user", "quote", 0)] + [
+            self.said("assistant", [{"type": "text", "text": '"' * 60000}], n) for n in range(1, 14)])
+        with patch.object(roost, "READ_PAGE_LIMIT", 200000):
+            result = self.read("0a1b2c3d4e5f6a7b")
+        self.assertLessEqual(len(result["page"].encode()), 200000)
+        self.assertTrue(result["cut"])
 
     def test_markdown_is_set_as_agents_write_it(self):
         page = roost.page_markdown("# Title\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n> quoted\n\n"
@@ -13942,6 +13949,15 @@ class ReadConversation(unittest.TestCase):
         self.assertIn("<ol>\n<li>one\n<ul>\n<li>inner", page)
         self.assertIn('<a href="https://example.com">site</a>', page)
         self.assertNotIn("javascript:", page.replace("<span class=path>js</span>", ""))
+        # A link inside a link's address makes no markup of its own.
+        crafted = roost.page_markdown("[x](https://outer/?https://inner/onmouseover=window.pwned=1//)")
+        self.assertEqual(crafted.count("<a "), 1)
+        self.assertNotIn('" onmouseover', crafted)
+        self.assertEqual(crafted, '<p><a href="https://outer/?https://inner/onmouseover=window.pwned=1//">x</a></p>')
+        self.assertEqual(roost.page_markdown('see https://a/"onmouseover="x'),
+                         '<p>see <a href="https://a/">https://a/</a>&quot;onmouseover=&quot;x</p>')
+        # A NUL in a message is no mark of the renderer's.
+        self.assertEqual(roost.page_markdown("a\x000\x00b"), "<p>a0b</p>")
         # Indented, a heading is still one, and every line is taken once.
         self.assertEqual(roost.page_markdown("  ## Indented\ntext"), "<h3>Indented</h3>\n<p>text</p>")
         self.assertEqual(roost.page_markdown("#nospace\n>"), "<p>#nospace</p>\n<blockquote></blockquote>")

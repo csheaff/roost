@@ -17007,6 +17007,35 @@ it of the same ID's, or nil for the first."
        (should (string-search "newer" (buffer-string)))
        (should-not (string-search "older" (buffer-string)))))))
 
+(ert-deftest roost-a-conversation-is-its-tasks-and-its-window-kept-as-it-was ()
+  ;; Commands in the page act on its task; a panel reads its own task's;
+  ;; and a window kept for the terminal is kept so again after.
+  (roost-test--isolated
+   (skip-unless (and (fboundp 'libxml-available-p) (libxml-available-p)))
+   (save-window-excursion
+     (delete-other-windows)
+     (let* ((terminal (get-buffer-create "*fake terminal*"))
+            (task (roost--cache-task "dev" (append '((name . "budget"))
+                                                   (roost-test--task "1111111111111111" "ready"))))
+            (other (roost--cache-task "dev" (append '((name . "other"))
+                                                    (roost-test--task "2222222222222222" "ready")))))
+       (with-temp-buffer
+         (setq-local roost--buffer-task-key (roost--key other))
+         (cl-letf (((symbol-function 'roost--task-here) (lambda () task)))
+           (should (equal (roost--key (roost--reading-task)) (roost--key other)))))
+       (switch-to-buffer terminal)
+       (set-window-dedicated-p nil t)
+       (cl-letf (((symbol-function 'roost--request)
+                  (lambda (_host _action _parameters success &rest _)
+                    (funcall success '((page . "<section id=last><p>Hi</p></section>")))))
+                 ((symbol-function 'roost--task-terminal-window) (lambda (_task) (selected-window))))
+         (roost-read-conversation task))
+       (should (buffer-local-value 'roost--reading (window-buffer)))
+       (should (equal (roost--key (roost--task-at-point)) (roost--key task)))
+       (roost-read-conversation)
+       (should (eq (window-buffer) terminal))
+       (should (eq (window-dedicated-p) t))))))
+
 (provide 'roost-test)
 
 (ert-deftest roost-terminal-size-is-the-window-the-task-opens-in ()

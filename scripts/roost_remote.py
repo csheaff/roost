@@ -8657,25 +8657,40 @@ def read_conversation(store, task):
         turns = [dict(you=you, notes=[], reply=reply, at=None)] if you or reply else []
     while True:
         page = conversation_page(task, turns, cut, whole)
-        if len(page.encode()) <= READ_PAGE_LIMIT or len(turns) <= 1:
+        if len(page.encode()) <= READ_PAGE_LIMIT:
             return {"page": page, "turns": len(turns), "cut": cut, "whole": whole}
-        turns, cut = turns[max(1, len(turns) // 4):], True
+        if len(turns) > 1:
+            turns, cut = turns[max(1, len(turns) // 4):], True
+        else:
+            # One turn too large: without its notes, and its words cut to a
+            # size whose page fits, however escaping and encoding grow it.
+            most = READ_PAGE_LIMIT // 16
+            turn = turns[0]
+            turns, cut = [dict(turn, notes=[], you=turn["you"] and turn["you"][:most],
+                               reply=turn["reply"] and turn["reply"][:most])], True
 
 
 def page_inline(words):
     """WORDS' inline Markdown as HTML: code, links, bold and italics."""
+    # Each piece of markup made is set aside as it is made, behind a mark
+    # no message holds, so that what comes after cannot reach into it.
     spans = []
 
-    def keep(match):
-        spans.append("<code>%s</code>" % html.escape(match.group(1)))
+    def keep(markup):
+        spans.append(markup)
         return "\x00%d\x00" % (len(spans) - 1)
 
-    part = html.escape(re.sub(r"`([^`\n]+)`", keep, words))
-    part = re.sub(r"\[([^\]\n]+)\]\(([^)\s]+)\)",
-                  lambda m: ('<a href="%s">%s</a>' % (m.group(2), m.group(1))
-                             if re.match(r"https?://", m.group(2)) else "<span class=path>%s</span>" % m.group(1)),
+    def link(url, label):
+        return keep('<a href="%s">%s</a>' % (html.escape(url), html.escape(label)))
+
+    part = re.sub(r"`([^`\n]+)`", lambda m: keep("<code>%s</code>" % html.escape(m.group(1))),
+                  words.replace("\x00", ""))
+    part = re.sub(r"\[([^\]\n\x00]+)\]\(([^)\s\x00]+)\)",
+                  lambda m: (link(m.group(2), m.group(1)) if re.match(r"https?://", m.group(2))
+                             else keep("<span class=path>%s</span>" % html.escape(m.group(1)))),
                   part)
-    part = re.sub(r"(?<![\"=\w/>])(https?://[^\s<)\"]+)", r'<a href="\1">\1</a>', part)
+    part = re.sub(r"(?<![\w/])https?://[^\s<>)\"'\x00]+", lambda m: link(m.group(0), m.group(0)), part)
+    part = html.escape(part)
     part = re.sub(r"\*\*([^*\n]+)\*\*", r"<strong>\1</strong>", part)
     part = re.sub(r"(?<![\w*])\*([^*\s][^*\n]*)\*(?!\w)", r"<em>\1</em>", part)
     part = re.sub(r"(?<![\w_])_([^_\s][^_\n]*)_(?!\w)", r"<em>\1</em>", part)
