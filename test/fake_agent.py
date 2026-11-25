@@ -72,7 +72,7 @@ if codex:
     def report(event, **fields):
         subprocess.run(hooks[event], shell=True, input=json.dumps(dict(hook_event_name=event, session_id=session,
                                                                          **fields)),
-                       text=True, check=True)
+                       text=True, check=True, capture_output=True)
     deferred_start = "deferred-start" in args
     # Codex keeps a rollout of each session in its home. This one keeps
     # its own from its first Plan-mode turn, in a home of the fixture's,
