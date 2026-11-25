@@ -3975,6 +3975,53 @@ class Lifecycle(unittest.TestCase):
             self.assertEqual(roost.integration_for(roost.Store(str(self.state)), str(self.repo.resolve()),
                                                    str(self.repo), "origin/release", "main"), "release")
 
+    def lagging_main(self):
+        """Have origin's main two commits, and two files, ahead of local
+        main, which tracks it, as when you haven't pulled lately."""
+        remote = self.root / "remote.git"
+        roost.git(self.root, "clone", "-q", "--bare", str(self.repo), str(remote))
+        self.git("remote", "add", "origin", str(remote))
+        self.git("fetch", "-q", "origin")
+        self.git("branch", "-q", "--set-upstream-to=origin/main", "main")
+        for name in ("upstream-one", "upstream-two"):
+            (self.repo / name).write_text(name + "\n")
+            self.git("add", name)
+            self.git("commit", "-qm", name)
+        self.git("push", "-q", "origin", "main")
+        self.git("reset", "-q", "--hard", "HEAD~2")
+
+    def test_a_task_on_a_branch_from_upstream_counts_only_its_own_work(self):
+        self.lagging_main()
+        task = self.create(name="lagging")
+        self.request("stop", id=task["id"])
+        # Its worktree on a branch of origin's main, with one commit.
+        wt = Path(task["worktree"])
+        self.git("switch", "-q", "-c", "feat", "origin/main", cwd=wt)
+        self.commit_in(task, "mine")
+        listed = self.request("list", full=True)["result"][0]
+        self.assertEqual((listed["ahead"], [entry["path"] for entry in listed["files"]]), (1, ["mine"]))
+        self.assertEqual(listed["diff"], "1 file changed, 1 insertion(+)")
+        # Behind is of the branch an update merges in, which origin's commits aren't in.
+        self.assertEqual(listed["behind"], 0)
+        # Local main with a commit of its own: diverged, it is compared with as before.
+        self.git("commit", "-q", "--allow-empty", "-m", "local")
+        listed = self.request("list", full=True)["result"][0]
+        self.assertEqual(listed["ahead"], 3)
+        # With no upstream, too.
+        self.git("reset", "-q", "--hard", "HEAD~1")
+        self.git("branch", "-q", "--unset-upstream", "main")
+        self.assertEqual(self.request("list", full=True)["result"][0]["ahead"], 3)
+
+    def test_a_fetch_moves_a_task_s_git_stamp(self):
+        # A fetch can move the upstream a task's work is compared with.
+        self.lagging_main()
+        task = self.create(name="fetched")
+        self.request("stop", id=task["id"])
+        stamp = self.request("list")["result"][0]["gitStamp"]
+        time.sleep(0.01)
+        self.git("fetch", "-q", "origin")
+        self.assertNotEqual(self.request("list")["result"][0]["gitStamp"], stamp)
+
     def test_new_tasks_default_to_primary_branch_and_explicit_head_forks(self):
         first = self.create()
         wt = Path(first["worktree"])
@@ -11525,7 +11572,8 @@ print(json.dumps(dict(data=data)))
         record = roost.Store(str(self.state)).read(parent["id"])
         reply = self.request("create", directory=directory or record["repo"], name=offer["title"],
                              prompt=offer["brief"], base=record["integrationRef"], parent=parent["id"],
-                             createId=uuid.uuid4().hex[:24], socket=self.socket, command=record["command"])
+                             offer=offer["id"], createId=uuid.uuid4().hex[:24], socket=self.socket,
+                             command=record["command"])
         self.assertTrue(reply["ok"], reply)
         return reply["result"]
 
@@ -12379,6 +12427,25 @@ console.log(JSON.stringify(seen));
         reply = self.request("create", directory=str(self.repo), name="x", parent="../../etc", socket=self.socket,
                              command=[sys.executable, str(FAKE)])
         self.assertEqual(reply, dict(ok=False, error="Invalid task ID"))
+
+    def test_a_task_from_an_offer_starts_at_the_upstream_its_branch_lags(self):
+        remote = self.root / "remote.git"
+        roost.git(self.root, "clone", "-q", "--bare", str(self.repo), str(remote))
+        self.git("remote", "add", "origin", str(remote))
+        self.git("fetch", "-q", "origin")
+        self.git("branch", "-q", "--set-upstream-to=origin/main", "main")
+        parent = self.create(name="parent")
+        self.git("commit", "-q", "--allow-empty", "-m", "upstream")
+        self.git("push", "-q", "origin", "main")
+        self.git("reset", "-q", "--hard", "HEAD~1")
+        child = self.started(parent)
+        # It merges into local main still, from origin's.
+        self.assertEqual((child["baseCommit"], child["baseRef"], child["integrationBranch"]),
+                         (self.git("rev-parse", "origin/main"), "origin/main", "main"))
+        # Local main with a commit of its own: diverged, it starts there.
+        self.git("commit", "-q", "--allow-empty", "-m", "local")
+        child = self.started(parent, title="Test calc")
+        self.assertEqual((child["baseCommit"], child["baseRef"]), (self.git("rev-parse", "main"), "main"))
 
     def failing_checkout(self):
         """Have the repository's post-checkout hook write a file, then fail,
