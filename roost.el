@@ -131,6 +131,7 @@
 (defvar persp-mode)
 (defvar persp-modestring-short)
 (defvar persp-modestring-dividers)
+(defvar persp-sort)
 
 ;;;; Customization
 
@@ -9687,14 +9688,44 @@ which restores a window configuration of that frame, selects it."
           (pcase (roost--workspace-backend)
             ('perspective
              (when (fboundp 'persp-kill)
-               (roost--kill-perspective (roost--perspective-name task))))
+               (let ((name (roost--perspective-name task)))
+                 (when (equal name (persp-current-name))
+                   (when-let* ((next (roost--workspace-to-land-in
+                                      (cdr (let ((persp-sort 'access)) (persp-names))))))
+                     (persp-switch next)))
+                 (roost--kill-perspective name))))
             ('tab-bar
              (let ((name (roost--task-tab task)))
                (when (and name (cdr (roost--tabs)))
+                 (when (equal name (roost--current-workspace))
+                   (when-let* ((next (roost--workspace-to-land-in
+                                      (mapcar (lambda (tab) (alist-get 'name tab))
+                                              (tab-bar--tabs-recent)))))
+                     (tab-bar-select-tab-by-name next)))
                  (tab-bar-close-tab-by-name name))))))))
     (remhash key roost--perspectives)
     (unless (or (eq (selected-frame) selected) (not (frame-live-p selected)))
       (select-frame selected))))
+
+(defun roost--workspace-to-land-in (recent)
+  "Which of RECENT to go to when the current workspace, a finished task's, closes.
+RECENT names the frame's other workspaces, the one used last first.
+That is the one you came from if it is a task's; else that of the task
+waiting for you that `roost-next-waiting' would open first, or else of
+the task used last; and only when no task has a workspace here, the one
+used last."
+  (let* ((tasks (roost-tasks))
+         (task-p (if (eq (roost--workspace-backend) 'perspective)
+                     ;; Of a task Roost may not have listed yet, too.
+                     (lambda (name) (string-prefix-p "roost:" name))
+                   (lambda (name) (roost--workspace-task name tasks))))
+         (theirs (seq-filter task-p recent))
+         (waiting (sort (seq-filter #'roost--waiting-p tasks)
+                        (lambda (a b) (< (roost--attention-rank a) (roost--attention-rank b))))))
+    (or (and recent (funcall task-p (car recent)) (car recent))
+        (seq-some (lambda (task) (car (member (roost--workspace-name task) theirs))) waiting)
+        (car theirs)
+        (car recent))))
 
 (defun roost--kill-perspective (name)
   "Kill the selected frame's perspective NAME, but not its buffers.

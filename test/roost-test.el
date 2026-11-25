@@ -2327,6 +2327,80 @@ terminal's, on a pty.  Skips the test where it can't be made."
        (dolist (buffer (cons file (cons notes scratches)))
          (when (get-buffer buffer) (kill-buffer buffer)))))))
 
+;; perspective.el's `persp-kill' went to the perspective visited last,
+;; often `main' though other tasks' perspectives were open (#311).
+(defun roost-test--named-task (id name &optional status)
+  "A task on dev with ID, NAME and STATUS, cached."
+  (roost--cache-task "dev" (append `((name . ,name)) (roost-test--task id (or status "running")))))
+
+(ert-deftest roost-finishing-the-task-you-are-in-lands-in-another-task-s-perspective ()
+  (roost-test--with-perspectives
+   (let* ((start (persp-current-name))
+          (a (roost-test--named-task "aaaaaaaaaaaaaaaa" "a"))
+          (b (roost-test--named-task "bbbbbbbbbbbbbbbb" "b"))
+          (c (roost-test--named-task "cccccccccccccccc" "c"))
+          (d (roost-test--named-task "dddddddddddddddd" "d"))
+          (e (roost-test--named-task "eeeeeeeeeeeeeeee" "e")))
+     ;; Opened straight from A: back to A.
+     (roost--activate-workspace a)
+     (roost--activate-workspace b)
+     (roost--retired-workspace b)
+     (should (equal (persp-current-name) (roost--perspective-name a)))
+     ;; Opened from main, as from the dashboard there: still to A.
+     (persp-switch start)
+     (roost--activate-workspace b)
+     (roost--retired-workspace b)
+     (should (equal (persp-current-name) (roost--perspective-name a)))
+     ;; A opened from main, with C and D open: to the one used last.
+     (dolist (task (list c d a))
+       (persp-switch start)
+       (roost--activate-workspace task))
+     (roost--retired-workspace a)
+     (should (equal (persp-current-name) (roost--perspective-name d)))
+     ;; One waiting for you comes before the one used last.
+     (roost--activate-workspace e)
+     (setq c (roost-test--named-task "cccccccccccccccc" "c" "permission"))
+     (persp-switch start)
+     (roost--activate-workspace d)
+     (roost--retired-workspace d)
+     (should (equal (persp-current-name) (roost--perspective-name c)))
+     (roost--retired-workspace c)
+     (should (equal (persp-current-name) (roost--perspective-name e)))
+     ;; With no task's perspective left, back to main.
+     (roost--retired-workspace e)
+     (should (equal (persp-current-name) start))
+     (should (equal (persp-names) (list start))))))
+
+(ert-deftest roost-finishing-the-task-you-are-in-lands-in-another-task-s-tab ()
+  ;; `tab-bar-close-tab' selects the tab used last, which may be no task's.
+  (roost-test--isolated
+   (let ((tab-bar-mode-was tab-bar-mode)
+         (roost-workspace 'tab-bar))
+     (unwind-protect
+         (save-window-excursion
+           (tab-bar-mode 1)
+           (tab-bar-close-other-tabs)
+           (let* ((start (roost--current-workspace))
+                  (a (roost-test--named-task "aaaaaaaaaaaaaaaa" "a"))
+                  (b (roost-test--named-task "bbbbbbbbbbbbbbbb" "b"))
+                  (c (roost-test--named-task "cccccccccccccccc" "c")))
+             (roost--activate-workspace a)
+             (tab-bar-select-tab-by-name start)
+             (roost--activate-workspace b)
+             (roost--retired-workspace b)
+             (should (equal (roost--current-workspace) (roost--workspace-name a)))
+             (tab-bar-select-tab-by-name start)
+             (roost--activate-workspace c)
+             (tab-bar-select-tab-by-name start)
+             (roost--activate-workspace a)
+             (roost--retired-workspace a)
+             (should (equal (roost--current-workspace) (roost--workspace-name c)))
+             (roost--retired-workspace c)
+             (should (equal (roost--current-workspace) start))
+             (should (equal (roost--tabs) (list start)))))
+       (tab-bar-close-other-tabs)
+       (unless tab-bar-mode-was (tab-bar-mode -1))))))
+
 (ert-deftest roost-retiring-a-task-closes-its-perspective-in-every-frame ()
   ;; Each frame has perspectives of its own, and Roost killed only the
   ;; selected frame's.

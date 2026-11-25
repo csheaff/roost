@@ -4,6 +4,13 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- Finishing the task you are in, by retiring, merging, discarding or
+  forgetting it, lands you in another task's workspace: the one you came
+  from, else the one waiting for you that `n` would open, else the task
+  you used last. With perspective.el you often landed in `main`, and with
+  tabs in the tab used last, while other tasks' were open. Nothing to do
+  when upgrading.
+
 - A page, the conversation you read with `V` or one an agent shows, keeps
   to its window with line numbers on, as a global mode can turn them on:
   it drew over the task panel beside it. Nothing to do when upgrading.
