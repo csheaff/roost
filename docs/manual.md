@@ -101,7 +101,9 @@ Magit is optional (review falls back to Dired).
   terminal takes the place of another's. `r`, `f` or `D` on another task's
   row opens its terminal first, then its Magit, files or diff. Retiring,
   merging, discarding or forgetting a task closes its workspace; files you
-  opened in it stay open. Set `roost-workspace` to choose.
+  opened in it stay open. If you were in it, you land in the task you came
+  from, else the one waiting for you that `n` opens first, else the task
+  you used last; in a workspace of no task only when no task has one left. Set `roost-workspace` to choose.
 - **Evil.** Roost's dashboard and panels start in Emacs state so their keys work
   (`roost-evil-state`); `j`/`k` move between tasks. So do several images
   or a page an agent shows, and a terminal still connecting; over one

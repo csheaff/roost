@@ -3661,7 +3661,8 @@ Invariants:
 | gone | redraw | another's terminal shows | that task | taken up | `roost--adopt-shown-task` |
 | any | frame deleted | marked in no frame | the selected frame's | redraw | `roost--frame-deleted` |
 | any | go back | | as it was | set back | `roost--go-back` |
-| any | retired | | workspace closed | in every frame | `roost--retired-workspace` |
+| any | retired | its workspace not current | workspace closed | in every frame | `roost--retired-workspace` |
+| any | retired | its workspace current | the task landed in | first to the workspace you came from if a task's, else the first waiting task's, else the one used last of a task, else the workspace used last; then closed | `roost--workspace-to-land-in` |
 
 `roost--display-task` sets these before it connects, so a failing connect leaves them
 naming a task whose terminal didn't show. Only a redraw notices, and only for a task
