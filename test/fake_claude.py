@@ -66,7 +66,11 @@ def event(name, **fields):
         payload.setdefault("transcript_path", str(TRANSCRIPT))
     for matcher in settings["hooks"].get(name, []):
         for hook in matcher["hooks"]:
-            subprocess.run(hook["command"], input=json.dumps(payload), text=True, shell=True, check=True)
+            # On pipes, as Claude Code reads a hook's output, not on its
+            # terminal: once tmux goes, Python 3.13 and later can't start
+            # on a terminal macOS has revoked.
+            subprocess.run(hook["command"], input=json.dumps(payload), text=True, shell=True, check=True,
+                           capture_output=True)
 
 
 def probe():
