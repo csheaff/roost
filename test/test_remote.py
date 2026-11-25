@@ -4017,9 +4017,17 @@ class Lifecycle(unittest.TestCase):
         self.lagging_main()
         task = self.create(name="fetched")
         self.request("stop", id=task["id"])
+        # Origin's main moved on, then fetched from the task's own
+        # worktree, writing no FETCH_HEAD.
+        (self.repo / "upstream-three").write_text("three\n")
+        self.git("add", "upstream-three")
+        self.git("commit", "-qm", "upstream-three")
+        self.git("push", "-q", "origin", "HEAD:refs/heads/side")
+        self.git("reset", "-q", "--hard", "HEAD~1")
+        roost.git(self.root / "remote.git", "update-ref", "refs/heads/main", "side")
         stamp = self.request("list")["result"][0]["gitStamp"]
         time.sleep(0.01)
-        self.git("fetch", "-q", "origin")
+        self.git("fetch", "-q", "--no-write-fetch-head", "origin", cwd=Path(task["worktree"]))
         self.assertNotEqual(self.request("list")["result"][0]["gitStamp"], stamp)
 
     def test_new_tasks_default_to_primary_branch_and_explicit_head_forks(self):
@@ -12446,6 +12454,15 @@ console.log(JSON.stringify(seen));
         self.git("commit", "-q", "--allow-empty", "-m", "local")
         child = self.started(parent, title="Test calc")
         self.assertEqual((child["baseCommit"], child["baseRef"]), (self.git("rev-parse", "main"), "main"))
+        # Another attempt at an offer names its parent but not the offer,
+        # which the first took: it starts where the first does.
+        self.git("reset", "-q", "--hard", "HEAD~1")
+        record = roost.Store(str(self.state)).read(parent["id"])
+        reply = self.request("create", directory=record["repo"], name="attempt 2", base=record["integrationRef"],
+                             parent=parent["id"], createId=uuid.uuid4().hex[:24], socket=self.socket,
+                             command=record["command"])
+        self.assertTrue(reply["ok"], reply)
+        self.assertEqual(reply["result"]["baseCommit"], self.git("rev-parse", "origin/main"))
 
     def failing_checkout(self):
         """Have the repository's post-checkout hook write a file, then fail,

@@ -2870,7 +2870,10 @@ def make_task(store, request, create_id):
     # An offer starts at the branch its task merges into, which you may
     # not have pulled lately: then at its upstream, as it stands here.
     start = explicit_base
-    if text(request.get("offer")) and explicit_base and explicit_base.startswith("refs/heads/"):
+    # Each attempt at it too, which names the task that offered it but
+    # leaves the offer to the first.
+    if ((text(request.get("offer")) or request.get("parent")) and explicit_base
+            and explicit_base.startswith("refs/heads/")):
         start = caught_up(directory, explicit_base[len("refs/heads/"):])
         if start != explicit_base:
             base = git(directory, "rev-parse", "--abbrev-ref", start, check=False).stdout.strip() or base
@@ -4560,8 +4563,8 @@ def merge_conflicts(task, tip, integration):
 
 def git_stamp(task):
     """When the task's Git state last moved, from file times alone: commits,
-    staging, resets and checkouts in its worktree, moves of its
-    integration branch, and fetches. Cheap enough for every poll, unlike the statistics,
+    staging, resets and checkouts in its worktree, and moves of its
+    integration branch and of a remote's branch of that name. Cheap enough for every poll, unlike the statistics,
     so a commit made outside the agent still gets measured. Edits not yet
     staged leave it alone."""
     worktree = Path(task["worktree"])
@@ -4578,9 +4581,19 @@ def git_stamp(task):
     paths = [gitdir / "index", gitdir / "logs" / "HEAD"]
     if task.get("integrationBranch"):
         paths.append(common / "logs" / "refs" / "heads" / task["integrationBranch"])
-        # And fetches, which move the upstream that branch may lag, and
-        # that the task's work is then compared with (`caught_up`).
-        paths.append(common / "FETCH_HEAD")
+        # And its upstream, which the task's work is compared with when
+        # that branch lags it (`caught_up`): a remote's branch of the same
+        # name, its reflog as a fetch or push from any worktree moves it,
+        # its file, and packed refs where a reflog isn't kept.
+        try:
+            remotes = sorted(entry.name for entry in os.scandir(common / "refs" / "remotes") if entry.is_dir())
+        except OSError:
+            remotes = []
+        for remote in remotes:
+            paths += [common / "logs" / "refs" / "remotes" / remote / task["integrationBranch"],
+                      common / "refs" / "remotes" / remote / task["integrationBranch"]]
+        if remotes:
+            paths.append(common / "packed-refs")
     times = []
     for path in paths:
         try:
