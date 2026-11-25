@@ -4012,6 +4012,16 @@ class Lifecycle(unittest.TestCase):
         self.git("branch", "-q", "--unset-upstream", "main")
         self.assertEqual(self.request("list", full=True)["result"][0]["ahead"], 3)
 
+    def test_a_fetch_moves_a_task_s_git_stamp(self):
+        # A fetch can move the upstream a task's work is compared with.
+        self.lagging_main()
+        task = self.create(name="fetched")
+        self.request("stop", id=task["id"])
+        stamp = self.request("list")["result"][0]["gitStamp"]
+        time.sleep(0.01)
+        self.git("fetch", "-q", "origin")
+        self.assertNotEqual(self.request("list")["result"][0]["gitStamp"], stamp)
+
     def test_new_tasks_default_to_primary_branch_and_explicit_head_forks(self):
         first = self.create()
         wt = Path(first["worktree"])

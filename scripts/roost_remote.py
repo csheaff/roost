@@ -4560,8 +4560,8 @@ def merge_conflicts(task, tip, integration):
 
 def git_stamp(task):
     """When the task's Git state last moved, from file times alone: commits,
-    staging, resets and checkouts in its worktree, and moves of its
-    integration branch. Cheap enough for every poll, unlike the statistics,
+    staging, resets and checkouts in its worktree, moves of its
+    integration branch, and fetches. Cheap enough for every poll, unlike the statistics,
     so a commit made outside the agent still gets measured. Edits not yet
     staged leave it alone."""
     worktree = Path(task["worktree"])
@@ -4578,6 +4578,9 @@ def git_stamp(task):
     paths = [gitdir / "index", gitdir / "logs" / "HEAD"]
     if task.get("integrationBranch"):
         paths.append(common / "logs" / "refs" / "heads" / task["integrationBranch"])
+        # And fetches, which move the upstream that branch may lag, and
+        # that the task's work is then compared with (`caught_up`).
+        paths.append(common / "FETCH_HEAD")
     times = []
     for path in paths:
         try:
