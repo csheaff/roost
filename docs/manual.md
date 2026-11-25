@@ -266,6 +266,9 @@ own status is as it would be without it.
 - Click it, or press `RET` on it, to open it as a new task draft, filled in:
   in the same project, with the same agent, starting from the branch the
   offering task merges into, named and prompted as the agent offered it.
+  When that branch is behind its upstream with no commits of its own, as
+  when you haven't pulled lately, the task starts at the upstream as your
+  last fetch left it, and still merges into the local branch.
   Opening it only shows it: the offer waits under its task until you create
   the task, have the agent do it, or dismiss it, so you can look and go
   elsewhere. Open it again and the draft is as you left it. The draft is
@@ -566,7 +569,10 @@ The task panel says how large a task's
 changes are, counted from where its work leaves the branch it merges into,
 with uncommitted work and new files included: `14 files +540 −88`, then the
 top-level directories they are in, `In docs/, src/, test/ and the top
-level`. A task whose changes reach 400 lines (added and removed together),
+level`. When that branch is behind its upstream, such as `origin/main`,
+with no commits of its own, the count is from the upstream as your last
+fetch left it, so work upstream that you haven't pulled isn't counted as
+the task's; the same goes for how many commits the task is ahead. A task whose changes reach 400 lines (added and removed together),
 10 files or 3 top-level directories gets a dim `±` after its name in the
 sidebar and dashboard, so you can tell an hour of reading from ten minutes
 before you open Magit; hover over the row for its numbers. The mark only

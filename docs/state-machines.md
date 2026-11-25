@@ -2422,6 +2422,9 @@ Invariants:
   `roost--task-states`: the Git stamp may not move, as the two branches' reflogs
   can have one time, or Git keep none. Fixed:
   `roost-a-branch-to-merge-into-named-elsewhere-is-measured-against`.
+  `ahead` and the size are of that branch's upstream where the branch is behind
+  it with no commit of its own (`caught_up`); `behind`, `landed` and `conflicts`
+  are of the local branch, which `u` and `m` use.
 
 | From | Event | Guard | To | Effect | Code |
 |---|---|---|---|---|---|

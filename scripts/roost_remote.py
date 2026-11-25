@@ -825,14 +825,29 @@ def ref_exists(repo, branch):
                                 "refs/heads/" + branch, check=False).returncode == 0
 
 
-def fork_point(worktree, task):
+def caught_up(repo, branch):
+    """Local BRANCH by its full name, or its upstream, as a revision Git
+    reads, when BRANCH is behind that with no commit of its own: as a branch
+    you haven't pulled lately would be, by the remote-tracking branch as it
+    stands, without fetching. BRANCH's full name when it has no upstream,
+    is level with it, or has commits the upstream lacks."""
+    ref, upstream = "refs/heads/" + branch, branch + "@{upstream}"
+    counts = read_git(repo, "rev-list", "--left-right", "--count", ref + "..." + upstream, "--")
+    mine, theirs = (counts.stdout.split() + ["", ""])[:2] if counts.returncode == 0 else ("", "")
+    return upstream if mine == "0" and theirs.isdigit() and int(theirs) > 0 else ref
+
+
+def fork_point(worktree, task, compared=None):
     """Where the task's own work begins. Updating a task merges its
     integration branch in, which moves the merge base forward; before that,
-    or when the integration branch was rewritten, it is the starting commit."""
+    or when the integration branch was rewritten, it is the starting commit.
+    COMPARED is what the task's work is compared with, from `caught_up`,
+    else its integration branch as it is here."""
     base = task["baseCommit"]
     integration = task.get("integrationBranch")
     if integration:
-        merged = git(worktree, "merge-base", "refs/heads/" + integration, "HEAD", check=False).stdout.strip()
+        compared = compared or caught_up(worktree, integration)
+        merged = git(worktree, "merge-base", compared, "HEAD", check=False).stdout.strip()
         if merged and git(worktree, "merge-base", "--is-ancestor", base, merged, check=False).returncode == 0:
             return merged
     return base
@@ -2852,10 +2867,17 @@ def make_task(store, request, create_id):
     # source worktree when explicitly requested, rather than accidentally.
     explicit_base = "HEAD" if source else text(request.get("base"))
     base = explicit_base or current or "HEAD"
+    # An offer starts at the branch its task merges into, which you may
+    # not have pulled lately: then at its upstream, as it stands here.
+    start = explicit_base
+    if text(request.get("offer")) and explicit_base and explicit_base.startswith("refs/heads/"):
+        start = caught_up(directory, explicit_base[len("refs/heads/"):])
+        if start != explicit_base:
+            base = git(directory, "rev-parse", "--abbrev-ref", start, check=False).stdout.strip() or base
     # The primary checkout's branch by its full name, which a tag of the
     # same name would otherwise shadow.
     resolved = git(directory if explicit_base else repo, "rev-parse", "--verify", "--quiet",
-                   (explicit_base or ("refs/heads/" + current if current else "HEAD")) + "^{commit}",
+                   (start or ("refs/heads/" + current if current else "HEAD")) + "^{commit}",
                    check=False)
     if resolved.returncode:
         # Git says only "Needed a single revision".
@@ -4788,7 +4810,11 @@ def add_git_stats(tasks):
         task["worktreeHead"] = None
         if task["worktreeBranch"]:
             task["worktreeHead"] = read_git(worktree, "rev-parse", "--verify", "--quiet", "HEAD").stdout.strip() or None
-        base = fork_point(worktree, task)
+        integration = task.get("integrationBranch")
+        # A branch you haven't pulled lately would count work already
+        # upstream as the task's own.
+        compared = caught_up(worktree, integration) if integration else None
+        base = fork_point(worktree, task, compared)
         task["sinceLooked"] = since_looked(task, worktree, base)
         stats = read_git(worktree, "diff", "--no-ext-diff", "--no-textconv", "--shortstat", base)
         # Untracked files too, as retiring counts them, whatever
@@ -4804,12 +4830,11 @@ def add_git_stats(tasks):
                                            .stdout.split("\0") if path])
                            if read_git(worktree, "rev-parse", "-q", "--verify", "MERGE_HEAD").returncode == 0
                            else None)
-        integration = task.get("integrationBranch")
         if integration:
             # Ahead counts the task's own commits, not merges from updates.
+            # Behind is of the branch an update merges in.
             behind = read_git(worktree, "rev-list", "--count", "HEAD..refs/heads/" + integration, "--")
-            ahead = read_git(worktree, "rev-list", "--count", "--no-merges",
-                             "refs/heads/" + integration + "..HEAD", "--")
+            ahead = read_git(worktree, "rev-list", "--count", "--no-merges", compared + "..HEAD", "--")
             if behind.returncode == 0 and ahead.returncode == 0:
                 task["behind"], task["ahead"] = int(behind.stdout), int(ahead.stdout)
         # GitHub says whether an open pull request conflicts, and work

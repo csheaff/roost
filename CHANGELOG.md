@@ -4,6 +4,15 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- A task's size and the commits it is ahead are counted from the upstream
+  of the branch it merges into, such as `origin/main`, when the local
+  branch is behind it with no commits of its own: commits upstream you
+  hadn't pulled counted as the task's, as for a worktree on a branch made
+  from `origin/main`. A task created from an agent's offer starts at that
+  upstream too, rather than at the old commit, and still merges into the
+  local branch. Roost doesn't fetch for either. Nothing to do when
+  upgrading.
+
 - A page, the conversation you read with `V` or one an agent shows, keeps
   to its window with line numbers on, as a global mode can turn them on:
   it drew over the task panel beside it. Nothing to do when upgrading.
