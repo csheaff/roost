@@ -4029,6 +4029,25 @@ class Lifecycle(unittest.TestCase):
         time.sleep(0.01)
         self.git("fetch", "-q", "--no-write-fetch-head", "origin", cwd=Path(task["worktree"]))
         self.assertNotEqual(self.request("list")["result"][0]["gitStamp"], stamp)
+        # Of a remote whose name holds a slash, which main may track.
+        self.git("remote", "add", "team/origin", str(self.root / "remote.git"))
+        self.git("fetch", "-q", "team/origin")
+        self.git("branch", "-q", "--set-upstream-to=team/origin/main", "main")
+        roost.git(self.root / "remote.git", "update-ref", "refs/heads/main", "side~1")
+        stamp = self.request("list")["result"][0]["gitStamp"]
+        time.sleep(0.01)
+        self.git("fetch", "-q", "--no-write-fetch-head", "team/origin")
+        self.assertNotEqual(self.request("list")["result"][0]["gitStamp"], stamp)
+        # Packed, with no reflog or loose ref left of any remote's.
+        self.git("pack-refs", "--all")
+        shutil.rmtree(self.repo / ".git" / "logs" / "refs" / "remotes")
+        shutil.rmtree(self.repo / ".git" / "refs" / "remotes", ignore_errors=True)
+        stamp = self.request("list")["result"][0]["gitStamp"]
+        time.sleep(0.01)
+        self.git("-c", "core.logAllRefUpdates=false", "update-ref", "refs/remotes/origin/main", "refs/remotes/origin/side~1")
+        self.git("pack-refs", "--all")
+        shutil.rmtree(self.repo / ".git" / "refs" / "remotes", ignore_errors=True)
+        self.assertNotEqual(self.request("list")["result"][0]["gitStamp"], stamp)
 
     def test_new_tasks_default_to_primary_branch_and_explicit_head_forks(self):
         first = self.create()

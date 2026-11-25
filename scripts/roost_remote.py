@@ -4561,6 +4561,10 @@ def merge_conflicts(task, tip, integration):
     return [] if result.returncode == 0 else None
 
 
+# A remote's section of a repository's config, by the name it gives it.
+REMOTE_SECTION = re.compile(r'^\s*\[remote\s+"((?:[^"\\]|\\.)+)"\s*\]', re.MULTILINE)
+
+
 def git_stamp(task):
     """When the task's Git state last moved, from file times alone: commits,
     staging, resets and checkouts in its worktree, and moves of its
@@ -4584,16 +4588,16 @@ def git_stamp(task):
         # And its upstream, which the task's work is compared with when
         # that branch lags it (`caught_up`): a remote's branch of the same
         # name, its reflog as a fetch or push from any worktree moves it,
-        # its file, and packed refs where a reflog isn't kept.
+        # its file, and packed refs where a reflog isn't kept. Remotes by
+        # the names the repository's config gives them, `team/origin` too.
         try:
-            remotes = sorted(entry.name for entry in os.scandir(common / "refs" / "remotes") if entry.is_dir())
+            remotes = REMOTE_SECTION.findall((common / "config").read_text(errors="replace"))
         except OSError:
             remotes = []
-        for remote in remotes:
+        for remote in sorted(set(remotes)):
             paths += [common / "logs" / "refs" / "remotes" / remote / task["integrationBranch"],
                       common / "refs" / "remotes" / remote / task["integrationBranch"]]
-        if remotes:
-            paths.append(common / "packed-refs")
+        paths.append(common / "packed-refs")
     times = []
     for path in paths:
         try:
