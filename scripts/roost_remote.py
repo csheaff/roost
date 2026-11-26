@@ -875,6 +875,8 @@ def claude_hook_settings(store, task):
         if task.get("mayShowPages") is True:
             allow.append("mcp__roost__show_widget")
         if task.get("conversation") is True:
+            # And reads how the tasks it offered stand.
+            allow.append("mcp__roost__read_task")
             # A conversation plans work in your projects, which it has to
             # read first: those this host has run tasks in, without asking
             # at each file. Reading only: a change or a command there asks
@@ -5580,7 +5582,11 @@ MCP_CONVERSATION_INSTRUCTIONS = (
     "under this conversation in Roost until the user starts it, as a task with its own agent, worktree "
     "and branch, which they review and merge; you can't start one yourself, nor do it here. Split a larger piece of "
     "work into tasks that can go on at the same time without changing the same files, and say in each "
-    "brief what the others cover. Say in your reply what you offered."
+    "brief what the others cover. Say in your reply what you offered. Each task starts from its project's "
+    "branch without the others' changes, so offer work that needs another's only once that one is merged. "
+    "Before you plan what comes next, call read_task: it says how the tasks started from your offers stand, "
+    "as Roost records them. A task's latest reply is that agent's own account, which can be wrong. One "
+    "merged, retired or discarded is no longer listed: ask the user which."
     + MCP_SHOWS)
 # Images shown together: how many, and their bytes in all, which Emacs
 # takes in one reply.
@@ -5626,6 +5632,15 @@ MCP_TOOLS = {
                        description="Image files to show together, in order, in place of path: at most %d, "
                        "and %d MB in all" % (SHOWN_MOST, SHOWN_TOGETHER // (1024 * 1024))))),
         annotations=dict(readOnlyHint=False, destructiveHint=False, openWorldHint=False)),
+    "read_task": dict(
+        description=(
+            "How the tasks started from this conversation's offers stand, as Roost records them: each one's "
+            "name, ID, project, branch and status, and its agent's latest reply, which is that agent's own "
+            "account. A task merged, retired or discarded is no longer listed. Name one by its ID, or the "
+            "start of it, for that one alone."),
+        inputSchema=dict(type="object", properties=dict(
+            id=dict(type="string", description="A task's ID, as read_task gives it, or its first few characters"))),
+        annotations=dict(readOnlyHint=True, destructiveHint=False, openWorldHint=False)),
     "show_widget": dict(
         # When to use it comes first, and here, in the tool's own
         # description: an agent with a tool of its own that publishes
@@ -5753,7 +5768,10 @@ class McpServer:
 
     def tools(self):
         """The tools this task's agent has, by name."""
-        return {name: MCP_TOOLS[name] for name in mcp_tool_names(dict(mayShowPages=self.pages()))}
+        with contextlib.suppress(RoostError, OSError, ValueError):
+            task = self.store.read(self.task_id)
+            return {name: MCP_TOOLS[name] for name in mcp_tool_names(task)}
+        return {name: MCP_TOOLS[name] for name in mcp_tool_names({})}
 
     def answer(self, method, params):
         if method == "initialize":
@@ -5774,6 +5792,8 @@ class McpServer:
                     said = "\n".join(known_projects(self.store)) or "Roost has run no task in a project here yet."
                 elif params.get("name") == "show_image":
                     said = show_image(self.store, self.task_id, arguments.get("path"), arguments.get("paths"))
+                elif params.get("name") == "read_task":
+                    said = read_task(self.store, self.task_id, arguments.get("id"))
                 elif params.get("name") == "show_widget":
                     said = show_widget(self.store, self.task_id, arguments.get("title"),
                                        arguments.get("widget_code"))
@@ -5789,8 +5809,45 @@ class McpServer:
 
 
 def mcp_tool_names(task):
-    """The names of the tools TASK's agent has, as the server lists them."""
-    return [name for name in MCP_TOOLS if name != "show_widget" or task.get("mayShowPages") is True]
+    """The names of the tools TASK's agent has, as the server lists them:
+    `show_widget` where you let it show pages, and `read_task` for a
+    conversation, which plans tasks and reads how they stand."""
+    return [name for name in MCP_TOOLS
+            if (name != "show_widget" or task.get("mayShowPages") is True)
+            and (name != "read_task" or task.get("conversation") is True)]
+
+
+# What a task's status says to an agent reading it with read_task.
+STATUS_SAID = {"starting": "starting", "running": "working", "background": "working in the background",
+               "permission": "waiting for the user to answer it", "ready": "waiting for a prompt",
+               "stopped": "stopped", "exited": "exited", "failed": "stopped on an error",
+               "crashed": "crashed"}
+
+
+def read_task(store, task_id, wanted=None):
+    """How the tasks started from TASK_ID's offers stand, as their records
+    say, or the one WANTED names by its ID or the start of it. Read from
+    the records alone: the server runs no program, so a status is as its
+    agent's hooks last left it."""
+    tasks = [task for task in store.all()
+             if task.get("parent") == task_id and task.get("status") != "retired"]
+    wanted = (text(wanted) or "").strip()
+    if wanted:
+        tasks = [task for task in tasks if len(wanted) >= 4 and task["id"].startswith(wanted)]
+        if len(tasks) != 1:
+            raise RoostError("No task started from your offers has the ID %r; one merged, retired or discarded "
+                             "is no longer listed" % wanted)
+    if not tasks:
+        return ("No task started from your offers is in Roost now. One merged, retired or discarded is no longer "
+                "listed; ask the user which.")
+    said = []
+    for task in tasks:
+        status = task.get("status")
+        line = "%s, ID %s, in %s, on branch %s: %s." % (
+            task.get("name"), task["id"], task.get("repo"), task.get("branch"), STATUS_SAID.get(status, status))
+        reply = last_message(task)
+        said.append(line + ("\nIts latest reply, in its agent's words:\n" + reply if reply else ""))
+    return "\n\n".join(said)
 
 
 def mcp_arguments(store, task):

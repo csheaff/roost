@@ -12181,7 +12181,7 @@ console.log(JSON.stringify(seen));
         argv = roost.ClaudeAgent().launch(store, store.read(talk["id"]), False)
         allowed = json.loads(Path(argv[argv.index("--settings") + 1]).read_text())["permissions"]["allow"]
         self.assertEqual(allowed, ["mcp__roost__propose_task", "mcp__roost__list_projects", "mcp__roost__show_image",
-                                   "Read(/%s/**)" % self.repo.resolve()])
+                                   "mcp__roost__read_task", "Read(/%s/**)" % self.repo.resolve()])
         # Without one, it is told to name it.
         refused = self.call(talk, "propose_task", title="Fix add", brief="Fix add in calc.py.")
         self.assertTrue(refused["isError"])
@@ -12209,6 +12209,38 @@ console.log(JSON.stringify(seen));
         full = self.call(talk, "propose_task", title="One more", brief="And this.", project=str(self.repo))
         self.assertIn("%d offers" % roost.CONVERSATION_OFFER_LIMIT, full["content"][0]["text"])
 
+    def test_a_conversation_reads_how_the_tasks_it_offered_stand(self):
+        # The conversation plans in waves: before the next, it reads what
+        # Roost records of the tasks started from its offers, and only it
+        # has the tool, which a task's every request would pay for.
+        talk = self.create(name="Conversation 09:15", directory="/nowhere", conversation=True, mayOffer=True)
+        task = self.create(name="task", mayOffer=True)
+        names = lambda of: [tool["name"] for tool in self.serve(of, dict(id=2, method="tools/list"))[2]["result"]["tools"]]
+        self.assertNotIn("read_task", names(task))
+        self.assertIn("read_task", names(talk))
+        self.assertIn("call read_task", self.serve(talk)["hello"]["result"]["instructions"])
+        said = self.call(talk, "read_task")["content"][0]["text"]
+        self.assertIn("No task started from your offers", said)
+        child = self.create(name="Fix add", parent=talk["id"])
+        self.create(name="Not offered")
+        store = roost.Store(str(self.state))
+        record = store.read(child["id"])
+        record.update(status="ready", lastReply="Fixed add() and its test.")
+        store.save(record)
+        said = self.call(talk, "read_task")["content"][0]["text"]
+        self.assertIn("Fix add, ID %s, in %s, on branch %s: waiting for a prompt." % (
+            child["id"], record["repo"], record["branch"]), said)
+        self.assertIn("in its agent's words:\nFixed add() and its test.", said)
+        self.assertNotIn("Not offered", said)
+        # One by the start of its ID; one that isn't its is refused.
+        self.assertEqual(self.call(talk, "read_task", id=child["id"][:6])["content"][0]["text"], said)
+        refused = self.call(talk, "read_task", id="ffff")
+        self.assertTrue(refused["isError"])
+        self.assertIn("no longer listed", refused["content"][0]["text"])
+        # A task's agent can't read them: it has no such tool.
+        unknown = self.serve(task, dict(id="call", method="tools/call", params=dict(name="read_task", arguments={})))
+        self.assertEqual(unknown["call"]["error"]["message"], "Unknown tool: read_task")
+
     def test_the_projects_listed_leave_out_a_task_retired_meanwhile(self):
         # Its marker, found as the list is read, is gone by the time it is
         # dated: a conversation started then still starts, and the list
@@ -12230,7 +12262,7 @@ console.log(JSON.stringify(seen));
             settings = json.loads(Path(roost.claude_hook_settings(store, task)).read_text())
         self.assertEqual(settings["permissions"]["allow"],
                          ["mcp__roost__propose_task", "mcp__roost__list_projects", "mcp__roost__show_image",
-                          "Read(//srv/plain/**)"])
+                          "mcp__roost__read_task", "Read(//srv/plain/**)"])
 
     def test_an_offer_names_only_a_repository_of_yours(self):
         parent = self.create(name="parent")

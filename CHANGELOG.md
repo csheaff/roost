@@ -11,6 +11,12 @@ What each release changes, and what to do when upgrading. Newest first.
   the way to a conversation that plans work in waves. Nothing to do when
   upgrading.
 
+- A conversation's agent can read how the tasks started from its offers
+  stand, with a tool of Roost's, `read_task`: each one's project, branch,
+  status and latest reply, as Roost records them. It is told to read them
+  before it plans what comes next. Tasks have no such tool. Nothing to do
+  when upgrading: a conversation gets it when its agent next starts.
+
 - A page, the conversation you read with `V` or one an agent shows, keeps
   to its window with line numbers on, as a global mode can turn them on:
   it drew over the task panel beside it. Nothing to do when upgrading.

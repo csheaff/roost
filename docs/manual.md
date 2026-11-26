@@ -403,7 +403,10 @@ in a repository of Roost's own in the host's state directory, listed under
 asks which host. A conversation is where to plan: ask its agent to look at
 one of your projects and split a piece of work into tasks, and each waits
 under the conversation, naming its project, for you to open as a draft
-there and start ([Take the tasks an agent offers](#a-day-with-roost)). It
+there and start ([Take the tasks an agent offers](#a-day-with-roost)), or
+start them all with `a`. Ask it later what comes next, and it reads how the
+tasks it offered stand with its tool `read_task`, as Roost records them: one
+merged, retired or discarded is no longer listed, so tell it which. It
 reads the projects that host has run tasks in without asking, and changes
 nothing in them without asking. Claude asks once whether to trust Roost's
 conversations folder, with the first conversation on a host.
@@ -1541,8 +1544,10 @@ What runs where:
   the helper can read, so an agent learns whether a path is such an image,
   and no more: every refusal reads the same. Its tool `propose_task` writes an offer
   into the record of the task whose agent called it, and nothing else, and
-  `list_projects` names the projects that host has run tasks in: none of
-  the three runs a program or reaches another task. The task's own Claude
+  `list_projects` names the projects that host has run tasks in, and a
+  conversation's `read_task` reads the records of the tasks started from its
+  offers: their names, projects, branches, statuses and latest replies.
+  None of them runs a program or changes another task. The task's own Claude
   settings allow them without asking. An offer may name another project,
   by the folder of a Git repository there, which you read in its draft; a
   conversation's must, and its Claude settings also let it read, and only
