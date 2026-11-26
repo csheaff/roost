@@ -110,6 +110,8 @@ ghostel-tmux, the default, choose it themselves."
          (roost--turns-sent (make-hash-table :test 'equal))
          (roost--telling (make-hash-table :test 'equal))
          (roost--untold (make-hash-table :test 'equal))
+         (roost--waking (make-hash-table :test 'equal))
+         (roost--unwoken (make-hash-table :test 'equal))
          (roost--told-here (make-hash-table :test 'equal))
          (roost--sent-at (make-hash-table :test 'equal))
          (roost--workload nil)
@@ -11893,6 +11895,60 @@ Each is (ACTION PARAMETERS SUCCESS FAILURE), and nobody watches a task."
                                                   '(pr . ((number . 12) (state . "OPEN") (head . "b2"))))
                                             (apply #'roost-test--left-task '(head . "b2") failed)))
            (should (equal (alist-get 'key (car (roost-test--tells requests))) "b2"))))))))
+
+(ert-deftest roost-wakes-a-conversation-once-its-tasks-end-their-turns ()
+  ;; Once all the tasks started from a conversation's offers rest, Roost
+  ;; tells the conversation, once for the wave: its host writes the line.
+  (roost-test--isolated
+   (let (requests)
+     (roost-test--telling requests
+       (let* ((wakes (lambda () (mapcar #'cadr (seq-filter (lambda (request) (equal (car request) "wake"))
+                                                           requests))))
+              (talk-fields '((id . "c0c0c0c0c0c0c0c0") (name . "Conversation 09:15") (conversation . t)
+                             (status . "ready") (lastEvent . "Stop") (live . t)
+                             (updatedAt . "2026-11-26T09:00:00+00:00")))
+              (child (lambda (id status &rest more)
+                       (roost--cache-task "dev" (append more `((id . ,id) (name . ,id) (parent . "c0c0c0c0c0c0c0c0")
+                                                               (status . ,status) (lastEvent . "Stop")
+                                                               (live . t) (startedAt . ,id)))))))
+         (roost--cache-task "dev" talk-fields)
+         ;; While `a' makes the rest of the wave, the first to rest is
+         ;; not all of it.
+         (let ((roost--offers-being-created '((("dev" "c0c0c0c0c0c0c0c0") "0a1b2c3d"))))
+           (funcall child "a1a1a1a1a1a1a1a1" "ready")
+           (should-not (funcall wakes)))
+         ;; One still at work: nothing yet.
+         (funcall child "b2b2b2b2b2b2b2b2" "running")
+         (funcall child "a1a1a1a1a1a1a1a1" "ready")
+         (should-not (funcall wakes))
+         (funcall child "b2b2b2b2b2b2b2b2" "ready" '(lastEvent . "Interrupt"))
+         (should-not (funcall wakes))
+         (funcall child "b2b2b2b2b2b2b2b2" "ready")
+         (should (equal (funcall wakes)
+                        '(((id . "c0c0c0c0c0c0c0c0") (ids . ["a1a1a1a1a1a1a1a1" "b2b2b2b2b2b2b2b2"])
+                           (asOf . "2026-11-26T09:00:00+00:00")))))
+         ;; Not asked twice while its host has yet to answer.
+         (funcall child "a1a1a1a1a1a1a1a1" "ready")
+         (should (= (length (funcall wakes)) 1))
+         ;; Told, as its record says: not again for these.
+         (funcall (nth 2 (car requests)) (append '((wokenFor . ["a1a1a1a1a1a1a1a1" "b2b2b2b2b2b2b2b2"])) talk-fields))
+         (funcall child "a1a1a1a1a1a1a1a1" "ready")
+         (should (= (length (funcall wakes)) 1))
+         ;; A task from its next offers is news, told once it rests.
+         (funcall child "c3c3c3c3c3c3c3c3" "ready")
+         (should (= (length (funcall wakes)) 2))
+         ;; Refused, it waits on you: tried again only with another task.
+         (funcall (nth 3 (car requests)) "The agent is not at rest")
+         (funcall child "c3c3c3c3c3c3c3c3" "ready")
+         (should (= (length (funcall wakes)) 2))
+         (funcall child "d4d4d4d4d4d4d4d4" "ready")
+         (should (= (length (funcall wakes)) 3))
+         ;; A conversation at work, or one you are at, is told nothing.
+         (clrhash roost--waking)
+         (clrhash roost--unwoken)
+         (roost--cache-task "dev" (append '((status . "running")) talk-fields))
+         (funcall child "d4d4d4d4d4d4d4d4" "ready")
+         (should (= (length (funcall wakes)) 3)))))))
 
 (ert-deftest roost-leaves-a-pull-request-to-you-unless-it-can-tell-its-agent ()
   (roost-test--isolated

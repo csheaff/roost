@@ -404,9 +404,12 @@ asks which host. A conversation is where to plan: ask its agent to look at
 one of your projects and split a piece of work into tasks, and each waits
 under the conversation, naming its project, for you to open as a draft
 there and start ([Take the tasks an agent offers](#a-day-with-roost)), or
-start them all with `a`. Ask it later what comes next, and it reads how the
-tasks it offered stand with its tool `read_task`, as Roost records them: one
-merged, retired or discarded is no longer listed, so tell it which. It
+start them all with `a`. Once all the tasks started from its offers have
+ended their turns, Roost tells the conversation so in one line of its own,
+once for each set of tasks, while Emacs runs and you are not at its
+terminal. It then reads how they stand with its tool `read_task`, as Roost
+records them, and you can ask it what comes next: one merged, retired or
+discarded is no longer listed, so tell it which. It
 reads the projects that host has run tasks in without asking, and changes
 nothing in them without asking. Claude asks once whether to trust Roost's
 conversations folder, with the first conversation on a host.

@@ -345,6 +345,28 @@ class Tell(KeepsTask):
             problems.append("said told, and its record says %r" % told)
 
 
+class Wake(Scenario):
+    """A conversation told that the task started from its offers ended its
+    turn: asked again after the helper stopped, it is told once, and its
+    record says so."""
+
+    action = "wake"
+
+    def arrange(self, box):
+        self.task = box.create(name="Conversation", conversation=True, mayOffer=True)
+        self.child = box.create(name="child", parent=self.task["id"])
+        self.args = dict(ids=[self.child["id"]], asOf=box.record(self.task["id"])["updatedAt"])
+
+    def holds(self, box, problems):
+        super().holds(box, problems)
+        record = box.record(self.task["id"]) or {}
+        woken = record.get("wokenFor") or []
+        if woken not in ([], [self.child["id"]]):
+            problems.append("its record says it was woken for %r" % woken)
+        if self.final and self.final.get("ok") and not self.final["result"].get("stale") and not woken:
+            problems.append("said woken, and its record says nothing of it")
+
+
 class Shell(KeepsTask):
     action = "shell"
 
@@ -750,6 +772,6 @@ ALL = [Merge, MergeSquash, MergeAway, SquashAway, MergeTeardown, MergeSubmodule,
        RetireDead, RetireSquashedOnGitHub, Update, UpdateConflict, Discard, DiscardDirty, DiscardTeardown, DiscardWritingPage,
        Forget, Rename,
        Retarget,
-       Stop, Resume, Seen, Turn, Send, Leave, Tell, Shell, Attach, Inspect, Look, PullRequest, PullRequestPush, Create, CreateFromRemote,
+       Stop, Resume, Seen, Turn, Send, Leave, Tell, Wake, Shell, Attach, Inspect, Look, PullRequest, PullRequestPush, Create, CreateFromRemote,
        Propose, Show, ShowSeveral, ShowPage, TakeOffer, CreateFromOffer, CreateFromOfferFailing, CreateFork, CreateConversation,
        CreateFromReady, CreateInTerminal]

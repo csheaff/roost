@@ -12241,6 +12241,50 @@ console.log(JSON.stringify(seen));
         unknown = self.serve(task, dict(id="call", method="tools/call", params=dict(name="read_task", arguments={})))
         self.assertEqual(unknown["call"]["error"]["message"], "Unknown tool: read_task")
 
+    def test_a_conversation_is_told_once_a_wave_that_its_tasks_ended_their_turns(self):
+        talk = self.create(name="Conversation 09:15", directory="/nowhere", conversation=True, mayOffer=True)
+        first, second = (self.create(name=name, parent=talk["id"]) for name in ("Add mul", "Add div"))
+        store = roost.Store(str(self.state))
+        self.wait(talk, "ready")
+        line = "Roost: All 2 tasks started from your offers have ended their turns."
+        wake = lambda ids, **args: self.request("wake", id=talk["id"], **dict(
+            dict(ids=ids, asOf=store.read(talk["id"])["updatedAt"]), **args))
+        # Only a conversation, and only of the tasks Roost lists as its.
+        task = self.request("wake", id=first["id"], ids=[second["id"]], asOf=roost.now())
+        self.assertIn("Only a conversation", task["error"])
+        self.assertIs(wake([first["id"]])["result"]["stale"], True)
+        # One still at work: nothing yet.
+        for each in (first, second):
+            self.wait(each, "ready")
+        record = store.read(second["id"])
+        record["status"] = "running"
+        store.save(record)
+        self.assertIs(wake([first["id"], second["id"]])["result"]["stale"], True)
+        record["status"] = "ready"
+        store.save(record)
+        # Nor if the conversation did something since Emacs judged it.
+        self.assertIs(wake([first["id"], second["id"]], asOf="2026-01-01T00:00:00+00:00")["result"]["stale"], True)
+        self.assertEqual(self.pastes(talk, line), 0)
+        told = wake([second["id"], first["id"]])
+        self.assertTrue(told["ok"], told)
+        self.rested(talk, line)
+        self.assertEqual(sorted(told["result"]["wokenFor"]), sorted([first["id"], second["id"]]))
+        # Once: asked again, or after you merge one and the other rests again.
+        self.assertIs(wake([first["id"], second["id"]])["result"]["alreadyWoken"], True)
+        self.assertTrue(self.request("retire", id=first["id"])["ok"])
+        self.assertIs(wake([second["id"]])["result"]["alreadyWoken"], True)
+        time.sleep(0.3)
+        self.assertEqual(self.pastes(talk, line), 1)
+        # A task started from its next offers is a new wave.
+        third = self.create(name="Add a CLI", parent=talk["id"])
+        self.wait(third, "ready")
+        self.assertTrue(wake([second["id"], third["id"]])["ok"])
+        self.wait_for_pastes(talk, line, 2)
+        self.assertEqual(self.pastes(talk, line), 2)
+        # The line holds nothing its tasks' agents wrote.
+        self.assertEqual(roost.wake_words(1), "Roost: The task started from your offers has ended its turn. "
+                         "Call read_task to see how they stand before you plan what comes next.")
+
     def test_the_projects_listed_leave_out_a_task_retired_meanwhile(self):
         # Its marker, found as the list is read, is gone by the time it is
         # dated: a conversation started then still starts, and the list

@@ -368,6 +368,36 @@ refused while the offer's draft is creating its task, which would be made as wel
 Do it here's prompt went, as its host was forgotten, stays gone.
 Open: none.
 
+#### A conversation woken
+
+Kind: implicit, a field of a conversation's record. Lives in: `wokenFor`, the IDs
+of the tasks started from its offers that Roost told it had ended their turns, and
+in Emacs `roost--waking` and `roost--unwoken`. An experiment, with no model.
+
+| State | Meaning | How you can tell |
+| --- | --- | --- |
+| Unwoken | a task started from its offers is not in `wokenFor` | one of its listed tasks' IDs is missing from `wokenFor` |
+| Woken | Roost told it of every task listed under it | every one is in `wokenFor`, or none is listed |
+
+Invariants:
+- I1. Once for a wave: it is told only when a listed task is new to `wokenFor`, so a
+  task prompted again, or the rest after one merges, tell it nothing. (`wake`.)
+- I2. Only at rest: the conversation and every listed task rest at their prompts
+  after turns they ended themselves, and the conversation has done nothing since
+  the copy Emacs judged by. (`at_rest`, `wake`'s `asOf`.)
+- I3. Recorded before it is pasted, and with a send ID of the IDs: told at most once.
+- I4. The line is Roost's own words and a count, with nothing an agent wrote.
+  (`wake_words`.)
+
+| From | Event | Guard | To | Effect | Code |
+| --- | --- | --- | --- | --- | --- |
+| Unwoken | a refresh caches it or a task under it | all rest, none of its offers is being created, you are not at its terminal or sending to it | Woken | `wake` records the IDs and pastes the line | `roost--wake-ids`, `roost--wake`, `wake` |
+| Unwoken | as above | the tasks listed, or a status, differ from what Emacs judged by | Unwoken | `stale`: nothing told; the next refresh judges again | `wake` |
+| Unwoken | as above | its host refuses, as when its agent has started | Unwoken | waits on you, until another task joins those IDs | `roost--unwoken` |
+| Woken | a task is started from its offers | | Unwoken | none | `make_task` |
+
+Open: none.
+
 ### Creation
 
 Kind: implicit. Lives in: `creating/<id>.json` (the note), its flock,

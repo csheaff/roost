@@ -17,6 +17,12 @@ What each release changes, and what to do when upgrading. Newest first.
   before it plans what comes next. Tasks have no such tool. Nothing to do
   when upgrading: a conversation gets it when its agent next starts.
 
+- Once all the tasks started from a conversation's offers have ended their
+  turns, Roost tells the conversation in one line of its own, which sends
+  it to `read_task`: once for each set of tasks, while it rests and you are
+  not at its terminal. Each time is a turn of its agent's you didn't type.
+  When upgrading: a conversation whose tasks all rest already is told once.
+
 - A page, the conversation you read with `V` or one an agent shows, keeps
   to its window with line numbers on, as a global mode can turn them on:
   it drew over the task panel beside it. Nothing to do when upgrading.

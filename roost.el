@@ -760,6 +760,14 @@ See `roost--report-turn'.")
   "For each task key, what Roost is telling its agent, until its host replies.
 As `roost--tell-occurrence' has it.")
 
+(defvar roost--waking (make-hash-table :test 'equal)
+  "For each conversation's key, the tasks Roost is telling it of.
+Until its host replies.")
+
+(defvar roost--unwoken (make-hash-table :test 'equal)
+  "For each conversation's key, the tasks Roost could not tell it of.
+They wait on you: Roost tries again only once another task joins them.")
+
 (defvar roost--told-here (make-hash-table :test 'equal)
   "For each task key, what this Emacs heard its agent was told, and when.
 A cons of `roost--tell-occurrence' and `float-time'.")
@@ -1615,7 +1623,9 @@ A reply to create read before then can come after.")
              (remhash key roost--telling)
              (remhash key roost--told-here)
              (remhash key roost--sent-at)
-             (remhash key roost--untold))
+             (remhash key roost--untold)
+             (remhash key roost--waking)
+             (remhash key roost--unwoken))
             ((or (roost--judged-p task) (not (eq had 'unknown))) (puthash key turn roost--pr-verdicts)))
       ;; One held about it that is so no longer goes no more, though the
       ;; task may come to be so again before it would go.
@@ -1648,6 +1658,7 @@ A reply to create read before then can come after.")
     (when (gethash key roost--tasks)
       (roost--report-turn task)
       (roost--tell-agent task)
+      (roost--wake task)
       (roost--note-shown host task old))
     ;; Another pull request merged, as a second one on the task, is another
     ;; merge, at another head or into another branch.
@@ -8875,6 +8886,53 @@ says how it stands now, and Roost judges by that."
                       (lambda () (puthash key (cons occurrence (float-time)) roost--told-here)))
         (error (funcall done))
         (quit (funcall done) (signal 'quit nil))))))
+
+(defun roost--wake-ids (talk)
+  "The IDs of the tasks started from TALK's offers, if TALK is to hear of them.
+That is once all of them rest at their prompts after turns they ended
+themselves, none of its offers is still being made a task of, and one
+is new since Roost last told TALK, which rests too, and you are neither
+at its terminal nor telling it something yourself."
+  (when-let* (((roost--conversation-p talk))
+              ((equal (roost--status-name talk) "ready"))
+              ((roost--agent-running-p talk))
+              (key (roost--key talk))
+              ;; Not while `a' makes the rest of a wave.
+              ((not (assoc key roost--offers-being-created)))
+              (tasks (roost--started-tasks talk))
+              ((seq-every-p (lambda (task) (equal (roost--status-name task) "ready")) tasks))
+              (ids (sort (mapcar (lambda (task) (roost--field task 'id)) tasks) #'string<))
+              ((let ((woken (append (roost--field talk 'wokenFor) nil)))
+                 (seq-some (lambda (id) (not (member id woken))) ids)))
+              ((not (gethash key roost--waking)))
+              ((not (equal (gethash key roost--unwoken) ids)))
+              ((not (when-let* ((watched (roost--watched-task)))
+                      (equal (roost--key watched) key))))
+              ((not (roost--prompting-p talk))))
+    ids))
+
+(defun roost--wake (task)
+  "Tell the conversation TASK is, or was started from, that its tasks rest.
+As `roost--wake-ids' has it, once for each wave: its host pastes one line
+of Roost's own, which sends it to read_task.  What its host refuses
+waits on you."
+  (when-let* ((talk (if (roost--conversation-p task) task (roost--parent-task task)))
+              (ids (roost--wake-ids talk)))
+    (let ((key (roost--key talk))
+          (name (roost--field talk 'name)))
+      (puthash key ids roost--waking)
+      (condition-case nil
+          (roost--act talk "wake" `((ids . ,(vconcat ids)) (asOf . ,(roost--field talk 'updatedAt)))
+                      (lambda (updated)
+                        (remhash key roost--waking)
+                        (unless (or (alist-get 'stale updated) (alist-get 'alreadyWoken updated))
+                          (message "Told %s that the tasks it offered have ended their turns" name)))
+                      (lambda (err)
+                        (remhash key roost--waking)
+                        (puthash key ids roost--unwoken)
+                        (message "Roost did not tell %s that its tasks ended their turns: %s" name err)))
+        (error (remhash key roost--waking))
+        (quit (remhash key roost--waking) (signal 'quit nil))))))
 
 ;;;###autoload
 (defun roost-leave-pull-request (&optional task)

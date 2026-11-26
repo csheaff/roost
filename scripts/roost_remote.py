@@ -5528,6 +5528,77 @@ def tell(store, task, verdict, key, number, count=None, gitlab=False, as_of=None
     return task
 
 
+# How many of the tasks started from its offers a conversation keeps as
+# woken for: more than it can have at once.
+WOKEN_KEPT = 64
+
+
+def started_from(store, talk):
+    """The tasks started from TALK's offers that Roost lists, by ID."""
+    return {task["id"]: task for task in store.all()
+            if task.get("parent") == talk["id"] and task.get("status") != "retired"}
+
+
+def woken_for(talk):
+    """The IDs of the tasks Roost told TALK's agent had ended their turns."""
+    ids = talk.get("wokenFor")
+    return [i for i in ids if isinstance(i, str)] if isinstance(ids, list) else []
+
+
+def at_rest(task):
+    """Whether TASK's agent rests at its prompt after a turn it ended itself."""
+    return task.get("status") == "ready" and task.get("lastEvent") != "Interrupt"
+
+
+def wake_words(count):
+    """The line Roost types to a conversation whose COUNT tasks have all
+    ended their turns: Roost's own words and a number, with nothing those
+    tasks' agents wrote in them, as read_task tells it that."""
+    said = ("The task started from your offers has ended its turn." if count == 1
+            else "All %d tasks started from your offers have ended their turns." % count)
+    return "Roost: " + said + " Call read_task to see how they stand before you plan what comes next."
+
+
+def wake(store, talk, ids, as_of=None):
+    """Tell TALK, a conversation, that the tasks started from its offers,
+    those IDS, have all ended their turns, so it can plan what comes next:
+    paste the line `wake_words` gives, as `send` pastes yours. Once for a
+    wave: only when one of IDS is new since Roost last woke it, so a task
+    you prompt again, or the rest after you merge one, wake it no more.
+    Only while every one of them, and TALK's own agent, rests at its prompt
+    after a turn it ended itself. AS_OF is the `updatedAt` of the copy
+    Emacs judged by, as for `tell`: if TALK's agent has done anything
+    since, or the tasks Roost lists are not IDS, or one is at work again,
+    nothing is told, and the reply says `stale`."""
+    if talk.get("conversation") is not True:
+        raise RoostError("Only a conversation is told when the tasks it offered end their turns")
+    if not (isinstance(ids, list) and ids and all(isinstance(i, str) for i in ids)):
+        raise RoostError("Name the tasks that ended their turns")
+    if parse_time(as_of) is None:
+        raise RoostError("Invalid time")
+    woken = woken_for(talk)
+    if set(ids) <= set(woken):
+        return dict(talk, alreadyWoken=True)
+    if not at_rest(talk):
+        raise RoostError("The agent is not at rest")
+    tasks = started_from(store, talk)
+    if set(tasks) != set(ids) or not all(at_rest(task) for task in tasks.values()) \
+       or talk.get("updatedAt") != as_of:
+        return dict(talk, stale=True)
+    require_not_removing(store, talk, "send")
+    pane = owned_pane(talk, inventory_for(talk))
+    if not pane or pane["dead"]:
+        raise RoostError("The agent is not running; resume the task first")
+    # Recorded before it is pasted, as for `tell`: a helper that dies
+    # between the two leaves a conversation that may not have been told,
+    # and never one told twice.
+    talk["wokenFor"] = (woken + sorted(set(ids) - set(woken)))[-WOKEN_KEPT:]
+    store.save(talk)
+    send(store, talk, wake_words(len(ids)), send_id=hashlib.sha256(
+        ("wake %s %s" % (talk["id"], " ".join(sorted(ids)))).encode()).hexdigest()[:32])
+    return talk
+
+
 def numbered(folder, stem, number, suffix):
     """STEM-NUMBER.SUFFIX, its stem shortened, between characters, to fit
     the longest name FOLDER takes."""
@@ -11184,6 +11255,7 @@ TASK_ACTIONS = {
     "tell": lambda store, task, request: tell(store, task, request.get("verdict"), request.get("key"),
                                               request.get("number"), request.get("count"),
                                               request.get("gitlab") is True, request.get("asOf")),
+    "wake": lambda store, task, request: wake(store, task, request.get("ids"), request.get("asOf")),
     "retire": lambda store, task, request: retire(store, task, merged_head=request.get("mergedHead"),
                                                   teardown=text(request.get("teardown")),
                                                   still_open=request.get("stillOpen") is True,

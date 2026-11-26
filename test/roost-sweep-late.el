@@ -190,6 +190,7 @@ what its host said when it read it.")
                                  (said . "Roost: A check failed on #12. Fix it.")))
                         (prLeftAt . ,(roost-sweep-late--now)))
                       (assq-delete-all 'prTold (assq-delete-all 'prLeftAt record))))
+      ("wake" (cons `(wokenFor . ,(alist-get 'ids request)) (assq-delete-all 'wokenFor record)))
       ("retire" (roost-sweep-late--became record "retired"))
       ("forget" (roost-sweep-late--became record "forgotten"))
       ("merge" (roost-sweep-late--became record "retired" '(retiringCommit . "c9")))
@@ -232,7 +233,7 @@ SUCCESS and FAILURE take it when it comes.  Its host reads the world now."
       ("create" (unless (assq 'alreadyMade reply)
                   (setq roost-sweep-late--records
                         (append roost-sweep-late--records (list (cons (alist-get 'id reply) reply))))))
-      ((or "stop" "resume" "rename" "retarget" "leave" "tell" "shell" "pr" "take-offer")
+      ((or "stop" "resume" "rename" "retarget" "leave" "tell" "wake" "shell" "pr" "take-offer")
        (when (assoc id roost-sweep-late--records)
          (setf (alist-get id roost-sweep-late--records nil nil #'equal) (assq-delete-all 'pushed reply)))))))
 
@@ -1094,6 +1095,12 @@ dashboard the command starts from."
                         (checkedAt . "2099-01-01T00:00:00+00:00")))
      :start ,(lambda () (roost--tell-agent (roost-sweep-late--mine)))
      :action "tell" :refusals ((,roost-sweep-late--retired) ("The agent is not at rest")))
+    (wake
+     ;; A conversation whose one task from its offers has ended its turn.
+     :fields ((conversation . t) (repo . "/state/conversations"))
+     :others ((parent . ,roost-sweep-late--mine) (lastEvent . "Stop"))
+     :start ,(lambda () (roost--wake (roost-sweep-late--mine)))
+     :action "wake" :refusals ((,roost-sweep-late--retired) ("The agent is not at rest")))
     (retire
      :fields ((ahead . 0))
      :start ,(lambda () (roost-retire (roost-sweep-late--mine)))
