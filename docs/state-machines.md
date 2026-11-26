@@ -341,6 +341,7 @@ Invariants:
 | Waiting | you open it | | Waiting | none: looking at it decides nothing | `roost--compose-offer` |
 | Waiting | you have its agent do it here, or dismiss it, from its row or its draft | | Waiting or None | dropped | `take_offer` |
 | Waiting | a task is made from it | | Waiting or None | dropped; Emacs lists the host again, so its row goes | `make_task`, `take_offer` |
+| Waiting | you start them all with `a`, after one question that shows each brief | none of them is being created, nor has a draft you changed | Waiting or None | a task is asked for from each offer read before the question, each with a creation ID of its offer's, as its draft would ask; Emacs lists the host again once every reply is in | `roost-start-offers`, `make_task` |
 | Waiting | a listing | a task records it as the offer it came from | Waiting or None | dropped | `taken_offers` |
 | Waiting | a task asked for from it fails to start, as when a post-checkout hook fails | | Waiting | none: the failed record, if one is kept, shows under its task and names no offer; asked again, the draft makes its task, which takes it | `abandon` |
 | Waiting | you have its agent do it here | its draft is creating its task | Waiting | refused: nothing is sent | `roost-offer-here` |

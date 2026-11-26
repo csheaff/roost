@@ -4,6 +4,13 @@ What each release changes, and what to do when upgrading. Newest first.
 
 ## Unreleased
 
+- `a` on an offer starts every offer of its task at once. Roost shows each
+  one's title, project and brief, asks once, and makes each task as its
+  draft would, leaving you where you are. A conversation that split a
+  piece of work into tasks starts them with one answer. An experiment, on
+  the way to a conversation that plans work in waves. Nothing to do when
+  upgrading.
+
 - A page, the conversation you read with `V` or one an agent shows, keeps
   to its window with line numbers on, as a global mode can turn them on:
   it drew over the task panel beside it. Nothing to do when upgrading.

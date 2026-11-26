@@ -988,6 +988,11 @@ dashboard the command starts from."
      :origin dashboard :fields ((offers ,roost-sweep-late--offer))
      :start ,(lambda () (roost-sweep-late--at-offer) (roost-offer-here))
      :first ("send") :action "take-offer" :refusals ((,roost-sweep-late--retired)))
+    (offer-start
+     :origin dashboard :fields ((offers ,roost-sweep-late--offer))
+     :start ,(lambda () (roost-sweep-late--at-offer) (roost-start-offers))
+     :action "create" :watches t :makes t
+     :refusals (("No branch, tag or commit named 'x' to start from")))
     (offer-dismiss
      :origin dashboard :fields ((offers ,roost-sweep-late--offer))
      :start ,(lambda () (roost-sweep-late--at-offer) (roost-offer-dismiss))

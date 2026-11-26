@@ -13617,6 +13617,7 @@ finish with it.  The others act on the task it sits under."
   "RET" #'roost-open-offer
   "e" #'roost-offer-here
   "x" #'roost-offer-dismiss
+  "a" #'roost-start-offers
   "<mouse-1>" #'roost-open-offer
   "<mouse-3>" #'roost-offer-mouse-menu)
 
@@ -13887,25 +13888,33 @@ replaces would be answered with that one's task."
             (user-error "%s" (substitute-command-keys
                               "Create this draft (\\<roost-compose-mode-map>\\[roost-compose-submit]) or cancel it (\\[roost-compose-cancel]) first; the offer waits"))))
         (kill-buffer buffer))
-      (let* ((elsewhere (roost--offer-project task offer))
-             ;; In another project, it starts where that project's checkout is.
-             (into (unless elsewhere (roost--field task 'integrationBranch))))
-        (roost--compose nil (cons (alist-get 'brief offer) t) (or elsewhere (roost--project-directory task)))
+      (let ((fields (roost--offer-fields task offer)))
+        (roost--compose nil (cons (alist-get 'brief offer) t) (plist-get fields :directory))
         (with-current-buffer roost--compose-buffer
-          (setq roost--compose-fields
-                (thread-first roost--compose-fields
-                              (plist-put :agent (or (roost--field task 'agent) roost-default-agent))
-                              ;; By its full name, as a tag of the same name would
-                              ;; otherwise stand for it.
-                              (plist-put :base (and (stringp into) (not (string-empty-p into))
-                                                    (or (roost--field task 'integrationRef)
-                                                        (concat "refs/heads/" into))))
-                              (plist-put :integration (and (stringp into) (not (string-empty-p into)) into))
-                              (plist-put :name (alist-get 'title offer))
-                              (plist-put :parent (roost--key task))
-                              (plist-put :offer (alist-get 'id offer))))
+          (dolist (field '(:agent :base :integration :name :parent :offer))
+            (setq roost--compose-fields (plist-put roost--compose-fields field (plist-get fields field))))
           (roost--compose-render)
           (setq roost--compose-offered (roost--compose-what)))))))
+
+(defun roost--offer-fields (task offer)
+  "What a task made from OFFER, which TASK's agent made, starts with, as a plist.
+:directory, :agent, :base, :integration, :name, :parent and :offer, as
+its draft has them before you change it: in the project the offer
+names, or else in TASK's, with TASK's agent, from the branch TASK
+merges into, and named as the agent offered it."
+  (let* ((elsewhere (roost--offer-project task offer))
+         ;; In another project, it starts where that project's checkout is.
+         (into (unless elsewhere (roost--field task 'integrationBranch)))
+         (into (and (stringp into) (not (string-empty-p into)) into)))
+    (list :directory (or elsewhere (roost--project-directory task))
+          :agent (or (roost--field task 'agent) roost-default-agent)
+          ;; By its full name, as a tag of the same name would otherwise
+          ;; stand for it.
+          :base (and into (or (roost--field task 'integrationRef) (concat "refs/heads/" into)))
+          :integration into
+          :name (alist-get 'title offer)
+          :parent (roost--key task)
+          :offer (alist-get 'id offer))))
 
 (defun roost-offer-here (&optional event)
   "Have the agent that made the offer at point, or clicked in EVENT, do it.
@@ -13945,12 +13954,134 @@ It no longer waits under its task, and nothing starts."
                        (lambda () (message "Dismissed %s's offer %s"
                                            (roost--field task 'name) (alist-get 'title offer))))))
 
+(defun roost-start-offers (&optional event)
+  "Start every offer that waits under the task of the offer at point.
+Or of the offer clicked in EVENT.  For a plan a conversation split into
+tasks that can go on at the same time: one question starts them all.
+It first shows each offer's title, project and brief, which is what its
+task's agent starts from, then asks once.  Each task is made as its
+draft would make it unchanged: in the project the offer names, with the
+offering task's agent, from the branch that task merges into.  You stay
+where you are, and the tasks show under the one that offered them."
+  (interactive (list last-nonmenu-event))
+  (pcase-let* ((`(,task ,_) (roost--offer-at event))
+               (key (roost--key task))
+               ;; Read once: what the question shows is what starts, though
+               ;; its agent offers more, or changes a brief, while you read.
+               (offers (roost--offers task))
+               (drafts (roost--offer-drafts key offers)))
+    (dolist (offer offers)
+      (when (member (list key (alist-get 'id offer)) roost--offers-being-created)
+        (user-error "Already creating %s as a task of its own" (alist-get 'title offer))))
+    (when (and drafts (not (with-current-buffer (car drafts) (roost--compose-looked-p))))
+      (pop-to-buffer (car drafts))
+      (user-error "You have a draft of %s: create or cancel it first"
+                  (with-current-buffer (car drafts) (roost--compose-name))))
+    (if (not (save-window-excursion
+               (roost--show-offers task offers)
+               (yes-or-no-p (format "Start %s, each with its own agent, worktree and branch? "
+                                    (if (cdr offers) (format "these %d tasks" (length offers)) "this task")))))
+        (message "Started nothing; the offers wait under %s" (roost--field task 'name))
+      ;; A draft you only looked at would make its task again.
+      (mapc #'kill-buffer drafts)
+      (roost--start-offers task offers))))
+
+(defun roost--offer-drafts (key offers)
+  "The open draft of any of OFFERS, of the task whose key is KEY, as a list."
+  (when-let* ((buffer (get-buffer roost--compose-buffer)))
+    (with-current-buffer buffer
+      (and (equal (plist-get roost--compose-fields :parent) key)
+           (seq-find (lambda (offer) (equal (alist-get 'id offer) (plist-get roost--compose-fields :offer)))
+                     offers)
+           (list buffer)))))
+
+(defconst roost--offers-buffer "*roost offers*")
+
+(defun roost--show-offers (task offers)
+  "Show OFFERS, which TASK's agent made, as `roost-start-offers' asks about them."
+  (with-current-buffer (get-buffer-create roost--offers-buffer)
+    (let ((inhibit-read-only t))
+      (erase-buffer)
+      (insert (format "%s offers %s, each to start with %s:\n"
+                      (roost--field task 'name)
+                      (if (cdr offers) (format "%d tasks" (length offers)) "a task")
+                      (or (roost--field task 'agent) roost-default-agent)))
+      (seq-do-indexed
+       (lambda (offer index)
+         (let ((fields (roost--offer-fields task offer)))
+           (insert (format "\n%d. %s\n   in %s, %s\n\n" (1+ index)
+                           (propertize (alist-get 'title offer) 'face 'bold)
+                           (roost--project-label (plist-get fields :directory))
+                           (if-let* ((into (plist-get fields :integration)))
+                               (format "from %s" into)
+                             "from the project's current branch")))
+           (insert (replace-regexp-in-string "^" "   " (string-trim (alist-get 'brief offer))) "\n")))
+       offers))
+    (goto-char (point-min))
+    (special-mode)
+    (pop-to-buffer (current-buffer))))
+
+(defun roost--start-offers (task offers)
+  "Make a task of each of OFFERS, which TASK's agent made, as their drafts would.
+Each asks with a creation ID of its own, the same however often you
+start it, so its host makes it once.  Once every reply is in, TASK is
+listed again, without the offers that became tasks."
+  (let ((host (roost--field task 'host))
+        (key (roost--key task))
+        (left (length offers))
+        (made 0)
+        (current nil)
+        ;; The setup command of a project is asked about once.
+        (roost--project-values (list t)))
+    (condition-case err
+        (dolist (offer offers)
+          (let* ((fields (roost--offer-fields task offer))
+                 (creating (list key (alist-get 'id offer)))
+                 (done (lambda ()
+                         (roost--offer-created-done creating)
+                         (when (zerop (cl-decf left))
+                           (roost--refresh-host host nil (list (cadr key)))
+                           (message "Started %d of %d tasks that %s offered"
+                                    made (length offers) (roost--field task 'name))))))
+            (push creating roost--offers-being-created)
+            (setq current creating)
+            (roost--create-task
+             (plist-get fields :directory) (plist-get fields :name) (plist-get fields :base)
+             (string-trim (alist-get 'brief offer)) (plist-get fields :agent)
+             (lambda (&rest _)
+               (cl-incf made)
+               (funcall done)
+               ;; You stay where you are.
+               t)
+             ;; `roost--create-task' says why.
+             (lambda (_err) (funcall done))
+             `((createId . ,(roost--offer-create-id task offer))
+               (parent . ,(cadr key))
+               (offer . ,(alist-get 'id offer))))
+            (setq current nil)))
+      ;; Nothing reached the host for the offer under way, as when you
+      ;; quit the question about its project's setup command: those
+      ;; before it went, and their replies end their own.
+      ((quit error)
+       (roost--offer-created-done current)
+       (signal (car err) (cdr err))))))
+
+(defun roost--offer-create-id (task offer)
+  "The creation ID with which `roost-start-offers' makes OFFER of TASK a task.
+The same for the same offer, so that starting it again, as after no
+reply came, makes one task.  An offer its agent made again says when,
+and is a new one.  Not `roost-offer-here''s send ID for it."
+  (substring (secure-hash 'sha256 (concat "start " (roost--field task 'id) " " (alist-get 'id offer)
+                                          " " (or (alist-get 'at offer) "")))
+             0 32))
+
 (easy-menu-define roost-offer-menu nil
   "Menu for an offer the dashboard or sidebar lists under its task."
   '("Offer"
     ["Open as a task draft" roost-open-offer]
     ["Do it here" roost-offer-here]
-    ["Dismiss" roost-offer-dismiss]))
+    ["Dismiss" roost-offer-dismiss]
+    ["Start all its task's offers" roost-start-offers]))
 
 (defun roost-offer-mouse-menu (event)
   "Show what can be done with the offer clicked in EVENT."

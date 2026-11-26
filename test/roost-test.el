@@ -19736,3 +19736,101 @@ With TILED, the terminal is a pane of a tiled tmux window."
               (with-current-buffer buffer (roost-quit-image))
               (should (= (length (window-list)) 2))))
         (kill-buffer buffer)))))
+
+(ert-deftest roost-start-offers-makes-each-as-its-draft-would ()
+  ;; A conversation split a piece of work into tasks: `a' on any of its
+  ;; offers shows them all, asks once, and starts each as its draft's
+  ;; Create would, with a creation ID of its own that is the same when
+  ;; asked again.  You stay where you are.
+  (roost-test--isolated
+   (let ((default-directory "/tmp/") (xterm-mouse-mode t) created asked shown wave
+         (offers '(((id . "0a1b2c3d") (title . "Fix add in calc.py") (brief . "add() subtracts.")
+                    (project . "/srv/ledger") (at . "2026-11-25T10:00:00+00:00"))
+                   ((id . "1b2c3d4e") (title . "Document add") (brief . "Say what add() does.")
+                    (project . "/srv/books") (at . "2026-11-25T10:00:01+00:00")))))
+     (save-window-excursion
+       (delete-other-windows)
+       (unwind-protect
+           (cl-letf (((symbol-function 'roost--create-task)
+                      (lambda (directory name base prompt agent &optional made _failed extra)
+                        (push (list directory name base prompt agent
+                                    (seq-filter (lambda (field) (memq (car field) '(createId parent offer)))
+                                                extra))
+                              created)
+                        (should (funcall made nil))))
+                     ((symbol-function 'roost--refresh-host) #'ignore)
+                     ((symbol-function 'roost--act) #'ignore)
+                     ((symbol-function 'yes-or-no-p)
+                      (lambda (prompt)
+                        (push prompt asked)
+                        (setq shown (with-current-buffer roost--offers-buffer (buffer-string)))
+                        t)))
+             (let ((task (roost--cache-task "dev" (append `((name . "Conversation 09:15") (conversation . t)
+                                                            (repo . "/state/conversations") (agent . "claude")
+                                                            (live . t) (offers ,@offers))
+                                                          (roost-test--task "1111111111111111" "ready")))))
+               (with-temp-buffer
+                 (roost-dashboard-mode)
+                 (roost--render-dashboard)
+                 (goto-char (roost--offer-row (list (roost--key task) "1b2c3d4e")))
+                 (roost-start-offers)
+                 (should (equal asked '("Start these 2 tasks, each with its own agent, worktree and branch? ")))
+                 (should (string-match-p "1\\. Fix add in calc\\.py\n   in .*/srv/ledger" shown))
+                 (should (string-match-p "   Say what add() does\\." shown))
+                 ;; Nothing waits on a reply after them all.
+                 (should-not roost--offers-being-created)
+                 (setq created (nreverse created) wave (car created))
+                 (should (equal (mapcar #'cadr created) '("Fix add in calc.py" "Document add")))
+                 (let ((ids (mapcar (lambda (call) (alist-get 'createId (nth 5 call))) created)))
+                   (should (equal (length (delete-dups (copy-sequence ids))) 2))
+                   ;; Asked again, as after no reply, the same IDs.
+                   (setq created nil)
+                   (goto-char (roost--offer-row (list (roost--key task) "0a1b2c3d")))
+                   (roost-start-offers)
+                   (should (equal (mapcar (lambda (call) (alist-get 'createId (nth 5 call))) (nreverse created))
+                                  ids))))
+               ;; The first, as its draft's Create would ask for it.
+               (progn
+                 (setq created nil)
+                 (roost--compose-offer task (car offers))
+                 (with-current-buffer roost--compose-buffer
+                   (roost-compose-submit))
+                 (let ((draft (car created)))
+                   (should (equal (butlast draft) (butlast wave)))
+                   (should (equal (assq-delete-all 'createId (copy-alist (nth 5 draft)))
+                                  (assq-delete-all 'createId (copy-alist (nth 5 wave)))))))))
+         (dolist (name (list roost--compose-buffer roost--offers-buffer))
+           (when (get-buffer name) (kill-buffer name))))))))
+
+(ert-deftest roost-start-offers-quit-partway-leaves-none-being-created ()
+  ;; Quitting the question about the second project's setup command ends
+  ;; the wave: the first went, and its reply ends its own wait; the second
+  ;; is not left waiting, so `e' on it isn't refused for good.  Answering
+  ;; no starts nothing.
+  (roost-test--isolated
+   (let ((default-directory "/tmp/") (calls 0) replies answer
+         (offers '(((id . "0a1b2c3d") (title . "Fix add") (brief . "add() subtracts.") (project . "/srv/ledger"))
+                   ((id . "1b2c3d4e") (title . "Fix sub") (brief . "sub() adds.") (project . "/srv/books")))))
+     (cl-letf (((symbol-function 'roost--create-task)
+                (lambda (_directory _name _base _prompt _agent &optional made _failed _extra)
+                  (when (= (cl-incf calls) 2) (signal 'quit nil))
+                  (push made replies)))
+               ((symbol-function 'roost--refresh-host) #'ignore)
+               ((symbol-function 'yes-or-no-p) (lambda (_prompt) answer)))
+       (let ((task (roost--cache-task "dev" (append `((name . "Conversation 09:15") (conversation . t)
+                                                      (repo . "/state/conversations") (agent . "claude")
+                                                      (live . t) (offers ,@offers))
+                                                    (roost-test--task "1111111111111111" "ready")))))
+         (unwind-protect
+             (with-temp-buffer
+               (roost-dashboard-mode)
+               (roost--render-dashboard)
+               (goto-char (roost--offer-row (list (roost--key task) "0a1b2c3d")))
+               (roost-start-offers)
+               (should (= calls 0))
+               (setq answer t)
+               (should (condition-case nil (progn (roost-start-offers) nil) (quit t)))
+               (should (equal roost--offers-being-created (list (list (roost--key task) "0a1b2c3d"))))
+               (funcall (car replies) nil)
+               (should-not roost--offers-being-created))
+           (when (get-buffer roost--offers-buffer) (kill-buffer roost--offers-buffer))))))))

@@ -276,6 +276,12 @@ own status is as it would be without it.
 - `e` on it, or **Do it here** from its right-click menu, sends that agent
   `Do this task here: “TITLE”`, as `e` sends a prompt, and the offer no
   longer waits. The agent wrote the brief, so the title is enough.
+- `a` on it, or **Start all its task's offers** from its right-click menu,
+  starts every offer of that task together. Roost shows each one's title,
+  project and brief, asks once, and makes each task as its draft would,
+  leaving you where you are. For a plan a conversation split into tasks.
+  It refuses while one of them is being made, or while you have a draft
+  of one that you changed: create or cancel that first.
 - `x` on it, **Dismiss** from its right-click menu, or **Dismiss offer** in
   its draft, drops it. Roost can't tell whether an offer still stands, as
   when its agent did the work since: ask the agent, or dismiss it.
@@ -828,8 +834,10 @@ under the attempts that changed it and `·` under those that left it alone:
 
 On an offer an agent made, listed under its task in the dashboard and
 sidebar: `RET` (`roost-open-offer`) opens it as a new task draft, `e`
-(`roost-offer-here`) has that agent do it there, and `x`
-(`roost-offer-dismiss`) dismisses it; `mouse-3` offers all three. In its
+(`roost-offer-here`) has that agent do it there, `x`
+(`roost-offer-dismiss`) dismisses it, and `a` (`roost-start-offers`)
+starts all of that task's offers after one question; `mouse-3` offers all
+four. In its
 draft, the **Dismiss offer** button (`roost-compose-dismiss-offer`) dismisses
 it and closes the draft. The other
 keys act on the task it sits under.
