@@ -5528,9 +5528,17 @@ def tell(store, task, verdict, key, number, count=None, gitlab=False, as_of=None
     return task
 
 
-# How many of the tasks started from its offers a conversation keeps as
+# How many finished tasks a conversation keeps, and how many it keeps as
 # woken for: more than it can have at once.
+FINISHED_KEPT = 32
 WOKEN_KEPT = 64
+# How each finished, as read_task tells a conversation's agent.
+FINISHED_SAID = {
+    "merged": "merged into %s",
+    "retired": "retired: its commits were on another branch, as once merged, or it had none",
+    "discarded": "discarded: its work was deleted",
+    "forgotten": "forgotten: Roost no longer lists it, and its branch and worktree were left as they were",
+}
 
 
 def started_from(store, talk):
@@ -5539,10 +5547,55 @@ def started_from(store, talk):
             if task.get("parent") == talk["id"] and task.get("status") != "retired"}
 
 
+def finished_of(talk):
+    """The tasks started from TALK's offers that finished, as `note_finished`
+    recorded them, oldest first."""
+    entries = talk.get("finished")
+    return [entry for entry in entries
+            if isinstance(entry, dict) and isinstance(entry.get("id"), str)
+            and entry.get("outcome") in FINISHED_SAID] if isinstance(entries, list) else []
+
+
+def note_finished(store, task, outcome):
+    """Note on the conversation TASK was started from how TASK finished, one
+    of FINISHED_SAID, as its record is about to go: read_task says so, and
+    a conversation whose tasks have all finished is told (`wake`). Under
+    the registry lock, on the conversation's record as it is now, which its
+    hooks write too. Once for each task: asked again, after a request cut
+    short, it is noted afresh. Nothing here stops a task finishing: its
+    work is merged or gone already, and a conversation that missed it reads
+    it as no longer listed."""
+    parent = task.get("parent")
+    if not isinstance(parent, str):
+        return
+    try:
+        talk = store.read(parent)
+        if not talk or talk.get("conversation") is not True or talk.get("status") == "retired":
+            return
+        entry = dict(id=task["id"], name=task.get("name"), repo=task.get("repo"), branch=task.get("branch"),
+                     outcome=outcome, at=now())
+        if outcome == "merged":
+            entry["into"] = task.get("integrationBranch")
+        talk["finished"] = ([other for other in finished_of(talk) if other["id"] != task["id"]]
+                            + [entry])[-FINISHED_KEPT:]
+        store.note(talk)
+    except (RoostError, OSError, ValueError):
+        pass
+
+
 def woken_for(talk):
-    """The IDs of the tasks Roost told TALK's agent had ended their turns."""
+    """The IDs of the finished tasks Roost told TALK's agent of."""
     ids = talk.get("wokenFor")
     return [i for i in ids if isinstance(i, str)] if isinstance(ids, list) else []
+
+
+def news_of(store, talk):
+    """The finished tasks of TALK's that Roost has yet to tell it of, as
+    long as none of its tasks is listed still: those still listed, as after
+    a retry refused, have not finished."""
+    listed = started_from(store, talk)
+    woken = set(woken_for(talk))
+    return listed, [entry for entry in finished_of(talk) if entry["id"] not in woken and entry["id"] not in listed]
 
 
 def at_rest(task):
@@ -5550,40 +5603,38 @@ def at_rest(task):
     return task.get("status") == "ready" and task.get("lastEvent") != "Interrupt"
 
 
-def wake_words(count):
-    """The line Roost types to a conversation whose COUNT tasks have all
-    ended their turns: Roost's own words and a number, with nothing those
-    tasks' agents wrote in them, as read_task tells it that."""
-    said = ("The task started from your offers has ended its turn." if count == 1
-            else "All %d tasks started from your offers have ended their turns." % count)
-    return "Roost: " + said + " Call read_task to see how they stand before you plan what comes next."
+def wake_words(entries):
+    """The line Roost types to a conversation whose tasks have all finished,
+    ENTRIES those it has not heard of: Roost's own words and how many ended
+    each way, with nothing those tasks' agents, nor you, wrote in them."""
+    counts = collections.Counter(entry["outcome"] for entry in entries)
+    ways = ", ".join("%d %s" % (counts[outcome], outcome) for outcome in FINISHED_SAID if counts[outcome])
+    return ("Roost: The tasks started from your offers have all finished (%s). Call read_task to see how "
+            "each ended before you plan what comes next." % ways)
 
 
 def wake(store, talk, ids, as_of=None):
-    """Tell TALK, a conversation, that the tasks started from its offers,
-    those IDS, have all ended their turns, so it can plan what comes next:
-    paste the line `wake_words` gives, as `send` pastes yours. Once for a
-    wave: only when one of IDS is new since Roost last woke it, so a task
-    you prompt again, or the rest after you merge one, wake it no more.
-    Only while every one of them, and TALK's own agent, rests at its prompt
-    after a turn it ended itself. AS_OF is the `updatedAt` of the copy
-    Emacs judged by, as for `tell`: if TALK's agent has done anything
-    since, or the tasks Roost lists are not IDS, or one is at work again,
-    nothing is told, and the reply says `stale`."""
+    """Tell TALK, a conversation, that the tasks started from its offers
+    have all finished, IDS those it has not heard of, so it can plan what
+    comes next: paste the line `wake_words` gives, as `send` pastes yours.
+    Once for a wave: only once no task of its is listed, and with a task
+    that finished since Roost last woke it. Only while TALK's agent rests
+    at its prompt after a turn it ended itself. AS_OF is the `updatedAt` of
+    the copy Emacs judged by, as for `tell`: if TALK's agent has done
+    anything since, or a task of its is listed, or what finished is not
+    IDS, nothing is told, and the reply says `stale`."""
     if talk.get("conversation") is not True:
-        raise RoostError("Only a conversation is told when the tasks it offered end their turns")
+        raise RoostError("Only a conversation is told when the tasks it offered finish")
     if not (isinstance(ids, list) and ids and all(isinstance(i, str) for i in ids)):
-        raise RoostError("Name the tasks that ended their turns")
+        raise RoostError("Name the tasks that finished")
     if parse_time(as_of) is None:
         raise RoostError("Invalid time")
-    woken = woken_for(talk)
-    if set(ids) <= set(woken):
+    if set(ids) <= set(woken_for(talk)):
         return dict(talk, alreadyWoken=True)
     if not at_rest(talk):
         raise RoostError("The agent is not at rest")
-    tasks = started_from(store, talk)
-    if set(tasks) != set(ids) or not all(at_rest(task) for task in tasks.values()) \
-       or talk.get("updatedAt") != as_of:
+    listed, news = news_of(store, talk)
+    if listed or set(ids) != {entry["id"] for entry in news} or talk.get("updatedAt") != as_of:
         return dict(talk, stale=True)
     require_not_removing(store, talk, "send")
     pane = owned_pane(talk, inventory_for(talk))
@@ -5592,9 +5643,9 @@ def wake(store, talk, ids, as_of=None):
     # Recorded before it is pasted, as for `tell`: a helper that dies
     # between the two leaves a conversation that may not have been told,
     # and never one told twice.
-    talk["wokenFor"] = (woken + sorted(set(ids) - set(woken)))[-WOKEN_KEPT:]
+    talk["wokenFor"] = (woken_for(talk) + sorted(set(ids)))[-WOKEN_KEPT:]
     store.save(talk)
-    send(store, talk, wake_words(len(ids)), send_id=hashlib.sha256(
+    send(store, talk, wake_words(news), send_id=hashlib.sha256(
         ("wake %s %s" % (talk["id"], " ".join(sorted(ids)))).encode()).hexdigest()[:32])
     return talk
 
@@ -5656,8 +5707,8 @@ MCP_CONVERSATION_INSTRUCTIONS = (
     "brief what the others cover. Say in your reply what you offered. Each task starts from its project's "
     "branch without the others' changes, so offer work that needs another's only once that one is merged. "
     "Before you plan what comes next, call read_task: it says how the tasks started from your offers stand, "
-    "as Roost records them. A task's latest reply is that agent's own account, which can be wrong. One "
-    "merged, retired or discarded is no longer listed: ask the user which."
+    "as Roost records them, and how each that finished ended: merged, retired, discarded or forgotten. A "
+    "task's latest reply is that agent's own account, which can be wrong."
     + MCP_SHOWS)
 # Images shown together: how many, and their bytes in all, which Emacs
 # takes in one reply.
@@ -5707,8 +5758,8 @@ MCP_TOOLS = {
         description=(
             "How the tasks started from this conversation's offers stand, as Roost records them: each one's "
             "name, ID, project, branch and status, and its agent's latest reply, which is that agent's own "
-            "account. A task merged, retired or discarded is no longer listed. Name one by its ID, or the "
-            "start of it, for that one alone."),
+            "account; and of those that finished, how each ended: merged, retired, discarded or forgotten. Name "
+            "one by its ID, or the start of it, for that one alone."),
         inputSchema=dict(type="object", properties=dict(
             id=dict(type="string", description="A task's ID, as read_task gives it, or its first few characters"))),
         annotations=dict(readOnlyHint=True, destructiveHint=False, openWorldHint=False)),
@@ -5897,20 +5948,24 @@ STATUS_SAID = {"starting": "starting", "running": "working", "background": "work
 
 def read_task(store, task_id, wanted=None):
     """How the tasks started from TASK_ID's offers stand, as their records
-    say, or the one WANTED names by its ID or the start of it. Read from
+    say, and how those that finished ended, as `note_finished` recorded
+    them; or the one WANTED names by its ID or the start of it. Read from
     the records alone: the server runs no program, so a status is as its
     agent's hooks last left it."""
     tasks = [task for task in store.all()
              if task.get("parent") == task_id and task.get("status") != "retired"]
+    listed = {task["id"] for task in tasks}
+    talk = store.read(task_id) or {}
+    finished = [entry for entry in finished_of(talk) if entry["id"] not in listed]
     wanted = (text(wanted) or "").strip()
     if wanted:
-        tasks = [task for task in tasks if len(wanted) >= 4 and task["id"].startswith(wanted)]
-        if len(tasks) != 1:
-            raise RoostError("No task started from your offers has the ID %r; one merged, retired or discarded "
-                             "is no longer listed" % wanted)
-    if not tasks:
-        return ("No task started from your offers is in Roost now. One merged, retired or discarded is no longer "
-                "listed; ask the user which.")
+        mine = lambda i: len(wanted) >= 4 and i.startswith(wanted)
+        tasks = [task for task in tasks if mine(task["id"])]
+        finished = [entry for entry in finished if mine(entry["id"])]
+        if len(tasks) + len(finished) != 1:
+            raise RoostError("No task started from your offers has the ID %r" % wanted)
+    if not tasks and not finished:
+        return "No task has been started from your offers."
     said = []
     for task in tasks:
         status = task.get("status")
@@ -5918,6 +5973,12 @@ def read_task(store, task_id, wanted=None):
             task.get("name"), task["id"], task.get("repo"), task.get("branch"), STATUS_SAID.get(status, status))
         reply = last_message(task)
         said.append(line + ("\nIts latest reply, in its agent's words:\n" + reply if reply else ""))
+    for entry in finished:
+        how = FINISHED_SAID[entry["outcome"]]
+        if "%s" in how:
+            how %= entry.get("into") or "the branch it merges into"
+        said.append("%s, ID %s, in %s, on branch %s: %s." % (
+            entry.get("name"), entry["id"], entry.get("repo"), entry.get("branch"), how))
     return "\n\n".join(said)
 
 
@@ -8115,6 +8176,8 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
     (`require_offers_named`). TEARDOWN, the project's teardown command,
     runs in the worktree before it is removed."""
     began = time.monotonic()
+    # As asked: a retry after the merge finds only the record to remove.
+    merging = merge
     inventory = inventory_for(task)
     pane = owned_pane(task, inventory)
     require_finished(task, pane)
@@ -8227,6 +8290,7 @@ def retire(store, task, merge=False, merged_head=None, squash=False, teardown=No
                 unregister_gone(repo, worktree)
             delete_branch(repo, branch, commit)
     left = agent_left(task)
+    note_finished(store, task, "merged" if merging else "retired")
     store.remove(task["id"])
     task.update(status="retired", updatedAt=now(), leftBehind=left)
     # Not with one open from there as well: deleting the branch would close it.
@@ -8662,6 +8726,7 @@ def discard(store, task, expect=None, dry_run=False, teardown=None, told=None, o
     # What a retire refused after it kept them had kept: you chose to lose it.
     with kept_locked(store):
         drop_kept(store, task["id"])
+    note_finished(store, task, "discarded")
     store.remove(task["id"])
     task.update(status="discarded", updatedAt=now(), live=False, leftBehind=left)
     return task
@@ -8687,6 +8752,7 @@ def forget(store, task, offers=None):
     left += ["worktree " + str(path) for path in trashed if str(path) != task["worktree"]]
     if Path(task["repo"]).is_dir() and ref_exists(task["repo"], task.get("branch")):
         left.append("branch " + task["branch"])
+    note_finished(store, task, "forgotten")
     store.remove(task["id"])
     task.update(status="forgotten", updatedAt=now(), leftBehind=left, live=False)
     return task

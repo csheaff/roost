@@ -346,25 +346,52 @@ class Tell(KeepsTask):
 
 
 class Wake(Scenario):
-    """A conversation told that the task started from its offers ended its
-    turn: asked again after the helper stopped, it is told once, and its
-    record says so."""
+    """A conversation told that the task started from its offers finished:
+    asked again after the helper stopped, it is told once, and its record
+    says so."""
 
     action = "wake"
 
     def arrange(self, box):
         self.task = box.create(name="Conversation", conversation=True, mayOffer=True)
-        self.child = box.create(name="child", parent=self.task["id"])
-        self.args = dict(ids=[self.child["id"]], asOf=box.record(self.task["id"])["updatedAt"])
+        child = box.create(name="child", parent=self.task["id"])
+        self.child = child["id"]
+        reply = box.helper("retire", id=child["id"])
+        if not reply or not reply["ok"]:
+            raise AssertionError(reply)
+        self.args = dict(ids=[self.child], asOf=box.record(self.task["id"])["updatedAt"])
 
     def holds(self, box, problems):
         super().holds(box, problems)
         record = box.record(self.task["id"]) or {}
         woken = record.get("wokenFor") or []
-        if woken not in ([], [self.child["id"]]):
+        if woken not in ([], [self.child]):
             problems.append("its record says it was woken for %r" % woken)
         if self.final and self.final.get("ok") and not self.final["result"].get("stale") and not woken:
             problems.append("said woken, and its record says nothing of it")
+
+
+class Finished(Scenario):
+    """A task started from a conversation's offers, merged: whenever the
+    helper stops, asked again, the conversation's record says once how it
+    finished, and says merged."""
+
+    action = "merge"
+
+    def arrange(self, box):
+        self.talk = box.create(name="Conversation", conversation=True, mayOffer=True)
+        self.task = box.create(parent=self.talk["id"])
+        self.commit = box.commit(self.task)
+
+    def holds(self, box, problems):
+        super().holds(box, problems)
+        entries = [entry for entry in (box.record(self.talk["id"]) or {}).get("finished") or []
+                   if entry.get("id") == self.task["id"]]
+        if len(entries) > 1:
+            problems.append("its conversation notes it %d times" % len(entries))
+        gone = box.record(self.task["id"]) is None
+        if gone and [entry.get("outcome") for entry in entries] != ["merged"]:
+            problems.append("gone, and its conversation notes %r" % entries)
 
 
 class Shell(KeepsTask):
@@ -772,6 +799,6 @@ ALL = [Merge, MergeSquash, MergeAway, SquashAway, MergeTeardown, MergeSubmodule,
        RetireDead, RetireSquashedOnGitHub, Update, UpdateConflict, Discard, DiscardDirty, DiscardTeardown, DiscardWritingPage,
        Forget, Rename,
        Retarget,
-       Stop, Resume, Seen, Turn, Send, Leave, Tell, Wake, Shell, Attach, Inspect, Look, PullRequest, PullRequestPush, Create, CreateFromRemote,
+       Stop, Resume, Seen, Turn, Send, Leave, Tell, Wake, Finished, Shell, Attach, Inspect, Look, PullRequest, PullRequestPush, Create, CreateFromRemote,
        Propose, Show, ShowSeveral, ShowPage, TakeOffer, CreateFromOffer, CreateFromOfferFailing, CreateFork, CreateConversation,
        CreateFromReady, CreateInTerminal]

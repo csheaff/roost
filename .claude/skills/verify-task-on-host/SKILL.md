@@ -140,7 +140,11 @@ Other requests write the record and take nothing from it or from Git:
 `leave`, `tell`, `take-offer`, and the agent's `show_image` and
 `show_widget` (`keep_shown`), each under the registry lock on the record
 read then, so none brings back a record that has gone. `tell` pastes a
-prompt, which is `YouPrompt`. They have no step here.
+prompt, which is `YouPrompt`. They have no step here. Nor has
+`note_finished`, which `retire`, `discard` and `forget` call just before
+`RemoveRecord` to note on the conversation the task was started from how it
+finished: it writes that conversation's record, under the registry lock,
+takes nothing from Git, and never refuses.
 
 A conversation is a task in a repository Roost keeps (`conversation_repository`),
 with a worktree and a branch there, and finishes as any task. `retarget`

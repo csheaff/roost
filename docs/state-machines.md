@@ -370,33 +370,40 @@ Open: none.
 
 #### A conversation woken
 
-Kind: implicit, a field of a conversation's record. Lives in: `wokenFor`, the IDs
-of the tasks started from its offers that Roost told it had ended their turns, and
-in Emacs `roost--waking` and `roost--unwoken`. An experiment, with no model.
+Kind: implicit, fields of a conversation's record. Lives in: `finished`, how each
+task started from its offers ended, as `{id, name, repo, branch, outcome, into?, at}`,
+noted as that task's record goes; `wokenFor`, the IDs of those Roost told it of;
+and in Emacs `roost--waking` and `roost--unwoken`. An experiment, with no model.
 
 | State | Meaning | How you can tell |
 | --- | --- | --- |
-| Unwoken | a task started from its offers is not in `wokenFor` | one of its listed tasks' IDs is missing from `wokenFor` |
-| Woken | Roost told it of every task listed under it | every one is in `wokenFor`, or none is listed |
+| Quiet | nothing finished that it has not heard of, or a task of its is listed | every `finished` ID is in `wokenFor`, or a task names it as `parent` |
+| Due | all its tasks finished, and one since it was last told | none is listed, and a `finished` ID is missing from `wokenFor` |
 
 Invariants:
-- I1. Once for a wave: it is told only when a listed task is new to `wokenFor`, so a
-  task prompted again, or the rest after one merges, tell it nothing. (`wake`.)
-- I2. Only at rest: the conversation and every listed task rest at their prompts
-  after turns they ended themselves, and the conversation has done nothing since
-  the copy Emacs judged by. (`at_rest`, `wake`'s `asOf`.)
-- I3. Recorded before it is pasted, and with a send ID of the IDs: told at most once.
-- I4. The line is Roost's own words and a count, with nothing an agent wrote.
+- I1. A task's outcome is noted once, and as asked: a retry after a crash notes it
+  afresh, and a merge cut short after Git merged says merged. (`note_finished`,
+  `merging` in `retire`; `make crash`'s `Finished`.)
+- I2. Noting never stops a task finishing: its work is merged or gone by then.
+- I3. Once for a wave: told only of what finished since, and only once no task of
+  its is listed. (`wake`.)
+- I4. Only at rest: the conversation rests at its prompt after a turn it ended
+  itself, and has done nothing since the copy Emacs judged by. (`at_rest`,
+  `wake`'s `asOf`.)
+- I5. Recorded before it is pasted, and with a send ID of the IDs: told at most once.
+- I6. The line is Roost's own words and counts, with nothing an agent or you wrote.
   (`wake_words`.)
 
 | From | Event | Guard | To | Effect | Code |
 | --- | --- | --- | --- | --- | --- |
-| Unwoken | a refresh caches it or a task under it | all rest, none of its offers is being created, you are not at its terminal or sending to it | Woken | `wake` records the IDs and pastes the line | `roost--wake-ids`, `roost--wake`, `wake` |
-| Unwoken | as above | the tasks listed, or a status, differ from what Emacs judged by | Unwoken | `stale`: nothing told; the next refresh judges again | `wake` |
-| Unwoken | as above | its host refuses, as when its agent has started | Unwoken | waits on you, until another task joins those IDs | `roost--unwoken` |
-| Woken | a task is started from its offers | | Unwoken | none | `make_task` |
+| Quiet | a task of its merges, retires, is discarded or forgotten | others are listed | Quiet | its outcome noted | `note_finished` |
+| Quiet | as above | it was the last listed | Due | its outcome noted | `note_finished` |
+| Due | a refresh caches it | it rests, none of its offers is being created, you are not at its terminal or sending to it | Quiet | `wake` records the IDs and pastes the line | `roost--wake-ids`, `roost--wake`, `wake` |
+| Due | as above | what finished, or its `updatedAt`, differ from what Emacs judged by | Due | `stale`: nothing told; the next refresh judges again | `wake` |
+| Due | as above | its host refuses, as when its agent has started | Due | waits on you, until another task finishes | `roost--unwoken` |
+| Due | a task is started from its offers | | Quiet | none | `make_task` |
 
-Open: none.
+Open: a task you leave unmerged keeps it Quiet.
 
 ### Creation
 

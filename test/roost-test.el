@@ -11896,9 +11896,9 @@ Each is (ACTION PARAMETERS SUCCESS FAILURE), and nobody watches a task."
                                             (apply #'roost-test--left-task '(head . "b2") failed)))
            (should (equal (alist-get 'key (car (roost-test--tells requests))) "b2"))))))))
 
-(ert-deftest roost-wakes-a-conversation-once-its-tasks-end-their-turns ()
-  ;; Once all the tasks started from a conversation's offers rest, Roost
-  ;; tells the conversation, once for the wave: its host writes the line.
+;; Once all the tasks started from a conversation's offers have finished,
+;; Roost tells the conversation, once for the wave: its host writes the line.
+(ert-deftest roost-wakes-a-conversation-once-its-tasks-finish ()
   (roost-test--isolated
    (let (requests)
      (roost-test--telling requests
@@ -11907,48 +11907,60 @@ Each is (ACTION PARAMETERS SUCCESS FAILURE), and nobody watches a task."
               (talk-fields '((id . "c0c0c0c0c0c0c0c0") (name . "Conversation 09:15") (conversation . t)
                              (status . "ready") (lastEvent . "Stop") (live . t)
                              (updatedAt . "2026-11-26T09:00:00+00:00")))
-              (child (lambda (id status &rest more)
-                       (roost--cache-task "dev" (append more `((id . ,id) (name . ,id) (parent . "c0c0c0c0c0c0c0c0")
-                                                               (status . ,status) (lastEvent . "Stop")
-                                                               (live . t) (startedAt . ,id)))))))
-         (roost--cache-task "dev" talk-fields)
-         ;; While `a' makes the rest of the wave, the first to rest is
-         ;; not all of it.
-         (let ((roost--offers-being-created '((("dev" "c0c0c0c0c0c0c0c0") "0a1b2c3d"))))
-           (funcall child "a1a1a1a1a1a1a1a1" "ready")
-           (should-not (funcall wakes)))
-         ;; One still at work: nothing yet.
-         (funcall child "b2b2b2b2b2b2b2b2" "running")
-         (funcall child "a1a1a1a1a1a1a1a1" "ready")
+              (finished (lambda (&rest ids)
+                          `(finished . ,(vconcat (mapcar (lambda (id) `((id . ,id) (outcome . "merged"))) ids)))))
+              (talk (lambda (&rest more) (roost--cache-task "dev" (append more talk-fields))))
+              (child (lambda (id)
+                       (roost--cache-task "dev" `((id . ,id) (name . ,id) (parent . "c0c0c0c0c0c0c0c0")
+                                                  (status . "ready") (lastEvent . "Stop") (live . t)
+                                                  (startedAt . ,id))))))
+         (funcall talk)
+         (funcall child "b2b2b2b2b2b2b2b2")
+         ;; One merged, one still listed: nothing yet.
+         (funcall talk (funcall finished "a1a1a1a1a1a1a1a1"))
          (should-not (funcall wakes))
-         (funcall child "b2b2b2b2b2b2b2b2" "ready" '(lastEvent . "Interrupt"))
-         (should-not (funcall wakes))
-         (funcall child "b2b2b2b2b2b2b2b2" "ready")
+         ;; The other gone too, as a refresh lists it, with no event of
+         ;; the conversation's: told of both.
+         (remhash '("dev" "b2b2b2b2b2b2b2b2") roost--tasks)
+         (roost--apply-snapshot "dev" (list (append (list (funcall finished "a1a1a1a1a1a1a1a1" "b2b2b2b2b2b2b2b2"))
+                                                    talk-fields)))
          (should (equal (funcall wakes)
                         '(((id . "c0c0c0c0c0c0c0c0") (ids . ["a1a1a1a1a1a1a1a1" "b2b2b2b2b2b2b2b2"])
                            (asOf . "2026-11-26T09:00:00+00:00")))))
          ;; Not asked twice while its host has yet to answer.
-         (funcall child "a1a1a1a1a1a1a1a1" "ready")
+         (funcall talk (funcall finished "a1a1a1a1a1a1a1a1" "b2b2b2b2b2b2b2b2"))
          (should (= (length (funcall wakes)) 1))
          ;; Told, as its record says: not again for these.
-         (funcall (nth 2 (car requests)) (append '((wokenFor . ["a1a1a1a1a1a1a1a1" "b2b2b2b2b2b2b2b2"])) talk-fields))
-         (funcall child "a1a1a1a1a1a1a1a1" "ready")
+         (funcall (nth 2 (car requests))
+                  (append (list '(wokenFor . ["a1a1a1a1a1a1a1a1" "b2b2b2b2b2b2b2b2"])
+                                (funcall finished "a1a1a1a1a1a1a1a1" "b2b2b2b2b2b2b2b2"))
+                          talk-fields))
+         (funcall talk '(wokenFor . ["a1a1a1a1a1a1a1a1" "b2b2b2b2b2b2b2b2"])
+                  (funcall finished "a1a1a1a1a1a1a1a1" "b2b2b2b2b2b2b2b2"))
          (should (= (length (funcall wakes)) 1))
-         ;; A task from its next offers is news, told once it rests.
-         (funcall child "c3c3c3c3c3c3c3c3" "ready")
-         (should (= (length (funcall wakes)) 2))
-         ;; Refused, it waits on you: tried again only with another task.
+         ;; While `a' makes the next wave, or a task of it is listed, no.
+         (let ((roost--offers-being-created '((("dev" "c0c0c0c0c0c0c0c0") "0a1b2c3d"))))
+           (funcall talk '(wokenFor . ["a1a1a1a1a1a1a1a1" "b2b2b2b2b2b2b2b2"])
+                    (funcall finished "a1a1a1a1a1a1a1a1" "b2b2b2b2b2b2b2b2" "c3c3c3c3c3c3c3c3"))
+           (should (= (length (funcall wakes)) 1)))
+         (funcall child "d4d4d4d4d4d4d4d4")
+         (funcall talk '(wokenFor . ["a1a1a1a1a1a1a1a1" "b2b2b2b2b2b2b2b2"])
+                  (funcall finished "a1a1a1a1a1a1a1a1" "b2b2b2b2b2b2b2b2" "c3c3c3c3c3c3c3c3"))
+         (should (= (length (funcall wakes)) 1))
+         ;; Once that is gone too, told of the new one alone.
+         (remhash '("dev" "d4d4d4d4d4d4d4d4") roost--tasks)
+         (funcall talk '(wokenFor . ["a1a1a1a1a1a1a1a1" "b2b2b2b2b2b2b2b2"])
+                  (funcall finished "a1a1a1a1a1a1a1a1" "b2b2b2b2b2b2b2b2" "c3c3c3c3c3c3c3c3"))
+         (should (equal (alist-get 'ids (car (funcall wakes))) ["c3c3c3c3c3c3c3c3"]))
+         ;; Refused, it waits on you: tried again only once another finishes.
          (funcall (nth 3 (car requests)) "The agent is not at rest")
-         (funcall child "c3c3c3c3c3c3c3c3" "ready")
+         (funcall talk '(wokenFor . ["a1a1a1a1a1a1a1a1" "b2b2b2b2b2b2b2b2"])
+                  (funcall finished "a1a1a1a1a1a1a1a1" "b2b2b2b2b2b2b2b2" "c3c3c3c3c3c3c3c3"))
          (should (= (length (funcall wakes)) 2))
-         (funcall child "d4d4d4d4d4d4d4d4" "ready")
-         (should (= (length (funcall wakes)) 3))
-         ;; A conversation at work, or one you are at, is told nothing.
-         (clrhash roost--waking)
+         ;; A conversation at work is told nothing.
          (clrhash roost--unwoken)
-         (roost--cache-task "dev" (append '((status . "running")) talk-fields))
-         (funcall child "d4d4d4d4d4d4d4d4" "ready")
-         (should (= (length (funcall wakes)) 3)))))))
+         (funcall talk '(status . "running") (funcall finished "a1a1a1a1a1a1a1a1" "b2b2b2b2b2b2b2b2" "c3c3c3c3c3c3c3c3"))
+         (should (= (length (funcall wakes)) 2)))))))
 
 (ert-deftest roost-leaves-a-pull-request-to-you-unless-it-can-tell-its-agent ()
   (roost-test--isolated

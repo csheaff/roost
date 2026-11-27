@@ -1096,9 +1096,9 @@ dashboard the command starts from."
      :start ,(lambda () (roost--tell-agent (roost-sweep-late--mine)))
      :action "tell" :refusals ((,roost-sweep-late--retired) ("The agent is not at rest")))
     (wake
-     ;; A conversation whose one task from its offers has ended its turn.
-     :fields ((conversation . t) (repo . "/state/conversations"))
-     :others ((parent . ,roost-sweep-late--mine) (lastEvent . "Stop"))
+     ;; A conversation whose one task from its offers has merged.
+     :fields ((conversation . t) (repo . "/state/conversations") (lastEvent . "Stop")
+              (finished ((id . "cccccc0000000000") (outcome . "merged") (into . "main"))))
      :start ,(lambda () (roost--wake (roost-sweep-late--mine)))
      :action "wake" :refusals ((,roost-sweep-late--retired) ("The agent is not at rest")))
     (retire

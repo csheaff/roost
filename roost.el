@@ -765,8 +765,8 @@ As `roost--tell-occurrence' has it.")
 Until its host replies.")
 
 (defvar roost--unwoken (make-hash-table :test 'equal)
-  "For each conversation's key, the tasks Roost could not tell it of.
-They wait on you: Roost tries again only once another task joins them.")
+  "For each conversation's key, the finished tasks Roost could not tell it of.
+They wait on you: Roost tries again only once another task finishes.")
 
 (defvar roost--told-here (make-hash-table :test 'equal)
   "For each task key, what this Emacs heard its agent was told, and when.
@@ -8888,22 +8888,23 @@ says how it stands now, and Roost judges by that."
         (quit (funcall done) (signal 'quit nil))))))
 
 (defun roost--wake-ids (talk)
-  "The IDs of the tasks started from TALK's offers, if TALK is to hear of them.
-That is once all of them rest at their prompts after turns they ended
-themselves, none of its offers is still being made a task of, and one
-is new since Roost last told TALK, which rests too, and you are neither
-at its terminal nor telling it something yourself."
+  "The IDs of the finished tasks of TALK's offers, if TALK is to hear of them.
+That is once none of them is listed, none of its offers is being made a
+task of, and one finished since Roost last told TALK, which rests at its
+prompt after a turn it ended itself, and you are neither at its terminal
+nor telling it something yourself."
   (when-let* (((roost--conversation-p talk))
               ((equal (roost--status-name talk) "ready"))
               ((roost--agent-running-p talk))
               (key (roost--key talk))
-              ;; Not while `a' makes the rest of a wave.
+              ;; Not while `a' makes a wave.
               ((not (assoc key roost--offers-being-created)))
-              (tasks (roost--started-tasks talk))
-              ((seq-every-p (lambda (task) (equal (roost--status-name task) "ready")) tasks))
-              (ids (sort (mapcar (lambda (task) (roost--field task 'id)) tasks) #'string<))
-              ((let ((woken (append (roost--field talk 'wokenFor) nil)))
-                 (seq-some (lambda (id) (not (member id woken))) ids)))
+              ((not (roost--started-tasks talk)))
+              (ids (let ((woken (append (roost--field talk 'wokenFor) nil)))
+                     (sort (seq-remove (lambda (id) (or (not (stringp id)) (member id woken)))
+                                       (mapcar (lambda (entry) (alist-get 'id entry))
+                                               (append (roost--field talk 'finished) nil)))
+                           #'string<)))
               ((not (gethash key roost--waking)))
               ((not (equal (gethash key roost--unwoken) ids)))
               ((not (when-let* ((watched (roost--watched-task)))
@@ -8912,7 +8913,7 @@ at its terminal nor telling it something yourself."
     ids))
 
 (defun roost--wake (task)
-  "Tell the conversation TASK is, or was started from, that its tasks rest.
+  "Tell the conversation TASK is, or was started from, that its tasks finished.
 As `roost--wake-ids' has it, once for each wave: its host pastes one line
 of Roost's own, which sends it to read_task.  What its host refuses
 waits on you."
@@ -8926,11 +8927,11 @@ waits on you."
                       (lambda (updated)
                         (remhash key roost--waking)
                         (unless (or (alist-get 'stale updated) (alist-get 'alreadyWoken updated))
-                          (message "Told %s that the tasks it offered have ended their turns" name)))
+                          (message "Told %s that the tasks it offered have finished" name)))
                       (lambda (err)
                         (remhash key roost--waking)
                         (puthash key ids roost--unwoken)
-                        (message "Roost did not tell %s that its tasks ended their turns: %s" name err)))
+                        (message "Roost did not tell %s that its tasks finished: %s" name err)))
         (error (remhash key roost--waking))
         (quit (remhash key roost--waking) (signal 'quit nil))))))
 

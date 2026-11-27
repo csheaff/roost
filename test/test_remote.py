@@ -12220,7 +12220,7 @@ console.log(JSON.stringify(seen));
         self.assertIn("read_task", names(talk))
         self.assertIn("call read_task", self.serve(talk)["hello"]["result"]["instructions"])
         said = self.call(talk, "read_task")["content"][0]["text"]
-        self.assertIn("No task started from your offers", said)
+        self.assertEqual(said, "No task has been started from your offers.")
         child = self.create(name="Fix add", parent=talk["id"])
         self.create(name="Not offered")
         store = roost.Store(str(self.state))
@@ -12236,54 +12236,73 @@ console.log(JSON.stringify(seen));
         self.assertEqual(self.call(talk, "read_task", id=child["id"][:6])["content"][0]["text"], said)
         refused = self.call(talk, "read_task", id="ffff")
         self.assertTrue(refused["isError"])
-        self.assertIn("no longer listed", refused["content"][0]["text"])
+        self.assertIn("has the ID 'ffff'", refused["content"][0]["text"])
         # A task's agent can't read them: it has no such tool.
         unknown = self.serve(task, dict(id="call", method="tools/call", params=dict(name="read_task", arguments={})))
         self.assertEqual(unknown["call"]["error"]["message"], "Unknown tool: read_task")
 
-    def test_a_conversation_is_told_once_a_wave_that_its_tasks_ended_their_turns(self):
+    def test_a_conversation_is_told_once_a_wave_that_its_tasks_finished(self):
         talk = self.create(name="Conversation 09:15", directory="/nowhere", conversation=True, mayOffer=True)
         first, second = (self.create(name=name, parent=talk["id"]) for name in ("Add mul", "Add div"))
         store = roost.Store(str(self.state))
         self.wait(talk, "ready")
-        line = "Roost: All 2 tasks started from your offers have ended their turns."
         wake = lambda ids, **args: self.request("wake", id=talk["id"], **dict(
             dict(ids=ids, asOf=store.read(talk["id"])["updatedAt"]), **args))
-        # Only a conversation, and only of the tasks Roost lists as its.
         task = self.request("wake", id=first["id"], ids=[second["id"]], asOf=roost.now())
         self.assertIn("Only a conversation", task["error"])
+        # Merged: its conversation reads how, and the other is still listed,
+        # so nothing is told yet.
+        (Path(first["worktree"]) / "mul").write_text("mul\n")
+        self.git("add", "mul", cwd=first["worktree"])
+        self.git("commit", "-qm", "Add mul", cwd=first["worktree"])
+        self.wait(first, "ready")
+        self.assertTrue(self.request("merge", id=first["id"])["ok"])
+        finished = store.read(talk["id"])["finished"]
+        self.assertEqual([(entry["id"], entry["outcome"], entry["into"]) for entry in finished],
+                         [(first["id"], "merged", "main")])
+        said = self.call(talk, "read_task")["content"][0]["text"]
+        self.assertIn("Add mul, ID %s, in %s, on branch %s: merged into main." % (
+            first["id"], first["repo"], first["branch"]), said)
+        self.assertIn("Add div, ID %s" % second["id"], said)
         self.assertIs(wake([first["id"]])["result"]["stale"], True)
-        # One still at work: nothing yet.
-        for each in (first, second):
-            self.wait(each, "ready")
-        record = store.read(second["id"])
-        record["status"] = "running"
-        store.save(record)
-        self.assertIs(wake([first["id"], second["id"]])["result"]["stale"], True)
-        record["status"] = "ready"
-        store.save(record)
-        # Nor if the conversation did something since Emacs judged it.
+        # Discarded: the last of them, so the wave is over.
+        self.wait(second, "ready")
+        self.assertTrue(self.request("discard", id=second["id"],
+                                     expect=self.git("rev-parse", second["branch"]))["ok"])
+        said = self.call(talk, "read_task", id=second["id"][:6])["content"][0]["text"]
+        self.assertEqual(said, "Add div, ID %s, in %s, on branch %s: discarded: its work was deleted." % (
+            second["id"], second["repo"], second["branch"]))
+        # Not of some of them, nor if the conversation did something since
+        # Emacs judged it.
+        self.assertIs(wake([first["id"]])["result"]["stale"], True)
         self.assertIs(wake([first["id"], second["id"]], asOf="2026-01-01T00:00:00+00:00")["result"]["stale"], True)
+        line = "Roost: The tasks started from your offers have all finished (1 merged, 1 discarded)."
         self.assertEqual(self.pastes(talk, line), 0)
         told = wake([second["id"], first["id"]])
         self.assertTrue(told["ok"], told)
         self.rested(talk, line)
         self.assertEqual(sorted(told["result"]["wokenFor"]), sorted([first["id"], second["id"]]))
-        # Once: asked again, or after you merge one and the other rests again.
+        # Once: asked again, it is told already.
         self.assertIs(wake([first["id"], second["id"]])["result"]["alreadyWoken"], True)
-        self.assertTrue(self.request("retire", id=first["id"])["ok"])
-        self.assertIs(wake([second["id"]])["result"]["alreadyWoken"], True)
         time.sleep(0.3)
         self.assertEqual(self.pastes(talk, line), 1)
-        # A task started from its next offers is a new wave.
+        # A task from its next offers, retired, is the next wave's.
         third = self.create(name="Add a CLI", parent=talk["id"])
         self.wait(third, "ready")
-        self.assertTrue(wake([second["id"], third["id"]])["ok"])
-        self.wait_for_pastes(talk, line, 2)
-        self.assertEqual(self.pastes(talk, line), 2)
-        # The line holds nothing its tasks' agents wrote.
-        self.assertEqual(roost.wake_words(1), "Roost: The task started from your offers has ended its turn. "
-                         "Call read_task to see how they stand before you plan what comes next.")
+        self.assertTrue(self.request("retire", id=third["id"])["ok"])
+        self.assertTrue(wake([third["id"]])["ok"])
+        self.wait_for_pastes(talk, "Roost: The tasks started from your offers have all finished (1 retired).", 1)
+        self.assertEqual(self.pastes(talk, "Roost: The tasks started from your offers have all finished (1 retired)."), 1)
+        # Forgetting is noted too; a task with no conversation notes nothing.
+        fourth = self.create(name="Docs", parent=talk["id"])
+        self.wait(fourth, "ready")
+        self.assertTrue(self.request("stop", id=fourth["id"])["ok"])
+        self.assertTrue(self.request("forget", id=fourth["id"])["ok"])
+        self.assertEqual(store.read(talk["id"])["finished"][-1]["outcome"], "forgotten")
+        alone = self.create(name="alone")
+        self.wait(alone, "ready")
+        self.assertTrue(self.request("retire", id=alone["id"])["ok"])
+        self.assertEqual(len(store.read(talk["id"])["finished"]), 4)
 
     def test_the_projects_listed_leave_out_a_task_retired_meanwhile(self):
         # Its marker, found as the list is read, is gone by the time it is

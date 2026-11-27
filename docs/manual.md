@@ -404,12 +404,13 @@ asks which host. A conversation is where to plan: ask its agent to look at
 one of your projects and split a piece of work into tasks, and each waits
 under the conversation, naming its project, for you to open as a draft
 there and start ([Take the tasks an agent offers](#a-day-with-roost)), or
-start them all with `a`. Once all the tasks started from its offers have
-ended their turns, Roost tells the conversation so in one line of its own,
-once for each set of tasks, while Emacs runs and you are not at its
-terminal. It then reads how they stand with its tool `read_task`, as Roost
-records them, and you can ask it what comes next: one merged, retired or
-discarded is no longer listed, so tell it which. It
+start them all with `a`. Its tool `read_task` reads how the tasks started
+from its offers stand, as Roost records them, and how each that finished
+ended: merged, retired, discarded or forgotten. Once all of them have
+finished, Roost tells the conversation so in one line of its own, once for
+each set of tasks, while Emacs runs and you are not at its terminal, and it
+plans what comes next. A task you leave unmerged keeps it from being told:
+ask it yourself then. It
 reads the projects that host has run tasks in without asking, and changes
 nothing in them without asking. Claude asks once whether to trust Roost's
 conversations folder, with the first conversation on a host.
@@ -1549,7 +1550,9 @@ What runs where:
   into the record of the task whose agent called it, and nothing else, and
   `list_projects` names the projects that host has run tasks in, and a
   conversation's `read_task` reads the records of the tasks started from its
-  offers: their names, projects, branches, statuses and latest replies.
+  offers: their names, projects, branches, statuses and latest replies, and
+  how each that finished ended, which Roost notes on the conversation's
+  record as the task's goes.
   None of them runs a program or changes another task. The task's own Claude
   settings allow them without asking. An offer may name another project,
   by the folder of a Git repository there, which you read in its draft; a
