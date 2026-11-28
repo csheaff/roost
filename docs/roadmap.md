@@ -30,6 +30,10 @@ change, whether you read every line or judge by the evidence, and keeping
 tasks out of each other's files. So the ideas that cut those come first, and
 more work on noticing after them.
 
+[Toward 2027](#toward-2027) asks something else: what Roost would be if
+agents carried more of each change themselves, and people mostly said what
+they wanted and judged the evidence.
+
 ## Most likely first
 
 Small, and probably worth the most.
@@ -435,6 +439,120 @@ Larger, or undecided.
   `safe-local-variable-values`); the worktree made anew, and set up again,
   when the commit it is made at moves; and a setup that fails ahead left
   to the task's terminal, where you see it.
+
+## Toward 2027
+
+A direction rather than a list, written on 2026-11-28. By late 2026, talk
+among people who build with agents expected agents to carry more of each
+change: plan it, write it, run its tests and open its pull request, while
+people say what they want, judge the evidence and decide what ships. Roost
+today helps you watch agents' terminals and step in. In this direction it
+would hold what you asked for, have the work checked by someone other than
+the agent that did it, and act within limits you set, also while you're
+away. You would decide a merge on that evidence, and talk to an agent in
+its terminal when you step in, rather than watch the terminal to judge the
+work. Most of it reverses an entry under [Not planned](#not-planned) or the
+advice on where features stop, so each piece says what it gives up. None of
+it is decided.
+
+What stays:
+
+- Agents from several labs, which counts for more once one checks
+  another's work.
+- The agent's own terminal as the way to talk to it.
+- The models, crash tests and sweeps, which matter more once Roost acts
+  while nobody watches.
+- Deleting work only when you discard it. Anything Roost does on its own
+  can be undone, and is logged.
+
+The pieces, each building on those before it:
+
+- **Goals above tasks.** A goal holds what you want, how to tell it's done
+  as commands that pass or fail, a budget, and the tasks that work on it,
+  in waves. The helper keeps its record, so it outlives the conversation
+  that planned it. A conversation's offers are its start
+  ([Agents that start Roost tasks](#exploring)), and branch
+  `orchestrated-waves` takes them on to waves.
+  What you write and review becomes the goal more often than the code.
+- **Evidence from someone other than the author.** When a task's agent says
+  it's done, Roost checks. First what no account can argue with: the
+  project's check command in a clean worktree (from
+  [Scripts beyond setup](#worth-trying)), mutation testing on the changed
+  lines, to catch tests written to pass, and the change's size and the
+  risky paths it touches. Then a reviewer agent, reading only, given the
+  goal rather than the author's account: from another lab where you have
+  one, or else the same agent in a fresh session. Copilot's reviews of
+  Roost's own pull requests give a first sign: from 2026-10-04 to 11-27,
+  652 findings on 169 pull requests, after the review asked for before
+  each, of which the authoring agent fixed 610 and declined 32. Many were
+  on crash, race and lost-work paths, such as a forget that would delete
+  the worktree it promised to leave. But the agent that fixed them also
+  judged them, so 610 is its count, not a reader's; many were rare races;
+  and nothing compared a fresh session of the same agent, so whether
+  another lab adds more is still open. What they find goes under what a
+  merge rests on, in the task panel, facts first and the reviewer's words
+  after, since a reviewer's account can be wrong too. Agents' accounts of
+  their own work often are
+  ([How Coding Agents Fail Their Users](https://arxiv.org/abs/2605.29442)),
+  so the check is someone else's. It costs a second agent's tokens for
+  each task, and Roost starts programs of its own.
+- **A helper that stays running.** The helper runs for each request now,
+  and Emacs decides when to tell an agent or wake a conversation. Agents
+  go on working and their hooks go on reporting while Emacs is closed, but
+  nobody tells or wakes them, and no next wave starts. A service on each
+  host (a systemd user unit, a launchd agent) would run the waves, retry
+  after a failed check and tell agents it's their turn. Emacs would be its
+  main client among others, through a socket: a `roost` command inside
+  tasks, a phone, teammates. A pull request left to its agent already
+  wants this ([Not planned](#not-planned)). It is the largest change to
+  how Roost works, and each model in `test/formal` would be redone.
+- **Limits in place of a yes at each step.** A project says what may happen
+  without you, by risk: docs, tests and small dependency bumps merge once
+  their checks and review pass; most changes wait for you, as now; and
+  paths on a project's list or in CODEOWNERS, such as CI, authentication
+  or releases, also need the reviewer's findings answered. A budget per
+  goal, in tokens, money and time, stops its tasks once spent. This
+  reverses the entry on merging on green, but Roost would still show no
+  "safe" mark: the tier and the evidence, with the limits acting on them,
+  so the evidence stays in front of the decision
+  ([Onnasch et al. 2014](https://depositonce.tu-berlin.de/items/7df9879f-d77b-4f2b-8760-f0e3d174ca67/full)).
+  The paths come from [Marks for risky changes](#when-a-merge-is-your-turn).
+- **Trust from how work turned out.** How often each agent's merged work,
+  by kind of task and by tier, was reverted or fixed again within some
+  days ([How often merged work came back](#exploring)). An agent that keeps
+  getting a path wrong stops merging there on its own. Without this, what
+  agents may do only grows, and unchecked work feeds more agents.
+- **Hosts as a pool, each task sandboxed.** A task goes to whichever host
+  has room: this machine, SSH hosts, Coder workspaces
+  ([Exploring](#exploring)), cloud machines. Each runs in a container or
+  VM, with the agent's login lent through a broker on the host rather than
+  copied in, since copies of rotating tokens sign each other out. This
+  reverses the entry on a container per task.
+- **Work that arrives on its own.** A ticket, a failed check on main, an
+  error tracker's report or a failing eval becomes a proposed goal, in a
+  list for you, or a project's limits, to start. It needs the
+  running helper, and goes further than agents that start tasks.
+- **Teams.** Goals and their evidence that others read and review, with
+  review by someone other than the person who started the goal. Roost is
+  one person's Emacs now; this needs the running helper and a record of
+  who did what.
+
+What would stop: trying other terminals in place of tmux (Rex, zmx,
+herdr-core), whose notes stay under [Exploring](#exploring), since tmux
+does what's needed; and more work on noticing which agent needs you, which
+matters less once the helper takes many of those turns itself.
+
+An order through 2027: goals and evidence first, from what conversations
+already do; then the running helper, limits and budgets; then the pool,
+sandboxes and work that arrives on its own; then teams and trust.
+
+The risk is that the labs run their own agents side by side, as Claude
+Code's background sessions already do ([Exploring](#exploring)). What they
+are unlikely to build: agents from several labs, on your own machines,
+through Git, checked by someone other than the author, with the real
+terminal there to step into when a decision needs you, run by a tool
+model-checked not to lose your work. Roost would stay there rather than
+grow toward Orca's breadth.
 
 ## Known gaps
 
