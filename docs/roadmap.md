@@ -502,10 +502,10 @@ The pieces, each building on those before it:
   nobody tells or wakes them, and no next wave starts. A service on each
   host (a systemd user unit, a launchd agent) would run the waves, retry
   after a failed check and tell agents it's their turn. Emacs would be its
-  main client among others, through a socket: a `roost` command inside tasks, a phone,
-  teammates. A pull request left to its agent already wants this
-  ([Not planned](#not-planned)). It is the largest change to how Roost
-  works, and each model in `test/formal` would be redone.
+  main client among others, through a socket: a `roost` command inside
+  tasks, a phone, teammates. A pull request left to its agent already
+  wants this ([Not planned](#not-planned)). It is the largest change to
+  how Roost works, and each model in `test/formal` would be redone.
 - **Limits in place of a yes at each step.** A project says what may happen
   without you, by risk: docs, tests and small dependency bumps merge once
   their checks and review pass; most changes wait for you, as now; and
