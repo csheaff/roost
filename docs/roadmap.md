@@ -497,11 +497,12 @@ The pieces, each building on those before it:
   so the check is someone else's. It costs a second agent's tokens for
   each task, and Roost starts programs of its own.
 - **A helper that stays running.** The helper runs for each request now,
-  and Emacs decides when to tell an agent or wake a conversation, so
-  nothing moves while Emacs is closed. A service on each host (a systemd
-  user unit, a launchd agent) would run the waves, retry after a failed
-  check and tell agents it's their turn. Emacs would be its main client
-  among others, through a socket: a `roost` command inside tasks, a phone,
+  and Emacs decides when to tell an agent or wake a conversation. Agents
+  go on working and their hooks go on reporting while Emacs is closed, but
+  nobody tells or wakes them, and no next wave starts. A service on each
+  host (a systemd user unit, a launchd agent) would run the waves, retry
+  after a failed check and tell agents it's their turn. Emacs would be its
+  main client among others, through a socket: a `roost` command inside tasks, a phone,
   teammates. A pull request left to its agent already wants this
   ([Not planned](#not-planned)). It is the largest change to how Roost
   works, and each model in `test/formal` would be redone.
@@ -527,10 +528,9 @@ The pieces, each building on those before it:
   VM, with the agent's login lent through a broker on the host rather than
   copied in, since copies of rotating tokens sign each other out. This
   reverses the entry on a container per task.
-- **Work that arrives on its own.** A ticket
-  ([#216](https://github.com/csheaff/roost/issues/216)), a failed check on
-  main, an error tracker's report or a failing eval becomes a proposed
-  goal, in a list for you, or a project's limits, to start. It needs the
+- **Work that arrives on its own.** A ticket, a failed check on main, an
+  error tracker's report or a failing eval becomes a proposed goal, in a
+  list for you, or a project's limits, to start. It needs the
   running helper, and goes further than agents that start tasks.
 - **Teams.** Goals and their evidence that others read and review, with
   review by someone other than the person who started the goal. Roost is
